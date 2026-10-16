@@ -1,6 +1,7 @@
 # Aurora MVC
 
 Aurora MVC is an ASGI-first Python web framework with an MVC-oriented developer experience.
+Simple, Secure, Developer Friendly. 
 
 > **Alpha preparation:** This repository is preparing version `1.0.0a1`. The package has not been published as part of this checkpoint. APIs may change during alpha development.
 
