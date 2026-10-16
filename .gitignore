@@ -1,0 +1,108 @@
+
+# ============================================================
+# Aurora MVC — Git Ignore
+# Python ASGI Framework
+# ============================================================
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# Build and packaging artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+wheels/
+sdist/
+pip-wheel-metadata/
+MANIFEST
+
+# Test, coverage and analysis caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyre/
+.pytype/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+*.cover
+*.py.cover
+.cache/
+
+# Local databases and SQLite sidecar files
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+
+# Local environment files and secrets
+.env
+.env.*
+!.env.example
+!.env.sample
+.envrc
+.pypirc
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+
+# Local configuration and runtime files
+*.log
+*.pid
+*.pid.lock
+instance/
+local_settings.py
+
+# Editors and IDEs
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.example.json
+*.swp
+*.swo
+*~
+tempCodeRunnerFile.py
+
+# Operating system files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Generated documentation and website output
+docs/_build/
+site/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+
+# Local Aurora development workspaces
+.local/
+.scratch/

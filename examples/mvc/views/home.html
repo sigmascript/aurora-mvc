@@ -1,0 +1,10 @@
+{% extends "layout.html" %}
+{% from "components/actions.html" import action_link %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+    <h1>{{ title }}</h1>
+    <p>Your Aurora MVC project is ready.</p>
+    {{ action_link("Aurora documentation", "https://auroramvc.com") }}
+{% endblock %}

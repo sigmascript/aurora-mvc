@@ -1,0 +1,7 @@
+{
+  "databases": {
+    "default": {
+      "url": "sqlite:///data.sqlite3"
+    }
+  }
+}
