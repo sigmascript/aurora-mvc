@@ -469,7 +469,7 @@ def create_controller(app_name: str, name: str, *,
                       directory: Path | None = None) -> Path:
     """Generate and register a controller in an anchored modular project."""
     if not re.fullmatch(r"[A-Z][A-Za-z0-9]*", name) or keyword.iskeyword(name):
-        raise ValueError("Controller name must be CamelCase (e.g. AccountSettings).")
+        raise ValueError(f"Invalid controller name {name!r}. Use CamelCase (e.g. User or AccountSettings).")
     root = _scaffold_app_root(app_name, directory)
     project = root.parent.parent
     app_file = project / "app.py"
@@ -480,7 +480,7 @@ def create_controller(app_name: str, name: str, *,
     module = name.lower()
     destination = root / "controllers" / f"{module}.py"
     if destination.exists():
-        raise FileExistsError(f"Controller already exists: {destination}")
+        raise FileExistsError(f"Controller already exists (existing file will not be overwritten): {destination}")
     route = f"/{app_name}/{module.replace('_', '-')}"
     # Keep the existing app's base route untouched and avoid duplicate registrations.
     if f'app.route("{route}"' in source or f"app.route('{route}'" in source:
@@ -530,14 +530,14 @@ def _standalone_controller_root(directory: Path | None = None) -> Path:
             or controllers.is_symlink() or not controllers.is_dir()
             or not (controllers / "__init__.py").is_file()
             or (root / "apps").exists()):
-        raise ValueError("Standalone controllers require an existing non-modular MVC project.")
+        raise ValueError("Cannot use standalone controllers here. Run this command inside a standalone MVC project created with: aurora new myapp --mvc")
     return root
 
 
 def create_standalone_controller(name: str, *, directory: Path | None = None) -> Path:
     """Create and register a controller in a standalone MVC scaffold."""
     if not re.fullmatch(r"[A-Z][A-Za-z0-9]*", name) or keyword.iskeyword(name):
-        raise ValueError("Controller name must be CamelCase (e.g. AccountSettings).")
+        raise ValueError(f"Invalid controller name {name!r}. Use CamelCase (e.g. User or AccountSettings).")
     root = _standalone_controller_root(directory)
     app_file = root / "app.py"
     source = app_file.read_text(encoding="utf-8")
@@ -548,7 +548,7 @@ def create_standalone_controller(name: str, *, directory: Path | None = None) ->
     module = name.lower()
     destination = root / "controllers" / f"{module}.py"
     if destination.exists() or destination.is_symlink():
-        raise FileExistsError(f"Controller already exists: {destination}")
+        raise FileExistsError(f"Controller already exists (existing file will not be overwritten): {destination}")
     route = f"/{module}"
     if re.search(r"app\.route\(\s*['\"]" + re.escape(route) + r"['\"]", source):
         raise ValueError(f"Route already registered: {route}")
@@ -614,7 +614,7 @@ def create_view(app_name: str, name: str, *,
                 directory: Path | None = None) -> Path:
     """Generate a namespaced Jinja view without editing routes or templates."""
     if not re.fullmatch(r"[a-z][a-z0-9_-]*", name):
-        raise ValueError("View name must use lowercase letters, numbers, '_' or '-'.")
+        raise ValueError(f"Invalid view name {name!r}. Use lowercase letters, numbers, underscores or hyphens (e.g. account_settings).")
     root = _scaffold_app_root(app_name, directory)
     content = ('{% extends "layout.html" %}\n\n'
                '{% block content %}\n'
@@ -631,7 +631,7 @@ def create_model(app_name: str, name: str, *, directory: Path | None = None) -> 
     metadata remains shared by Aurora's existing Model API.
     """
     if not re.fullmatch(r"[A-Z][A-Za-z0-9]*", name) or keyword.iskeyword(name):
-        raise ValueError("Model name must be CamelCase (e.g. BlogPost).")
+        raise ValueError(f"Invalid model name {name!r}. Use CamelCase (e.g. BlogPost).")
     root = _scaffold_app_root(app_name, directory)
     folder = root / "models"
     if folder.is_symlink():
@@ -708,9 +708,9 @@ def _shared_component_root(resource: str, directory: Path | None = None) -> Path
         or not (root / "app.py").is_file()
         or not (root / "views").is_dir()
     ):
-        raise ValueError("Shared components require an existing MVC project.")
+        raise ValueError(f"Cannot use shared {resource}s here. Run this command inside an MVC project created with: aurora new myapp --mvc (or --modular)")
     if resource == "model" and not ((root / "apps").is_dir() or (root / "controllers").is_dir()):
-        raise ValueError("Shared models require an MVC project.")
+        raise ValueError("Shared models require an MVC project created with: aurora new myapp --mvc (or --modular).")
     folder = root / ("models" if resource == "model" else "views")
     if folder.is_symlink() or (folder.exists() and not folder.is_dir()):
         raise ValueError("Refusing an invalid or symlinked component directory.")
@@ -722,7 +722,7 @@ def create_shared_component(resource: str, name: str, *, directory: Path | None 
     folder = _shared_component_root(resource, directory)
     if resource == "model":
         if not re.fullmatch(r"[A-Z][A-Za-z0-9]*", name):
-            raise ValueError("Model name must be CamelCase.")
+            raise ValueError(f"Invalid model name {name!r}. Use CamelCase (e.g. BlogPost).")
         module = re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
         filename = module + ".py"
         content = (f'"""Shared {name} model."""\nfrom aurora.database import Model, column\n\n\n'
@@ -730,7 +730,7 @@ def create_shared_component(resource: str, name: str, *, directory: Path | None 
                    '    # Add your model columns here.\n')
     elif resource == "view":
         if not re.fullmatch(r"[a-z][a-z0-9_-]*", name):
-            raise ValueError("View name must use lowercase letters, digits, _ or -.")
+            raise ValueError(f"Invalid view name {name!r}. Use lowercase letters, numbers, underscores or hyphens (e.g. account_settings).")
         filename = name + ".html"
         content = ('{% extends "layout.html" %}\n\n{% block content %}\n'
                    f'    <h1>{name.replace("_", " ").replace("-", " ").title()}</h1>\n'
@@ -1076,14 +1076,15 @@ def main(argv: list[str] | None = None) -> int:
         resource = args.command
         if getattr(args, "second", None) is not None:
             if args.app_option is not None:
-                parser.error("Do not combine legacy positional app and --app.")
+                parser.error("Specify the app either positionally or with --app, not both. Example: aurora controller add User --app blog")
             app_name, name = args.first, args.second
         else:
             app_name, name = args.app_option, args.first
             if args.action == "list" and args.first is not None and args.app_option is None:
                 app_name, name = args.first, None  # Legacy: resource list APP
         if args.action != "list" and not name:
-            parser.error(f"{resource} {args.action} requires a component name.")
+            parser.error(f"{resource} {args.action} requires a component name. Example: aurora {resource} {args.action} "
+                         + ("user" if resource == "view" else "User"))
         if args.action == "add" and os.environ.get("AURORA_ENV", "development").lower() == "production":
             parser.exit(1, "aurora: Refusing to modify project in production environment.\n")
         try:
