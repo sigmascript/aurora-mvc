@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from importlib.util import find_spec
 from importlib.metadata import PackageNotFoundError, version
 import ast
 import os
@@ -1169,6 +1170,22 @@ def main(argv: list[str] | None = None) -> int:
     if cwd in sys.path:
         sys.path.remove(cwd)
     sys.path.insert(0, cwd)
+    # For simple module targets, detect a missing module before starting the
+    # reload supervisor. Do not import developer code during this check.
+    # Dotted modules are left to Uvicorn: find_spec() imports their parents.
+    if not args.no_reload:
+        module_name = args.application.partition(":")[0]
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", module_name):
+            try:
+                module_spec = find_spec(module_name)
+            except (ImportError, ValueError, AttributeError):
+                module_spec = None
+            if module_spec is None:
+                parser.exit(
+                    1,
+                    f"aurora: Cannot find application module '{module_name}'. "
+                    f"Check the target '{args.application}' or run from your project directory.\n",
+                )
     uvicorn.run(args.application, host=args.host, port=args.port, reload=not args.no_reload)
     return 0
 
