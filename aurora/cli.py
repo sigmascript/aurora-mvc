@@ -849,6 +849,11 @@ def main(argv: list[str] | None = None) -> int:
         if verb == "history":
             command.add_argument("--history-file",
                                  help="Optional legacy dedicated history SQLite file; otherwise reads applied migrations from target database")
+    init = db_actions.add_parser("init", help="Initialize a new SQLite database once (WRITES DATABASE)")
+    init.add_argument("--config", default="aurora_databases.json", help="Database configuration JSON path")
+    init.add_argument("--database", default="default", help="Configured database alias")
+    init.add_argument("--model", action="append", default=[], metavar="MODULE:CLASS", help="Explicit Aurora model; repeat as needed")
+    init.add_argument("--models-config", default="aurora_models.json", help="Explicit model manifest JSON path")
     sync = db_actions.add_parser('sync', aliases=['s'], help='Preview or safely apply SQLite CREATE TABLE / nullable ADD COLUMN migrations')
     sync.add_argument('--config', default='aurora_databases.json', help='Database configuration JSON path')
     sync.add_argument('--database', default='default', help='Configured database alias (default: default)')
@@ -885,6 +890,22 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--port", type=int, default=8000)
     run.add_argument("--no-reload", action="store_true")
     args = parser.parse_args(argv)
+    if args.command == "db" and args.action == "init":
+        if os.environ.get("AURORA_ENV", "development").lower() == "production":
+            parser.exit(1, "aurora: Refusing to initialize a database in production environment.\n")
+        from aurora.database.cli_init import initialize_database
+        try:
+            status = initialize_database(
+                config_path=args.config, alias=args.database,
+                model_refs=args.model, models_config=args.models_config,
+            )
+        except (ValueError, OSError, ImportError, AttributeError, __import__("sqlite3").Error) as exc:
+            parser.exit(1, f"aurora: {exc}\n")
+        if status == "already initialized":
+            print(f"Database: {args.database}\nAlready initialized; no changes made. Run aurora db status to inspect schema compatibility.")
+        else:
+            print(f"Database: {args.database}\nDatabase initialized successfully.")
+        return 0
     if args.command == 'db' and args.action in ('sync', 's'):
         from aurora.database.cli_sync import sync_database
         def confirm(text):
