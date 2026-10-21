@@ -522,6 +522,94 @@ def create_controller(app_name: str, name: str, *,
     return destination
 
 
+def _standalone_controller_root(directory: Path | None = None) -> Path:
+    """Locate a generated standalone MVC project without executing its code."""
+    root = (directory or Path.cwd()).resolve()
+    controllers = root / "controllers"
+    if ((root / "app.py").is_symlink() or not (root / "app.py").is_file()
+            or controllers.is_symlink() or not controllers.is_dir()
+            or not (controllers / "__init__.py").is_file()
+            or (root / "apps").exists()):
+        raise ValueError("Standalone controllers require an existing non-modular MVC project.")
+    return root
+
+
+def create_standalone_controller(name: str, *, directory: Path | None = None) -> Path:
+    """Create and register a controller in a standalone MVC scaffold."""
+    if not re.fullmatch(r"[A-Z][A-Za-z0-9]*", name) or keyword.iskeyword(name):
+        raise ValueError("Controller name must be CamelCase (e.g. AccountSettings).")
+    root = _standalone_controller_root(directory)
+    app_file = root / "app.py"
+    source = app_file.read_text(encoding="utf-8")
+    # The original standalone scaffold has no anchors. Require a recognizable
+    # Aurora application before appending the registration.
+    if not re.search(r"(?m)^app\s*=\s*Aurora\(", source):
+        raise ValueError("Cannot safely register controller: app.py has no standard Aurora app assignment.")
+    module = name.lower()
+    destination = root / "controllers" / f"{module}.py"
+    if destination.exists() or destination.is_symlink():
+        raise FileExistsError(f"Controller already exists: {destination}")
+    route = f"/{module}"
+    if re.search(r"app\.route\(\s*['\"]" + re.escape(route) + r"['\"]", source):
+        raise ValueError(f"Route already registered: {route}")
+    binding = _controller_binding(source, "", name)
+    suffix = f" as {binding}" if binding != name else ""
+    import_line = f"from controllers.{module} import {name}{suffix}"
+    if import_line in source:
+        raise ValueError("Controller import already registered.")
+    # Insert the import before the first top-level app assignment, so the
+    # controller is available when its route is registered.
+    tree = ast.parse(source)
+    app_assignments = [node for node in tree.body if isinstance(node, ast.Assign)
+                       and any(isinstance(t, ast.Name) and t.id == "app" for t in node.targets)]
+    if len(app_assignments) != 1:
+        raise ValueError("Cannot safely register controller: expected one top-level app assignment.")
+    lines = source.splitlines(keepends=True)
+    lines.insert(app_assignments[0].lineno - 1, import_line + "\n")
+    updated = "".join(lines).rstrip("\n") + f'\napp.route("{route}", {binding})\n'
+    ast.parse(updated)
+    content = (f'"""{name} page controller."""\n'
+               'from aurora import Controller\n\n\n'
+               f'class {name}(Controller):\n'
+               '    def get(self):\n'
+               '        return "TODO: implement this controller"\n')
+    temp_app = None
+    created = False
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=root,
+                                         prefix=".aurora-controller-", suffix=".tmp",
+                                         delete=False) as stream:
+            temp_app = Path(stream.name)
+            stream.write(updated)
+        _create_scaffold_file(root / "controllers", f"{module}.py", content)
+        created = True
+        os.replace(temp_app, app_file)
+        temp_app = None
+    except BaseException:
+        if created:
+            destination.unlink()
+        raise
+    finally:
+        if temp_app is not None:
+            temp_app.unlink(missing_ok=True)
+    return destination
+
+
+def list_standalone_controllers(*, directory: Path | None = None) -> list[str]:
+    root = _standalone_controller_root(directory)
+    return sorted(p.stem for p in (root / "controllers").iterdir()
+                  if p.is_file() and not p.is_symlink()
+                  and p.suffix == ".py" and p.name != "__init__.py")
+
+
+def show_standalone_controller(name: str, *, directory: Path | None = None) -> dict[str, str]:
+    if name not in list_standalone_controllers(directory=directory):
+        raise ValueError(f"Controller not found: {name}")
+    root = _standalone_controller_root(directory)
+    path = root / "controllers" / (name + ".py")
+    return {"app": "(standalone)", "name": name, "path": str(path)}
+
+
 def create_view(app_name: str, name: str, *,
                 directory: Path | None = None) -> Path:
     """Generate a namespaced Jinja view without editing routes or templates."""
@@ -996,16 +1084,13 @@ def main(argv: list[str] | None = None) -> int:
                 app_name, name = args.first, None  # Legacy: resource list APP
         if args.action != "list" and not name:
             parser.error(f"{resource} {args.action} requires a component name.")
-        if resource == "controller" and app_name is None:
-            parser.error("Controller commands currently require --app APP (or legacy APP NAME).")
-        if resource == "controller" and args.action == "list" and app_name is None:
-            parser.error("Controller list requires --app APP.")
         if args.action == "add" and os.environ.get("AURORA_ENV", "development").lower() == "production":
             parser.exit(1, "aurora: Refusing to modify project in production environment.\n")
         try:
             if args.action == "add":
                 if app_name is None:
-                    destination = create_shared_component(resource, name)
+                    destination = (create_standalone_controller(name) if resource == "controller"
+                                   else create_shared_component(resource, name))
                 else:
                     destination = {"controller": create_controller, "view": create_view,
                                    "model": create_model}[resource](app_name, name)
@@ -1014,10 +1099,12 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Created {destination}" + note)
             elif args.action == "list":
                 entries = (list_components(resource, app_name) if app_name is not None
+                           else list_standalone_controllers() if resource == "controller"
                            else list_shared_components(resource))
                 print("\n".join(entries) if entries else f"No {resource}s found.")
             else:
                 info = (show_component(resource, app_name, name) if app_name is not None
+                        else show_standalone_controller(name) if resource == "controller"
                         else show_shared_component(resource, name))
                 print(f"{resource.title()}: {info['name']}\nApp: {info['app']}\nPath: {info['path']}")
         except (OSError, ValueError) as exc:
