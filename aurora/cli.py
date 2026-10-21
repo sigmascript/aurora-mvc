@@ -907,6 +907,16 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--port", type=int, default=8000)
     run.add_argument("--no-reload", action="store_true")
     args = parser.parse_args(argv)
+    # Installed console scripts may omit the project directory from sys.path.
+    # Explicit database model references must resolve like `python -m aurora`.
+    # Restrict this to commands that load project models; help and read-only
+    # database listing/inspection do not need to change import resolution.
+    if args.command == "db" and args.action in (
+        "init", "plan", "validate", "status", "sync", "s", "migration"
+    ):
+        project_dir = str(Path.cwd().resolve())
+        if project_dir not in sys.path:
+            sys.path.insert(0, project_dir)
     if args.command == "db" and args.action == "init":
         if os.environ.get("AURORA_ENV", "development").lower() == "production":
             parser.exit(1, "aurora: Refusing to initialize a database in production environment.\n")
