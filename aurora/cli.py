@@ -830,6 +830,8 @@ def main(argv: list[str] | None = None) -> int:
             registered.add_argument("--models-config", default="aurora_models.json", help="Model manifest JSON path")
     # Read-only named database commands; no model imports or schema writes.
     db_group = sub.add_parser("db", help="Inspect databases and safely migrate SQLite schemas")
+    db_group.description = "Database commands: init creates selected model tables once; inspection and migration commands are separate."
+    db_group.epilog = "First setup: aurora db init --config aurora_databases.json --models-config aurora_models.json"
     db_actions = db_group.add_subparsers(dest="action", required=True)
     for verb in ("list", "show", "check", "inspect", "plan", "history", "status", "validate"):
         command = db_actions.add_parser(verb, help=("Read applied SQLite migrations (or --history-file for legacy store)" if verb == "history" else "Read applied migrations and optionally compare selected models" if verb == "status" else {"list": "List configured database aliases", "show": "Show configured database details", "check": "Check existing SQLite schema readability", "inspect": "Inspect existing SQLite schema", "plan": "Preview model-to-schema differences", "validate": "Review migration readiness"}.get(verb, f"Read-only database {verb}")))
@@ -849,7 +851,22 @@ def main(argv: list[str] | None = None) -> int:
         if verb == "history":
             command.add_argument("--history-file",
                                  help="Optional legacy dedicated history SQLite file; otherwise reads applied migrations from target database")
-    init = db_actions.add_parser("init", help="Initialize a new SQLite database once (WRITES DATABASE)")
+    init = db_actions.add_parser(
+        "init",
+        help="Create selected tables in a new or empty SQLite database (writes once)",
+        description=(
+            "Initialize a new or empty SQLite database from explicitly selected Aurora models. "
+            "If every selected table exists, report already initialized without modifying the database. "
+            "Refuse partial or unrelated schemas; this command never migrates tables."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  aurora db init\n"
+            "  aurora db init --database default --model myapp.models:User\n"
+            "  aurora db init --config aurora_databases.json --models-config aurora_models.json"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     init.add_argument("--config", default="aurora_databases.json", help="Database configuration JSON path")
     init.add_argument("--database", default="default", help="Configured database alias")
     init.add_argument("--model", action="append", default=[], metavar="MODULE:CLASS", help="Explicit Aurora model; repeat as needed")
@@ -890,6 +907,16 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--port", type=int, default=8000)
     run.add_argument("--no-reload", action="store_true")
     args = parser.parse_args(argv)
+    # Installed console scripts may omit the project directory from sys.path.
+    # Explicit database model references must resolve like `python -m aurora`.
+    # Restrict this to commands that load project models; help and read-only
+    # database listing/inspection do not need to change import resolution.
+    if args.command == "db" and args.action in (
+        "init", "plan", "validate", "status", "sync", "s", "migration"
+    ):
+        project_dir = str(Path.cwd().resolve())
+        if project_dir not in sys.path:
+            sys.path.insert(0, project_dir)
     if args.command == "db" and args.action == "init":
         if os.environ.get("AURORA_ENV", "development").lower() == "production":
             parser.exit(1, "aurora: Refusing to initialize a database in production environment.\n")
