@@ -3,7 +3,7 @@
 Aurora MVC is an ASGI-first Python web framework with an MVC-oriented developer experience.
 Simple, Secure, Developer Friendly. 
 
-> **Alpha preparation:** This repository is preparing version `1.0.0a1`. The package has not been published as part of this checkpoint. APIs may change during alpha development.
+> **Alpha status:** `aurora-mvc==1.0.0a1` has been published on PyPI. This repository also contains subsequent Alpha 2 development changes that are not necessarily included in the published Alpha 1 package. APIs may change during alpha development.
 
 ## Requirements
 
@@ -15,11 +15,21 @@ Python 3.10 or newer.
 python -m pip install -e '.[dev]'
 ```
 
-The planned PyPI distribution name is `aurora-mvc`. Python imports use `aurora`, and the CLI command is `aurora`.
+The published PyPI distribution name is `aurora-mvc`. Python imports use `aurora`, and the CLI command is `aurora`. The latest unreleased development changes require an editable source checkout.
 
 ## Quick start
 
-Create `app.py`:
+For a generated MVC application, use:
+
+```bash
+aurora new my_site --mvc
+cd my_site
+aurora run
+```
+
+Database setup is separate: see [Database initialization](docs/database.md#initialize-a-new-sqlite-database).
+
+Alternatively, create `app.py` manually:
 
 ```python
 from aurora import Aurora
@@ -34,10 +44,10 @@ def home(request):
 app.add_route("/", home)
 ```
 
-Run the development server:
+Run the development server from the project directory:
 
 ```bash
-python -m uvicorn app:app --reload
+aurora run
 ```
 
 ## CLI
@@ -77,5 +87,5 @@ Start with the [documentation index](docs/index.md) for supported APIs, guides, 
 ## Project
 
 Website: https://auroramvc.com
-Planned public repository: https://github.com/sigmascript/aurora-mvc
+Repository: https://github.com/sigmascript/aurora-mvc
 License: MIT (see `LICENSE`).
