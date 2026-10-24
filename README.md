@@ -1,91 +1,85 @@
 # Aurora MVC
 
-Aurora MVC is an ASGI-first Python web framework with an MVC-oriented developer experience.
-Simple, Secure, Developer Friendly. 
+**Aurora MVC** is a lightweight, ASGI-first Python web framework built around a clear MVC structure, simple routing, and practical developer tooling.
 
-> **Alpha status:** `aurora-mvc==1.0.0a1` has been published on PyPI. This repository also contains subsequent Alpha 2 development changes that are not necessarily included in the published Alpha 1 package. APIs may change during alpha development.
+> **Release status:** `1.0.0a1` is the published alpha. `1.0.0a2` is under development in this repository and is not yet released. Documentation for the development checkout may describe functionality not available in Alpha 1.
 
 ## Requirements
 
-Python 3.10 or newer.
+- Python 3.10 or newer
+- An ASGI server such as Uvicorn to run applications
 
-## Install from a local checkout
+## Install and get started
 
-```bash
-python -m pip install -e '.[dev]'
-```
-
-The published PyPI distribution name is `aurora-mvc`. Python imports use `aurora`, and the CLI command is `aurora`. The latest unreleased development changes require an editable source checkout.
-
-## Quick start
-
-For a generated MVC application, use:
+Install the published alpha and an ASGI server:
 
 ```bash
-aurora new my_site --mvc
-cd my_site
-aurora run
+python -m pip install "aurora-mvc==1.0.0a1" "uvicorn>=0.30"
 ```
 
-Database setup is separate: see [Database initialization](docs/database.md#initialize-a-new-sqlite-database).
-
-Alternatively, create `app.py` manually:
-
-```python
-from aurora import Aurora
-
-app = Aurora()
-
-
-def home(request):
-    return "Hello from Aurora MVC!"
-
-
-app.add_route("/", home)
-```
-
-Run the development server from the project directory:
-
-```bash
-aurora run
-```
-
-## CLI
+Inspect the available commands:
 
 ```bash
 aurora --help
+aurora new --help
+aurora run --help
 ```
 
-## Examples
+Create a project using the options shown by `aurora new --help`, change into its directory, and start it using `aurora run`. For the exact supported flags and generated layouts, consult the [getting-started guide](docs/getting-started.md) and [CLI reference](docs/cli.md).
 
-The repository includes four framework examples under `examples/`:
-
-- `minimal` — a minimal application
-- `mvc` — a controller and Jinja view
-- `modular` — separate applications and namespaced views
-- `multilingual` — locale-aware routes
-
-Install Aurora MVC and the development dependencies from this checkout first. Then run an example from its own directory:
+To work with the current development checkout instead:
 
 ```bash
-cd examples/minimal
-aurora run --no-reload
+python -m pip install -e ".[dev]"
+python -m aurora --help
 ```
 
-See each example's `README.md` for its supported routes and behavior.
+Using `python -m aurora` from the checkout helps distinguish local development code from a separately installed global `aurora` command.
 
-## Tests
+## Features
 
-```bash
-python -m unittest discover -s tests -q
-```
+- ASGI-first request handling and routing
+- MVC-friendly project structure and controllers
+- Templates, static files, and multilingual application support
+- Database configuration and model registration using SQLAlchemy
+- CLI commands for scaffolding, development, and guarded database workflows
+
+The precise availability and limitations of database operations depend on the backend and release version. **MySQL support is being developed for Alpha 2.** MySQL migration execution is **not** part of the current approved Alpha 2 scope; do not assume SQLite and MySQL have identical migration capabilities.
 
 ## Documentation
 
-Start with the [documentation index](docs/index.md) for supported APIs, guides, and current limitations.
+- [Documentation index](docs/index.md)
+- [Getting started](docs/getting-started.md)
+- [CLI reference](docs/cli.md)
+- [Project templates](docs/project-templates.md)
+- [Routing and controllers](docs/routing.md)
+- [Database operations and safety](docs/database.md)
+- [Multilingual applications](docs/multilingual.md)
 
-## Project
+Examples are available in the [`examples/`](examples/) directory.
 
-Website: https://auroramvc.com
-Repository: https://github.com/sigmascript/aurora-mvc
-License: MIT (see `LICENSE`).
+## Development and tests
+
+Install development dependencies:
+
+```bash
+python -m pip install -e ".[dev]"
+```
+
+Run the test suite:
+
+```bash
+python -m unittest discover -s tests
+```
+
+Some live database integration tests are opt-in and require explicitly configured disposable databases. Never use a production database for integration tests.
+
+## Project and security notes
+
+- Keep local database URLs, passwords, and environment files outside version control and source archives.
+- Review schema-changing operations before execution; MySQL DDL may commit implicitly and cannot be treated as fully rollback-safe.
+- Use the current [database safety guide](docs/database.md) before attempting initialization or migration operations.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
