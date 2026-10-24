@@ -16,6 +16,7 @@ The `db` command groups are:
 
 | Command | Purpose |
 | --- | --- |
+| `init` | Initialize a missing or empty SQLite database from explicitly selected models; refuse partial or unrelated schemas |
 | `list`, `show` | Inspect configured database aliases and their details |
 | `check`, `inspect` | Check or inspect an existing SQLite database |
 | `plan` | Compare explicitly selected models with an existing schema without applying changes |
@@ -32,7 +33,7 @@ Read-only inspection commands are not a substitute for a backup before any subse
 
 The default configuration path is `aurora_databases.json`. Database commands generally accept `--config` to select a different configuration file and `--database` to select an alias (default: `default`). Configuration and model references must be valid for the project; Aurora does not silently invent missing database files or models.
 
-The model manifest defaults to `aurora_models.json`. Commands that compare models accept repeatable `--model MODULE:CLASS` references, or can use the project manifest. Model registration does **not** itself migrate the schema.
+The model manifest defaults to `aurora_models.json`. Commands that compare or initialize models accept repeatable `--model MODULE:CLASS` references, or can use the project manifest. Model registration does **not** itself create or migrate tables. Generated MVC projects start with an empty manifest (`{"databases": {}}`), so supply `--model` or register a model before running `db init`.
 
 For example, to register an explicit model reference:
 
@@ -42,6 +43,26 @@ aurora model registered
 ```
 
 Replace the illustrative module and class with a real importable Aurora model in your project.
+
+## Initialize a new SQLite database
+
+Run from the **generated project root**, not its `models/` subdirectory. The generated `aurora_databases.json` normally configures the `default` alias with `sqlite:///data.sqlite3`. Create your Aurora model first; for a class `Users` defined in `models/users.py`, run:
+
+```bash
+aurora db init --model models.users:Users
+```
+
+Alternatively, register it once and then initialize:
+
+```bash
+aurora model register models.users:Users
+aurora model registered
+aurora db init
+```
+
+The import reference is case-sensitive. `models.users:Users` means the `Users` class inside the `models.users` module. The CLI resolves project-local model imports from the working directory. A repeated `db init` reports already initialized when all selected tables already exist; it does **not** compare or repair their schema. Use `aurora db plan --model models.users:Users` for supported schema comparison.
+
+**Safety boundary:** `db init` only supports SQLite and explicitly selected models. It refuses partially initialized databases or unrelated existing tables and never performs migrations. Always verify the configured alias and database path; use a disposable database for first experiments.
 
 ## Safe, read-only workflow
 

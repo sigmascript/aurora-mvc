@@ -1,6 +1,6 @@
 # Aurora MVC documentation
 
-Aurora MVC is an ASGI-first Python framework with MVC-friendly APIs. This is the **alpha documentation** for `1.0.0a1`; features and commands may change before a stable release.
+Aurora MVC is an ASGI-first Python framework with MVC-friendly APIs. This documentation describes the current source checkout, including Alpha 2 development work. The published PyPI `1.0.0a1` package may not include newer commands such as `aurora db init`; features may change before a stable release.
 
 ## Start here
 
@@ -9,7 +9,7 @@ Aurora MVC is an ASGI-first Python framework with MVC-friendly APIs. This is the
 - [Project templates and examples](project-templates.md) — three generated layouts and four repository examples
 - [Routing and controllers](routing.md) — routes, actions, and handlers
 - [Authentication and safe redirects](security/authentication-redirects.md) — optional guards and return paths
-- [Database and migrations](database.md) — safe starting points and limitations
+- [Database and migrations](database.md) — initialize an empty SQLite database, inspect it, and understand migration safeguards
 - [Multilingual applications](multilingual.md) — locale configuration and URL design
 
 ## Contributors

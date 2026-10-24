@@ -18,7 +18,7 @@ aurora -v
 python -m aurora --version
 ```
 
-During alpha development these commands report `Aurora MVC 1.0.0a1` for the current checkout. The CLI reads installed distribution metadata when available and otherwise falls back to Aurora’s package version.
+These commands report the version installed in the active environment. The published Alpha 1 release is `1.0.0a1`; newer source-checkout functionality may not yet be released. The CLI reads installed distribution metadata when available and otherwise falls back to Aurora’s package version.
 
 ## Commands at a glance
 
@@ -29,7 +29,7 @@ During alpha development these commands report `Aurora MVC 1.0.0a1` for the curr
 | `controller` | Add, list, or inspect controllers |
 | `view` | Add, list, or inspect views |
 | `model` | Add, list, inspect, or register model references |
-| `db` | Inspect databases, preview schema changes, and manage reviewed SQLite migrations |
+| `db` | Initialize empty SQLite databases, inspect schemas, preview changes, and manage reviewed migrations |
 | `run` | Start an ASGI application with Uvicorn |
 
 Use `aurora GROUP --help` and, where applicable, `aurora GROUP ACTION --help` for the full argument list.
@@ -81,15 +81,18 @@ These commands manage explicit model references in the project manifest; they do
 
 ## Database commands and safety
 
-The `db` group includes `list`, `show`, `check`, `inspect`, `plan`, `validate`, `history`, `status`, `sync` (alias `s`), and `migration` subcommands. Some are read-only; others can write schema changes when explicitly approved.
+The `db` group includes `init`, `list`, `show`, `check`, `inspect`, `plan`, `validate`, `history`, `status`, `sync` (alias `s`), and `migration` subcommands. Some are read-only; others can write schema changes when explicitly approved.
 
 For example, with a configured project database:
 
 ```bash
 aurora db list
-aurora db plan --model myapp.models:Article
+aurora db init --model models.article:Article  # new or empty SQLite database only
+aurora db plan --model models.article:Article
 aurora db sync --dry-run --model myapp.models:Article
 ```
+
+`db init` is a guarded, one-time operation: it refuses existing partial or unrelated schemas and does not perform migrations. Model references must be importable from the project root.
 
 **Do not use database apply or sync-approval commands against valuable databases without reviewing the generated plan and backup requirements.** See the [database guide](database.md) for the safety model. CLI validation can refuse operations in production environments.
 
