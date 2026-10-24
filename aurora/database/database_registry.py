@@ -1,16 +1,18 @@
-"""Lazy named Database instances without changing Model.bind or global state.
+"""Lazy named Database instances with independent engine ownership.
 
-The registry owns only databases it creates. Call close() at application shutdown.
-No cross-database transaction semantics are implied.
+Close at application shutdown. Transactions never span multiple aliases.
 """
+
 from threading import RLock
+
+from sqlalchemy.exc import SQLAlchemyError
 
 from aurora.database.database import Database
 from aurora.database.database_config import DatabaseConfiguration
 
 
 class DatabaseRegistry:
-    """Resolve configured aliases to independently owned, lazy Database objects."""
+    """Resolve configured aliases to independently owned, lazy databases."""
 
     def __init__(self, configuration: DatabaseConfiguration):
         if not isinstance(configuration, DatabaseConfiguration):
@@ -24,13 +26,19 @@ class DatabaseRegistry:
         return self._configuration.aliases()
 
     def get(self, alias: str = "default") -> Database:
-        # Validate before attempting engine construction, including after close.
+        # Validate the alias before attempting engine construction.
         url = self._configuration.resolve(alias)
         with self._lock:
             if self._closed:
                 raise RuntimeError("Database registry is closed")
             if alias not in self._instances:
-                self._instances[alias] = Database(url)
+                try:
+                    self._instances[alias] = Database(url)
+                except (ImportError, SQLAlchemyError) as exc:
+                    raise RuntimeError(
+                        f"Could not initialize database engine for alias '{alias}'. "
+                        "Check the installed driver and database configuration."
+                    ) from None
             return self._instances[alias]
 
     def initialized_aliases(self) -> tuple[str, ...]:
@@ -39,7 +47,7 @@ class DatabaseRegistry:
             return tuple(self._instances)
 
     def close(self) -> None:
-        """Dispose all owned engines. Idempotent; prevents future get()."""
+        """Dispose owned engines once and prevent future access."""
         with self._lock:
             if self._closed:
                 return

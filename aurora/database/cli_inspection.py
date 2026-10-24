@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from sqlalchemy import create_engine, inspect as sa_inspect
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.engine import make_url
 from aurora.database.database_config import DatabaseConfiguration
 from aurora.database.schema import inspect_sqlite
@@ -31,10 +33,25 @@ def describe_database(config: DatabaseConfiguration, alias: str):
 
 
 def inspect_database(config: DatabaseConfiguration, alias: str, *, base_dir: Path):
-    """Inspect existing file-backed SQLite only; never create a database."""
+    """Count existing tables without changing either database or its schema."""
     url = config.resolve(alias)
+    if url.get_backend_name() == "mysql":
+        engine = None
+        try:
+            engine = create_engine(url)
+            with engine.connect() as connection:
+                return len(sa_inspect(connection).get_table_names())
+        except (SQLAlchemyError, ImportError, OSError) as exc:
+            # Driver and DBAPI exceptions can include full connection URLs.
+            raise ValueError(
+                f"Unable to inspect MySQL database alias '{alias}'; "
+                "verify the server, account, permissions and driver"
+            ) from None
+        finally:
+            if engine is not None:
+                engine.dispose()
     if url.get_backend_name() != "sqlite":
-        raise ValueError(f"Read-only schema check currently supports SQLite only (alias: {alias})")
+        raise ValueError(f"Unsupported schema inspection backend for alias: {alias}")
     database = url.database
     if not database or database == ":memory:":
         raise ValueError("Read-only check requires an existing file-backed SQLite database")
@@ -46,6 +63,32 @@ def inspect_database(config: DatabaseConfiguration, alias: str, *, base_dir: Pat
     except FileNotFoundError:
         raise ValueError(f"SQLite database file not found for alias: {alias}") from None
     return len(schema.tables)
+
+
+def inspect_mysql_details(config: DatabaseConfiguration, alias: str):
+    """Read MySQL table metadata only; never infer model compatibility."""
+    url = config.resolve(alias)
+    if url.get_backend_name() != "mysql":
+        raise ValueError(f"MySQL inspection requires a MySQL alias: {alias}")
+    engine = None
+    try:
+        engine = create_engine(url)
+        with engine.connect() as connection:
+            inspector = sa_inspect(connection)
+            result = []
+            for name in sorted(inspector.get_table_names()):
+                result.append((name, len(inspector.get_columns(name)),
+                               len(inspector.get_indexes(name)),
+                               len(inspector.get_foreign_keys(name))))
+            return tuple(result)
+    except (SQLAlchemyError, ImportError, OSError):
+        raise ValueError(
+            f"Unable to inspect MySQL database alias '{alias}'; "
+            "verify the server, account, permissions and driver"
+        ) from None
+    finally:
+        if engine is not None:
+            engine.dispose()
 
 
 def _sqlite_path(config: DatabaseConfiguration, alias: str, base_dir: Path) -> Path:

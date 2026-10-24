@@ -75,6 +75,10 @@ id_ed25519
 instance/
 local_settings.py
 
+# Local Aurora database configurations (may contain credentials)
+aurora_databases.json
+aurora_databases_*.json
+
 # Editors and IDEs
 .idea/
 .vscode/*
