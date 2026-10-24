@@ -14,7 +14,7 @@
 Install the published alpha and an ASGI server:
 
 ```bash
-python -m pip install "aurora-mvc==1.0.0a1" "uvicorn>=0.30"
+python -m pip install "aurora-mvc==1.0.0a2" "uvicorn>=0.30"
 ```
 
 Inspect the available commands:
