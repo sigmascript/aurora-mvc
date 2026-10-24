@@ -24,11 +24,12 @@ class DatabaseInitHelpTests(unittest.TestCase):
         output = self.help_output("db")
         self.assertIn("init", output)
         self.assertIn("aurora db init", output)
+        self.assertIn("aurora_models.json", output)
 
     def test_init_help_explains_safety_and_options(self):
         output = self.help_output("db", "init")
         for expected in ("--config", "--database", "--model", "--models-config",
-                         "already initialized", "never migrates", "Examples:"):
+                         "already initialized", "never migrates", "registered models", "Examples:"):
             self.assertIn(expected, output)
 
 

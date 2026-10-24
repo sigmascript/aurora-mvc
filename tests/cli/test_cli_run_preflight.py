@@ -30,10 +30,20 @@ class CLIRunPreflightTests(unittest.TestCase):
         self.assertEqual(run.call_args.args[0], "app:app")
         self.assertTrue(run.call_args.kwargs["reload"])
 
-    def test_no_reload_is_left_to_uvicorn(self):
+    def test_no_reload_rejects_missing_simple_module(self):
         with tempfile.TemporaryDirectory() as folder, patch("pathlib.Path.cwd", return_value=Path(folder)), \
-                patch("uvicorn.run") as run:
-            self.assertEqual(main(["run", "--no-reload"]), 0)
+                patch("uvicorn.run") as run, contextlib.redirect_stderr(io.StringIO()) as output:
+            with self.assertRaises(SystemExit) as raised:
+                main(["run", "--no-reload"])
+        self.assertEqual(raised.exception.code, 1)
+        self.assertIn("Cannot find application module 'app'", output.getvalue())
+        run.assert_not_called()
+
+    def test_no_reload_runs_existing_simple_module(self):
+        with tempfile.TemporaryDirectory() as folder:
+            Path(folder, "app.py").write_text("app = object()\n")
+            with patch("pathlib.Path.cwd", return_value=Path(folder)), patch("uvicorn.run") as run:
+                self.assertEqual(main(["run", "--no-reload"]), 0)
         run.assert_called_once()
         self.assertFalse(run.call_args.kwargs["reload"])
 

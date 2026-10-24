@@ -861,7 +861,7 @@ def main(argv: list[str] | None = None) -> int:
         ),
         epilog=(
             "Examples:\n"
-            "  aurora db init\n"
+            "  aurora db init  # requires registered models in aurora_models.json\n"
             "  aurora db init --database default --model myapp.models:User\n"
             "  aurora db init --config aurora_databases.json --models-config aurora_models.json"
         ),
@@ -902,10 +902,10 @@ def main(argv: list[str] | None = None) -> int:
     apply_cmd.add_argument("--backup", required=True, help="New SQLite backup path (must not exist)")
     # Destructive operations remain deliberately unavailable.
     run = sub.add_parser("run", help="Run an ASGI application with Uvicorn")
-    run.add_argument("application", nargs="?", default="app:app", help="ASGI import path (default: app:app)")
+    run.add_argument("application", nargs="?", default="app:app", help="ASGI import path (default: app:app); run from the project directory")
     run.add_argument("--host", default="127.0.0.1")
     run.add_argument("--port", type=int, default=8000)
-    run.add_argument("--no-reload", action="store_true")
+    run.add_argument("--no-reload", action="store_true", help="Disable automatic reload (enabled by default)")
     args = parser.parse_args(argv)
     # Installed console scripts may omit the project directory from sys.path.
     # Explicit database model references must resolve like `python -m aurora`.
@@ -1218,22 +1218,20 @@ def main(argv: list[str] | None = None) -> int:
     if cwd in sys.path:
         sys.path.remove(cwd)
     sys.path.insert(0, cwd)
-    # For simple module targets, detect a missing module before starting the
-    # reload supervisor. Do not import developer code during this check.
-    # Dotted modules are left to Uvicorn: find_spec() imports their parents.
-    if not args.no_reload:
-        module_name = args.application.partition(":")[0]
-        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", module_name):
-            try:
-                module_spec = find_spec(module_name)
-            except (ImportError, ValueError, AttributeError):
-                module_spec = None
-            if module_spec is None:
-                parser.exit(
-                    1,
-                    f"aurora: Cannot find application module '{module_name}'. "
-                    f"Check the target '{args.application}' or run from your project directory.\n",
-                )
+    # Check simple modules consistently with and without reload. Do not import
+    # developer code during preflight; dotted modules remain Uvicorn-owned.
+    module_name = args.application.partition(":")[0]
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", module_name):
+        try:
+            module_spec = find_spec(module_name)
+        except (ImportError, ValueError, AttributeError):
+            module_spec = None
+        if module_spec is None:
+            parser.exit(
+                1,
+                f"aurora: Cannot find application module '{module_name}'. "
+                f"Check the target '{args.application}' or run from your project directory.\n",
+            )
     uvicorn.run(args.application, host=args.host, port=args.port, reload=not args.no_reload)
     return 0
 
