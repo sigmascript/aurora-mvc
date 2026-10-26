@@ -1,6 +1,6 @@
 # Database and migration safety
 
-Aurora MVC provides SQLAlchemy-based database interfaces and CLI tools for configuring named databases, registering models, inspecting existing SQLite schemas, and reviewing limited schema migrations. Database operations require more care than the minimal web starter.
+Aurora MVC provides SQLAlchemy-based database interfaces and CLI tools for configuring named databases, registering models, inspecting existing SQLite schemas, and reviewing limited schema migrations. Unreleased Alpha 3 adds separately gated MySQL CREATE TABLE and nullable ADD COLUMN execution. Database operations require more care than the minimal web starter.
 
 ## Inspect commands first
 
@@ -25,7 +25,9 @@ The `db` command groups are:
 | `sync` (alias `s`) | Preview changes, or enter the separate approved apply workflow |
 | `migration create` | Save an advisory JSON review file; does not execute SQL |
 | `migration show` | Verify and display a saved review |
-| `migration apply` | **Write to the database** using an approved review and backup |
+| `migration apply` | **Write to the SQLite database** using an approved review and backup |
+| `mysql-create-table` | Alpha 3: review or explicitly apply one guarded MySQL CREATE TABLE |
+| `mysql-add-column` | Alpha 3: review or explicitly apply one guarded MySQL nullable ADD COLUMN |
 
 Read-only inspection commands are not a substitute for a backup before any subsequent write operation.
 
@@ -76,7 +78,7 @@ aurora db inspect --config /path/to/aurora_databases.json --database analytics
 
 The MySQL initializer accepts only an empty schema or a schema whose table *names* match the selected models. Repeating initialization never compares columns, indexes, or constraints and does not prove schema compatibility. MySQL `str` columns require an explicit `length` (for example, `column(str, length=255)`). MySQL DDL generally causes implicit commits: a failure partway through initialization may leave some tables created. Inspect the schema and resolve any partial state manually; do not blindly retry.
 
-`db check` reports table count; `db inspect` reports read-only table metadata (column, index, and foreign-key counts). **Neither verifies schema compatibility.** MySQL `db plan` is a read-only advisory report. MySQL `db status`, migration history, and migration apply are not supported in this alpha; the SQLite migration workflow must not be used against a MySQL alias.
+`db check` reports table count; `db inspect` reports read-only table metadata (column, index, and foreign-key counts). **Neither verifies schema compatibility.** MySQL `db plan` is a read-only advisory report. The SQLite `db migration apply` workflow must not be used against a MySQL alias. Alpha 3 has separate MySQL migration-history recording and guarded CLI operations described below; do not infer that SQLite and MySQL share the same migration workflow.
 
 ## Safe, read-only workflow
 
@@ -119,8 +121,7 @@ The command reports `MATCH` (exit 0), `DRIFT` (exit 2), or `UNVERIFIED`
 (exit 3). `MATCH` applies **only to the selected structural checks**, not to
 all MySQL schema properties. Server defaults, collations, check constraints,
 foreign-key actions, and unselected tables are not fully verified. A difference
-takes precedence over an unverified property. MySQL migrations remain
-unsupported in this release. Existing `db validate` remains SQLite-oriented. `db plan` supports a separate MySQL read-only advisory mode; neither command enables MySQL migrations.
+takes precedence over an unverified property. The Alpha 2 `compat` command is still read-only; Alpha 3 provides separate, explicitly gated migration commands. Existing `db validate` remains SQLite-oriented. `db plan` supports a separate MySQL read-only advisory mode; neither command enables MySQL migrations.
 
 
 ### MySQL advisory schema planning — Batch 3A
@@ -143,8 +144,7 @@ or migration file is generated. The command does not modify the schema.
 Without `--check`, a successfully generated advisory report exits 0 even
 when differences exist. `MATCH` covers selected models and supported checks
 only; unselected tables and unsupported MySQL features are outside scope.
-SQLite `db plan` behavior is unchanged. MySQL execution and approval design
-are deferred to subsequent safety review.
+SQLite `db plan` behavior is unchanged. The original advisory planner does not authorize execution; Alpha 3 uses separate guarded commands.
 
 ### MySQL migration policy review (Phase 4B, Batch 3B)
 
@@ -168,7 +168,7 @@ A candidate is **not** approval to execute. All policy reports have
 Exit status is 0 for MATCH, 2 for DRIFT, and 3 for UNVERIFIED, as with the
 read-only MySQL planning check. MySQL DDL may commit implicitly; a later
 execution design must address partial failures and concurrent schema changes.
-MySQL migrations remain unavailable in this batch.
+This describes the earlier policy-review batch, not the separate Alpha 3 execution commands.
 
 ### MySQL execution readiness (Phase 4B, Batch 3C.1)
 
@@ -183,3 +183,54 @@ operation model, and separate approval protocol are still required before any
 future MySQL migration executor can be enabled. No SQL is generated or executed.
 Exit codes for schema status: MATCH=0, DRIFT=2, UNVERIFIED=3; invalid configuration
 is an error. These codes are for CI reporting, **not** permission to execute DDL.
+
+## MySQL Alpha 3: guarded CREATE TABLE and ADD COLUMN (development only)
+
+**Availability:** This section describes unreleased `1.0.0a3` development-checkout functionality, not published `1.0.0a2`. The MySQL migration workflow is intentionally narrower than the SQLite workflow. It supports a single new table or a single **nullable** column at a time; it is not a general schema migration engine. No automatic destructive changes, column renames, arbitrary ALTER TABLE operations, or data transformations are authorized.
+
+### Prerequisites and safety boundaries
+
+- Install the optional MySQL dependency (`python -m pip install -e ".[mysql,dev]"` in a development checkout).
+- Configure a dedicated MySQL alias in `aurora_databases.json` (or an explicit `--config` file) and identify the **exact schema**. Keep URLs and passwords out of Git, logs, and shared archives.
+- Use a disposable database for initial testing. Back up any valuable schema independently and obtain explicit authorization before a write.
+- The relevant MySQL migration-history storage must already be initialized through the approved setup procedure. A missing, conflicting, or unverifiable history state must **block** execution; these commands do not silently initialize or repair history.
+- The default command mode is review only. A separate execution gate, approval digests, and confirmation are required to attempt DDL.
+- MySQL DDL can commit implicitly. DDL and history recording are **not atomic**; a failed history commit or verification can leave an uncertain outcome.
+
+### Phase 1 — Read-only review
+
+From the project root, with an importable model and configured alias, inspect help and run **one** review:
+
+```bash
+aurora db mysql-create-table --help
+aurora db mysql-add-column --help
+
+aurora db mysql-create-table --config aurora_databases.json --database MY_ALIAS --schema MY_SCHEMA --table MY_TABLE --model package.models:MyModel
+
+aurora db mysql-add-column --config aurora_databases.json --database MY_ALIAS --schema MY_SCHEMA --table MY_TABLE --model package.models:MyModel --column MY_NULLABLE_COLUMN
+```
+
+The capitalized names are placeholders. For CREATE TABLE, the target table must be absent and the model/table must match the reviewed operation. For ADD COLUMN, the table must exist, the selected column must be absent, and the model must describe a supported nullable addition. Review the reported schema, exact SQL, SQL SHA-256, operation-specific review SHA-256, and history readiness. A read-only policy or readiness report alone is **not** an approval token.
+
+### Phase 2 — Explicitly approved apply
+
+Only an operator who has independently checked the fresh review, target alias/schema, backup, and migration-history state should authorize an apply. The execution interface requires all of the following **together**:
+
+- Environment gate: `AURORA_MYSQL_MIGRATIONS=1`.
+- `--apply` and `--confirm APPLY`.
+- `--approve-review` containing the **exact review SHA-256** from the selected operation's review (for ADD COLUMN, the history-review SHA-256).
+- `--approve-sql` containing the **exact SQL SHA-256** from that review.
+
+The operator must supply the reviewed values; this guide intentionally does **not** provide a ready-to-run write command or sample approval digests. The executor rechecks the operation, history, and schema while holding a MySQL advisory lock. A stale review, existing/conflicting migration, failed lock acquisition, or unexpected schema state must block execution. Approval is specific to the exact target and proposal; it is not blanket authorization for future migrations.
+
+After CREATE TABLE, the executor verifies the table and persistent migration history. After ADD COLUMN, the hardened executor verifies the resulting column definition (including supported type and nullability) and committed history. The CLI should report success only when the required verification is confirmed.
+
+### Uncertain outcomes and manual reconciliation
+
+**Never automatically retry** an apply after a connection failure, failed commit, failed post-DDL verification, lock-release error, or other uncertain result. MySQL may have committed the DDL even when the CLI reports failure. Do not interpret an exception as proof of rollback, and do not assume that table/column existence alone proves a complete successful migration.
+
+Stop writes to the selected schema. Using a separate read-only connection and an authorized operator, inspect the exact schema/table/column definition and both relevant history records. Compare them with the approved SQL and review digests. If schema and history disagree, treat the outcome as unresolved and escalate for manual reconciliation. Do **not** manually insert history rows or rerun DDL based solely on this guide. Retain the approval/review evidence and a sanitized incident log; never include credentials.
+
+### Existing MySQL read-only tools remain separate
+
+`aurora db compat`, `policy`, `readiness`, and advisory `plan` remain read-only. Their earlier Alpha 2 / pre-execution descriptions above document the history of the design and **do not** override the Alpha 3 execution workflow. SQLite `sync` and `migration apply` remain separate backend-specific workflows.

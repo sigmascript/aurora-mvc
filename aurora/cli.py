@@ -876,7 +876,7 @@ def main(argv: list[str] | None = None) -> int:
             registered.add_argument("--database", default="default", help="Database alias (default: default)")
             registered.add_argument("--models-config", default="aurora_models.json", help="Model manifest JSON path")
     # Read-only named database commands; no model imports or schema writes.
-    db_group = sub.add_parser("db", help="Inspect databases and safely migrate SQLite schemas")
+    db_group = sub.add_parser("db", help="Inspect databases and safely migrate SQLite schemas; guarded MySQL migrations")
     db_group.description = "Database commands: init creates selected model tables once; inspection and migration commands are separate."
     db_group.epilog = "First setup: aurora db init --config aurora_databases.json --models-config aurora_models.json"
     db_actions = db_group.add_subparsers(dest="action", required=True)
@@ -920,6 +920,31 @@ def main(argv: list[str] | None = None) -> int:
     init.add_argument("--database", default="default", help="Configured database alias")
     init.add_argument("--model", action="append", default=[], metavar="MODULE:CLASS", help="Explicit Aurora model; repeat as needed")
     init.add_argument("--models-config", default="aurora_models.json", help="Explicit model manifest JSON path")
+    mysql_table = db_actions.add_parser(
+        'mysql-create-table', help='Review or explicitly apply one guarded MySQL CREATE TABLE'
+    )
+    mysql_table.add_argument('--config', default='aurora_databases.json')
+    mysql_table.add_argument('--database', required=True, help='Explicit configured MySQL alias')
+    mysql_table.add_argument('--schema', required=True, help='Exact selected MySQL schema')
+    mysql_table.add_argument('--table', required=True)
+    mysql_table.add_argument('--model', required=True, metavar='MODULE:CLASS')
+    mysql_table.add_argument('--apply', action='store_true', help='Execute approved DDL (writes database)')
+    mysql_table.add_argument('--approve-review', help='Exact reviewed SHA-256')
+    mysql_table.add_argument('--approve-sql', help='Exact reviewed SQL SHA-256')
+    mysql_table.add_argument('--confirm', help='Must be APPLY when --apply is used')
+    mysql_column = db_actions.add_parser(
+        'mysql-add-column', help='Review or explicitly apply one guarded MySQL nullable ADD COLUMN'
+    )
+    mysql_column.add_argument('--config', default='aurora_databases.json')
+    mysql_column.add_argument('--database', required=True, help='Explicit configured MySQL alias')
+    mysql_column.add_argument('--schema', required=True, help='Exact selected MySQL schema')
+    mysql_column.add_argument('--table', required=True)
+    mysql_column.add_argument('--model', required=True, metavar='MODULE:CLASS')
+    mysql_column.add_argument('--column', required=True)
+    mysql_column.add_argument('--apply', action='store_true', help='Execute approved DDL (writes database)')
+    mysql_column.add_argument('--approve-review', help='Exact reviewed history SHA-256')
+    mysql_column.add_argument('--approve-sql', help='Exact reviewed SQL SHA-256')
+    mysql_column.add_argument('--confirm', help='Must be APPLY when --apply is used')
     sync = db_actions.add_parser('sync', aliases=['s'], help='Preview or safely apply SQLite CREATE TABLE / nullable ADD COLUMN migrations')
     sync.add_argument('--config', default='aurora_databases.json', help='Database configuration JSON path')
     sync.add_argument('--database', default='default', help='Configured database alias (default: default)')
@@ -961,11 +986,44 @@ def main(argv: list[str] | None = None) -> int:
     # Restrict this to commands that load project models; help and read-only
     # database listing/inspection do not need to change import resolution.
     if args.command == "db" and args.action in (
-        "init", "plan", "validate", "status", "sync", "s", "migration", "compat", "policy"
+        "init", "plan", "validate", "status", "sync", "s", "migration", "compat", "policy", "mysql-add-column", "mysql-create-table"
     ):
         project_dir = str(Path.cwd().resolve())
         if project_dir not in sys.path:
             sys.path.insert(0, project_dir)
+    if args.command == 'db' and args.action == 'mysql-create-table':
+        from aurora.database.cli_mysql_create_table import run_mysql_create_table
+        try:
+            report = run_mysql_create_table(
+                config_path=args.config, alias=args.database, schema=args.schema,
+                table=args.table, model=args.model, apply=args.apply,
+                approved_review=args.approve_review, approved_sql=args.approve_sql,
+                confirmation=args.confirm,
+            )
+        except Exception as exc:
+            if isinstance(exc, (ValueError, PermissionError, FileNotFoundError)):
+                parser.exit(1, f'aurora: {exc}\n')
+            parser.exit(1, 'aurora: MySQL migration refused or outcome uncertain; '
+                           'inspect schema and history manually before retrying.\n')
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
+    if args.command == 'db' and args.action == 'mysql-add-column':
+        from aurora.database.cli_mysql_add_column import run_mysql_add_column
+        try:
+            report = run_mysql_add_column(
+                config_path=args.config, alias=args.database, schema=args.schema,
+                table=args.table, model=args.model, column=args.column,
+                apply=args.apply, approved_review=args.approve_review,
+                approved_sql=args.approve_sql, confirmation=args.confirm,
+            )
+        except Exception as exc:
+            # Do not expose connection URLs, credentials, or DBAPI exception details.
+            if isinstance(exc, (ValueError, PermissionError, FileNotFoundError)):
+                parser.exit(1, f'aurora: {exc}\n')
+            parser.exit(1, 'aurora: MySQL migration refused or outcome uncertain; '
+                           'inspect the selected schema and history manually before retrying.\n')
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
     if args.command == "db" and args.action == "init":
         if os.environ.get("AURORA_ENV", "development").lower() == "production":
             parser.exit(1, "aurora: Refusing to initialize a database in production environment.\n")
@@ -1001,7 +1059,6 @@ def main(argv: list[str] | None = None) -> int:
             model_refs = select_model_refs(explicit=args.model, database=args.database, manifest=args.models_config)
             if args.format == 'json':
                 from aurora.database.cli_reports import report_for_refs
-                import json
                 report = report_for_refs(config_path=args.config, alias=args.database, model_refs=model_refs)
                 print(__import__("json").dumps(report, indent=2, sort_keys=True))
                 return 2 if args.check and report['schema_status'] == 'DRIFT' else 0
@@ -1165,7 +1222,6 @@ def main(argv: list[str] | None = None) -> int:
                 if args.action == "plan":
                     if args.format == 'json':
                         from aurora.database.cli_reports import report_for_plan
-                        import json
                         report = report_for_plan(args.database, selected_refs, plan, models)
                         print(__import__("json").dumps(report, indent=2, sort_keys=True))
                         return 2 if args.check and report['schema_status'] == 'DRIFT' else 0

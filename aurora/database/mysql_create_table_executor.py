@@ -1,8 +1,8 @@
-"""Explicit, restricted MySQL CREATE TABLE executor (not wired into CLI).
+"""Explicit, restricted MySQL CREATE TABLE executor used by the Alpha 3 CLI.
 
 MySQL DDL may commit implicitly. A failed attempt is never auto-retried.
 The caller must independently approve the exact review digest and invoke this
-API explicitly. This module does not manage migration-history tables.
+API explicitly. The history-aware path requires an explicitly initialized history table.
 """
 from __future__ import annotations
 
@@ -18,6 +18,8 @@ from sqlalchemy.schema import CreateTable
 
 from aurora.database.model import Model
 from aurora.database.mysql_execution_approval import MySQLApprovalRequest
+from aurora.database.mysql_history_execution_guard import require_clean_mysql_history_before_ddl
+from aurora.database.mysql_migration_history import append_verified_mysql_history, read_mysql_history
 from aurora.database.mysql_migration_contract import MySQLOperationContract
 from aurora.database.mysql_migration_preflight import MySQLSchemaSnapshot, validate_preflight_freshness
 
@@ -72,7 +74,7 @@ def prepare_mysql_create_table(operation: MySQLOperationContract):
 def execute_mysql_create_table(config, *, request: MySQLApprovalRequest,
                                reviewed: MySQLSchemaSnapshot, approved_review_sha256: str,
                                approved_sql_sha256: str, confirm: bool = False):
-    """Execute one approved table creation; never write history or retry DDL.
+    """Execute one approved table creation with verified history; never retry DDL.
 
     Requires operator approval obtained out-of-band. A digest is a comparison
     value, not a credential. Schema state is rechecked under a cooperative lock.
@@ -95,42 +97,83 @@ def execute_mysql_create_table(config, *, request: MySQLApprovalRequest,
     if url.get_backend_name() != "mysql" or url.get_driver_name() != "pymysql":
         raise ValueError("Executor requires mysql+pymysql")
 
-    lock_digest = hashlib.sha256((reviewed.schema_name + "\0" + reviewed.database_alias).encode()).hexdigest()[:48]
+    lock_digest = hashlib.sha256((reviewed.schema_name + "\0" + reviewed.database_alias).encode()).hexdigest()[:47]
     lock_name = "aurora:migration:" + lock_digest
     engine = create_engine(url)
     ddl_attempted = False
+    history_committed = False
+    lock_released = False
     try:
         with engine.connect() as connection:
-            schema = connection.execute(text("SELECT DATABASE()" )).scalar_one()
+            schema = connection.execute(text("SELECT DATABASE()")).scalar_one()
             if schema != reviewed.schema_name:
                 raise RuntimeError("Selected MySQL schema differs")
             acquired = connection.execute(text("SELECT GET_LOCK(:name, 0)"), {"name": lock_name}).scalar_one()
             if acquired != 1:
                 raise RuntimeError("Unable to acquire migration advisory lock")
             try:
-                actual = connection.execute(text("SELECT DATABASE()" )).scalar_one()
+                actual = connection.execute(text("SELECT DATABASE()")).scalar_one()
                 existing = tuple(sorted(inspect(connection).get_table_names()))
                 current = MySQLSchemaSnapshot(operation.database_alias, actual, reviewed.selected_tables, existing)
-                validate_preflight_freshness(reviewed=reviewed, current=current,
-                                             candidate=operation, advisory_lock_held=True)
-                # The last check is immediately before DDL; unrelated clients can
-                # still race. A duplicate-table error must never be retried.
+                validate_preflight_freshness(
+                    reviewed=reviewed, current=current, candidate=operation, advisory_lock_held=True
+                )
+                require_clean_mysql_history_before_ddl(
+                    connection, request=request, sql_sha256=digest, advisory_lock_held=True
+                )
+                # An explicit history table must exist before DDL. No implicit
+                # initialization, retry, or fallback to untracked execution.
                 ddl_attempted = True
                 connection.exec_driver_sql(sql)
-                return MySQLCreateTableResult("DDL_APPLIED_HISTORY_UNCONFIRMED", operation.table_name,
-                                              "DDL returned successfully; inspect schema and record history separately")
+                # Verify the actual table before claiming a successful operation.
+                if operation.table_name not in inspect(connection).get_table_names():
+                    raise RuntimeError("Created table absent after acknowledged DDL")
+                append_verified_mysql_history(
+                    connection, request=request, sql_sha256=digest,
+                    schema_verified=True, confirm=True,
+                )
+                # MySQL DDL and this commit are not atomic. Commit failures are
+                # uncertain outcomes, not rollback evidence.
+                connection.commit()
+                # Verify persisted evidence, not merely an acknowledged commit.
+                # Re-reading through the connection is required before reporting
+                # a completed migration; a failed read is an uncertain outcome.
+                record = read_mysql_history(connection, request.review_sha256())
+                if (record is None or record.review_sha256 != request.review_sha256()
+                        or record.operation_sha256 != operation.identity_sha256()
+                        or record.sql_sha256 != digest
+                        or record.schema_name != operation.schema_name
+                        or record.table_name != operation.table_name):
+                    raise RuntimeError("Persisted MySQL migration history does not match approval")
+                history_committed = True
             finally:
                 try:
-                    released = connection.execute(text("SELECT RELEASE_LOCK(:name)"), {"name": lock_name}).scalar_one()
-                    if released != 1:
-                        raise RuntimeError("Advisory lock release unconfirmed")
+                    released = connection.execute(
+                        text("SELECT RELEASE_LOCK(:name)"), {"name": lock_name}
+                    ).scalar_one()
+                    lock_released = released == 1
                 except Exception:
+                    lock_released = False
+                if not lock_released:
                     if ddl_attempted:
-                        raise RuntimeError("OUTCOME_UNKNOWN: DDL may have applied; inspect manually") from None
-                    raise
-    except (SQLAlchemyError, OSError) as exc:
+                        raise RuntimeError(
+                            "OUTCOME_UNKNOWN: advisory lock release unconfirmed; "
+                            "inspect schema and history manually"
+                        )
+                    raise RuntimeError("Advisory lock release unconfirmed; no DDL attempted")
+        if not history_committed:
+            raise RuntimeError("OUTCOME_UNKNOWN: history commit not confirmed")
+        return MySQLCreateTableResult(
+            "APPLIED_HISTORY_RECORDED", operation.table_name,
+            "DDL verified and migration history committed; advisory lock released",
+        )
+    except Exception as exc:
         if ddl_attempted:
-            raise RuntimeError("OUTCOME_UNKNOWN: DDL may have applied; inspect manually") from exc
-        raise RuntimeError("PRECHECK_FAILED: no DDL attempted") from exc
+            raise RuntimeError(
+                "OUTCOME_UNKNOWN: DDL may have applied; inspect schema and history manually"
+            ) from exc
+        if isinstance(exc, (SQLAlchemyError, OSError)):
+            raise RuntimeError("PRECHECK_FAILED: no DDL attempted") from exc
+        raise
     finally:
         engine.dispose()
