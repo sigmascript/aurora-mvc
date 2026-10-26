@@ -51,11 +51,15 @@ _MVC_LAYOUT = '''<!DOCTYPE html>
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Aurora MVC starter application">
     <title>{{% block title %}}Aurora MVC{{% endblock %}}</title>
     <link rel="stylesheet" href="/statics/css/site.css">
 </head>
 <body>
-    <main>
+    <header class="site-header">
+        <a class="brand" href="/">Aurora MVC</a>
+    </header>
+    <main id="main-content">
         {{% block content %}}{{% endblock %}}
     </main>
 </body>
@@ -68,9 +72,13 @@ _MVC_VIEW = '''{{% extends "layout.html" %}}
 {{% block title %}}{{{{ title }}}}{{% endblock %}}
 
 {{% block content %}}
-    <h1>{{{{ title }}}}</h1>
-    <p>Your Aurora MVC project is ready.</p>
-    {{{{ action_link("Aurora documentation", "https://auroramvc.com") }}}}
+    <section class="welcome" aria-labelledby="welcome-title">
+        <h1 id="welcome-title">{{{{ title }}}}</h1>
+        <p>Your Aurora MVC application is ready. Edit
+           <code>controllers/home.py</code> and <code>views/home.html</code>
+           to build your first page.</p>
+        {{{{ action_link("Aurora documentation", "https://auroramvc.com") }}}}
+    </section>
 {{% endblock %}}
 '''
 
@@ -122,11 +130,15 @@ _MODULAR_LAYOUT = '''<!DOCTYPE html>
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Aurora modular MVC starter application">
     <title>{{% block title %}}{{{{ title }}}}{{% endblock %}}</title>
     <link rel="stylesheet" href="/statics/css/site.css">
 </head>
 <body>
-    {{% include "navigation.html" %}}
+    <header class="site-header">
+        <a class="brand" href="/">Aurora MVC</a>
+        {{% include "navigation.html" %}}
+    </header>
     <main>
         {{% block content %}}{{% endblock %}}
     </main>
@@ -138,7 +150,9 @@ _MODULAR_HOME_VIEW = '''{{% extends "layout.html" %}}
 
 {{% block content %}}
     <h1>{{{{ title }}}}</h1>
-    <p>Your modular Aurora project is ready.</p>
+    <p>Your modular Aurora project is ready. Edit
+       <code>apps/home/controllers/home.py</code> and
+       <code>apps/home/views/index.html</code> to get started.</p>
 {{% endblock %}}
 '''
 
@@ -147,7 +161,7 @@ _MODULAR_BLOG_VIEW = '''{{% extends "layout.html" %}}
 
 {{% block content %}}
     <h1>{{{{ title }}}}</h1>
-    <p>Your blog app is ready.</p>
+    <p>Your blog app is ready. Each app has its own controllers and views.</p>
     {{{{ action_link("Back to home", "/") }}}}
 {{% endblock %}}
 '''
@@ -171,6 +185,36 @@ _MODULAR_COMPONENTS = '''{% macro action_link(label, href) -%}
 '''
 
 
+_MVC_CSS = '''/* Aurora MVC starter: no external CSS dependencies. */
+:root { color-scheme: light; font-family: system-ui, sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; color: #17212b; background: #f7f9fc; line-height: 1.6; }
+.site-header { padding: 1rem max(1rem, calc((100% - 56rem) / 2)); background: #fff; border-bottom: 1px solid #dce3eb; }
+.brand { color: #173e73; font-weight: 700; text-decoration: none; }
+main { max-width: 56rem; margin: 3rem auto; padding: 0 1rem; }
+.welcome { padding: 2rem; background: #fff; border: 1px solid #dce3eb; border-radius: .75rem; }
+h1 { line-height: 1.2; }
+.action-link { display: inline-block; padding: .6rem 1rem; background: #173e73; color: #fff; border-radius: .4rem; text-decoration: none; }
+a:focus-visible { outline: 3px solid #ffab40; outline-offset: 3px; }
+@media (max-width: 40rem) { main { margin: 1.5rem auto; } .welcome { padding: 1.25rem; } }
+'''
+
+_MODULAR_CSS = '''/* Aurora modular starter: no external CSS dependencies. */
+:root { color-scheme: light; font-family: system-ui, sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; color: #17212b; background: #f7f9fc; line-height: 1.6; }
+.site-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem max(1rem, calc((100% - 56rem) / 2)); background: #fff; border-bottom: 1px solid #dce3eb; }
+.brand { color: #173e73; font-weight: 700; text-decoration: none; }
+nav { display: flex; flex-wrap: wrap; gap: 1rem; }
+nav a { color: #173e73; text-decoration: none; }
+main { max-width: 56rem; margin: 3rem auto; padding: 2rem; background: #fff; border: 1px solid #dce3eb; border-radius: .75rem; }
+h1 { line-height: 1.2; }
+.action-link { display: inline-block; padding: .6rem 1rem; background: #173e73; color: #fff; border-radius: .4rem; text-decoration: none; }
+a:focus-visible { outline: 3px solid #ffab40; outline-offset: 3px; }
+@media (max-width: 40rem) { main { margin: 1.5rem 1rem; padding: 1.25rem; } }
+'''
+
+
 def create_project(name: str, *, directory: Path | None = None, mvc: bool = False, modular: bool = False) -> Path:
     """Create a small importable Aurora project; never overwrite files."""
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) or keyword.iskeyword(name) or name in {"aurora", "tests"}:
@@ -189,11 +233,11 @@ def create_project(name: str, *, directory: Path | None = None, mvc: bool = Fals
             for relative in (
                 "apps", "apps/home", "apps/home/controllers", "apps/home/views",
                 "apps/blog", "apps/blog/controllers",
-                "apps/blog/views", "views", "statics",
+                "apps/blog/views", "views", "statics", "models",
             ):
                 folder = root / relative
                 folder.mkdir()
-                if relative in {"apps", "apps/home", "apps/home/controllers", "apps/blog", "apps/blog/controllers"}:
+                if relative in {"apps", "apps/home", "apps/home/controllers", "apps/blog", "apps/blog/controllers", "models"}:
                     (folder / "__init__.py").write_text("", encoding="utf-8")
             (root / "apps/home/controllers/home.py").write_text(
                 _MODULAR_HOME.format(name=name), encoding="utf-8"
@@ -207,6 +251,8 @@ def create_project(name: str, *, directory: Path | None = None, mvc: bool = Fals
             (root / "apps/home/views/index.html").write_text(_MODULAR_HOME_VIEW.format(), encoding="utf-8")
             (root / "apps/blog/views/index.html").write_text(_MODULAR_BLOG_VIEW.format(), encoding="utf-8")
         elif mvc:
+            (root / "models").mkdir()
+            (root / "models" / "__init__.py").write_text("", encoding="utf-8")
             (root / "controllers").mkdir()
             (root / "controllers" / "__init__.py").write_text("", encoding="utf-8")
             (root / "controllers" / "home.py").write_text(
@@ -222,10 +268,7 @@ def create_project(name: str, *, directory: Path | None = None, mvc: bool = Fals
             css = root / "statics" / "css"
             css.mkdir()
             (css / "site.css").write_text(
-                "/* Public Aurora starter styles. Edit or replace freely. */\n"
-                "body { font-family: system-ui, sans-serif; margin: 2rem auto; "
-                "max-width: 56rem; padding: 0 1rem; line-height: 1.6; }\n"
-                "nav a { margin-right: 1rem; }\n",
+                (_MVC_CSS if not modular else _MODULAR_CSS),
                 encoding="utf-8",
             )
         # Explicit, inert database starter files. Never open or create a database
@@ -244,6 +287,7 @@ def create_project(name: str, *, directory: Path | None = None, mvc: bool = Fals
             f"`aurora run {name}.app:app`\n\n"
             "## Database setup\n\n"
             "- `aurora_databases.json` configures the `default` SQLite alias.\n"
+            "- MVC and modular starters include an empty `models/` package; no model is registered automatically.\n"
             "- `aurora_models.json` intentionally starts empty. Register trusted "
             "`MODULE:CLASS` model references under `databases.default` before using "
             "model-aware migration commands.\n"
@@ -311,6 +355,9 @@ def add_app(name: str, *, directory: Path | None = None) -> Path:
             f'        return View("{name}/index", title="{name.replace("_", " ").title()}")\n',
             encoding="utf-8",
         )
+        models = staging / "models"
+        models.mkdir()
+        (models / "__init__.py").write_text("", encoding="utf-8")
         view_dir = staging / "views"
         view_dir.mkdir()
         (view_dir / "index.html").write_text(
