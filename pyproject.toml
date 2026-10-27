@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aurora-mvc"
-version = "1.0.0a2"
+version = "1.0.0a3"
 description = "A simple, fast, and modern Python web framework."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -27,6 +27,7 @@ mysql = [
 ]
 dev = [
     "uvicorn>=0.30",
+    "pytest>=8.0",
     "tomli>=2.0; python_version < '3.11'",
 ]
 

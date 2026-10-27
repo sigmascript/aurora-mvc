@@ -40,6 +40,14 @@ def sync_database(
             raise ValueError(f'Not an Aurora model: {ref}')
         models.append(cls)
     config, base = load_cli_database_config(config_path)
+    # The SQLite sync workflow uses SQLite-only planning and backup semantics.
+    # Never interpret a MySQL alias as an executable SQLite migration.
+    backend = config.resolve(alias).get_backend_name()
+    if backend != "sqlite":
+        raise ValueError(
+            "aurora db sync supports SQLite execution only; "
+            "MySQL migrations require the separate guarded approval workflow"
+        )
     plan = plan_database(config, alias, models, base_dir=base)
     digest = plan_digest(plan)
     if plan.is_empty:

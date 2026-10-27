@@ -18,7 +18,7 @@ aurora -v
 python -m aurora --version
 ```
 
-These commands report the version installed in the active environment. The published Alpha 1 release is `1.0.0a1`; newer source-checkout functionality may not yet be released. The CLI reads installed distribution metadata when available and otherwise falls back to Aurora’s package version.
+These commands report the version installed in the active environment. The published Alpha 2 release is `1.0.0a2`; Alpha 3 (`1.0.0a3`) remains unreleased and is available only in a development checkout or locally built distribution. The CLI reads installed distribution metadata when available and otherwise falls back to Aurora’s package version.
 
 ## Commands at a glance
 
@@ -29,7 +29,7 @@ These commands report the version installed in the active environment. The publi
 | `controller` | Add, list, or inspect controllers |
 | `view` | Add, list, or inspect views |
 | `model` | Add, list, inspect, or register model references |
-| `db` | Initialize empty SQLite databases, inspect schemas, preview changes, and manage reviewed migrations |
+| `db` | Initialize empty databases, inspect SQLite/MySQL schemas, and manage backend-specific guarded migrations |
 | `run` | Start an ASGI application with Uvicorn |
 
 Use `aurora GROUP --help` and, where applicable, `aurora GROUP ACTION --help` for the full argument list.
@@ -81,7 +81,7 @@ These commands manage explicit model references in the project manifest; they do
 
 ## Database commands and safety
 
-The `db` group includes `init`, `list`, `show`, `check`, `inspect`, `plan`, `validate`, `history`, `status`, `sync` (alias `s`), and `migration` subcommands. Some are read-only; others can write schema changes when explicitly approved.
+The `db` group includes `init`, `list`, `show`, `check`, `inspect`, `plan`, `validate`, `history`, `status`, `compat`, `policy`, `readiness`, `mysql-create-table`, `mysql-add-column`, `sync` (alias `s`), and `migration` subcommands. Some are read-only; others can write schema changes when explicitly approved.
 
 For example, with a configured project database:
 
@@ -96,6 +96,21 @@ aurora db sync --dry-run --model myapp.models:Article
 
 **Do not use database apply or sync-approval commands against valuable databases without reviewing the generated plan and backup requirements.** See the [database guide](database.md) for the safety model. CLI validation can refuse operations in production environments.
 
+## Alpha 3 guarded MySQL commands (unreleased)
+
+Use `aurora db mysql-create-table --help` and `aurora db mysql-add-column --help` to inspect the exact arguments. Both commands require `--database`, `--schema`, `--table`, and `--model MODULE:CLASS`; `mysql-add-column` also requires `--column`. `--config` defaults to `aurora_databases.json`.
+
+The default invocation is a **read-only review**, for example:
+
+```bash
+aurora db mysql-create-table --database MY_ALIAS --schema MY_SCHEMA --table MY_TABLE --model package.models:MyModel
+aurora db mysql-add-column --database MY_ALIAS --schema MY_SCHEMA --table MY_TABLE --model package.models:MyModel --column MY_NULLABLE_COLUMN
+```
+
+The examples use placeholders and should not be executed unchanged. Only after independent review, an approved disposable target, and explicit operator authorization may a write be attempted. An apply invocation requires `AURORA_MYSQL_MIGRATIONS=1`, `--apply`, `--approve-review` (the exact operation-specific review SHA-256), `--approve-sql` (the exact SQL SHA-256), and `--confirm APPLY`. The `mysql-add-column` review hash is the **history review** digest, not necessarily the CREATE TABLE review digest. The hashes must come from the fresh review of the exact target and must never be guessed or reused.
+
+These commands support **one** guarded CREATE TABLE or **one nullable** ADD COLUMN operation per approval. They do not offer arbitrary schema changes, automatic history repair, or automatic retry. See [database safety and recovery](database.md#mysql-alpha-3-guarded-create-table-and-add-column-development-only).
+
 ## Check the actual syntax
 
 The CLI is under active alpha development. For exact arguments, especially for `db migration`, run:
@@ -104,4 +119,6 @@ The CLI is under active alpha development. For exact arguments, especially for `
 aurora db --help
 aurora db migration --help
 aurora db sync --help
+aurora db mysql-create-table --help
+aurora db mysql-add-column --help
 ```

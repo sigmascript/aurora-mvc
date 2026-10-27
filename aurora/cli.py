@@ -51,11 +51,15 @@ _MVC_LAYOUT = '''<!DOCTYPE html>
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Aurora MVC starter application">
     <title>{{% block title %}}Aurora MVC{{% endblock %}}</title>
     <link rel="stylesheet" href="/statics/css/site.css">
 </head>
 <body>
-    <main>
+    <header class="site-header">
+        <a class="brand" href="/">Aurora MVC</a>
+    </header>
+    <main id="main-content">
         {{% block content %}}{{% endblock %}}
     </main>
 </body>
@@ -68,9 +72,13 @@ _MVC_VIEW = '''{{% extends "layout.html" %}}
 {{% block title %}}{{{{ title }}}}{{% endblock %}}
 
 {{% block content %}}
-    <h1>{{{{ title }}}}</h1>
-    <p>Your Aurora MVC project is ready.</p>
-    {{{{ action_link("Aurora documentation", "https://auroramvc.com") }}}}
+    <section class="welcome" aria-labelledby="welcome-title">
+        <h1 id="welcome-title">{{{{ title }}}}</h1>
+        <p>Your Aurora MVC application is ready. Edit
+           <code>controllers/home.py</code> and <code>views/home.html</code>
+           to build your first page.</p>
+        {{{{ action_link("Aurora documentation", "https://auroramvc.com") }}}}
+    </section>
 {{% endblock %}}
 '''
 
@@ -122,11 +130,15 @@ _MODULAR_LAYOUT = '''<!DOCTYPE html>
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Aurora modular MVC starter application">
     <title>{{% block title %}}{{{{ title }}}}{{% endblock %}}</title>
     <link rel="stylesheet" href="/statics/css/site.css">
 </head>
 <body>
-    {{% include "navigation.html" %}}
+    <header class="site-header">
+        <a class="brand" href="/">Aurora MVC</a>
+        {{% include "navigation.html" %}}
+    </header>
     <main>
         {{% block content %}}{{% endblock %}}
     </main>
@@ -138,7 +150,9 @@ _MODULAR_HOME_VIEW = '''{{% extends "layout.html" %}}
 
 {{% block content %}}
     <h1>{{{{ title }}}}</h1>
-    <p>Your modular Aurora project is ready.</p>
+    <p>Your modular Aurora project is ready. Edit
+       <code>apps/home/controllers/home.py</code> and
+       <code>apps/home/views/index.html</code> to get started.</p>
 {{% endblock %}}
 '''
 
@@ -147,7 +161,7 @@ _MODULAR_BLOG_VIEW = '''{{% extends "layout.html" %}}
 
 {{% block content %}}
     <h1>{{{{ title }}}}</h1>
-    <p>Your blog app is ready.</p>
+    <p>Your blog app is ready. Each app has its own controllers and views.</p>
     {{{{ action_link("Back to home", "/") }}}}
 {{% endblock %}}
 '''
@@ -171,6 +185,36 @@ _MODULAR_COMPONENTS = '''{% macro action_link(label, href) -%}
 '''
 
 
+_MVC_CSS = '''/* Aurora MVC starter: no external CSS dependencies. */
+:root { color-scheme: light; font-family: system-ui, sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; color: #17212b; background: #f7f9fc; line-height: 1.6; }
+.site-header { padding: 1rem max(1rem, calc((100% - 56rem) / 2)); background: #fff; border-bottom: 1px solid #dce3eb; }
+.brand { color: #173e73; font-weight: 700; text-decoration: none; }
+main { max-width: 56rem; margin: 3rem auto; padding: 0 1rem; }
+.welcome { padding: 2rem; background: #fff; border: 1px solid #dce3eb; border-radius: .75rem; }
+h1 { line-height: 1.2; }
+.action-link { display: inline-block; padding: .6rem 1rem; background: #173e73; color: #fff; border-radius: .4rem; text-decoration: none; }
+a:focus-visible { outline: 3px solid #ffab40; outline-offset: 3px; }
+@media (max-width: 40rem) { main { margin: 1.5rem auto; } .welcome { padding: 1.25rem; } }
+'''
+
+_MODULAR_CSS = '''/* Aurora modular starter: no external CSS dependencies. */
+:root { color-scheme: light; font-family: system-ui, sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; color: #17212b; background: #f7f9fc; line-height: 1.6; }
+.site-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem max(1rem, calc((100% - 56rem) / 2)); background: #fff; border-bottom: 1px solid #dce3eb; }
+.brand { color: #173e73; font-weight: 700; text-decoration: none; }
+nav { display: flex; flex-wrap: wrap; gap: 1rem; }
+nav a { color: #173e73; text-decoration: none; }
+main { max-width: 56rem; margin: 3rem auto; padding: 2rem; background: #fff; border: 1px solid #dce3eb; border-radius: .75rem; }
+h1 { line-height: 1.2; }
+.action-link { display: inline-block; padding: .6rem 1rem; background: #173e73; color: #fff; border-radius: .4rem; text-decoration: none; }
+a:focus-visible { outline: 3px solid #ffab40; outline-offset: 3px; }
+@media (max-width: 40rem) { main { margin: 1.5rem 1rem; padding: 1.25rem; } }
+'''
+
+
 def create_project(name: str, *, directory: Path | None = None, mvc: bool = False, modular: bool = False) -> Path:
     """Create a small importable Aurora project; never overwrite files."""
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) or keyword.iskeyword(name) or name in {"aurora", "tests"}:
@@ -189,11 +233,11 @@ def create_project(name: str, *, directory: Path | None = None, mvc: bool = Fals
             for relative in (
                 "apps", "apps/home", "apps/home/controllers", "apps/home/views",
                 "apps/blog", "apps/blog/controllers",
-                "apps/blog/views", "views", "statics",
+                "apps/blog/views", "views", "statics", "models",
             ):
                 folder = root / relative
                 folder.mkdir()
-                if relative in {"apps", "apps/home", "apps/home/controllers", "apps/blog", "apps/blog/controllers"}:
+                if relative in {"apps", "apps/home", "apps/home/controllers", "apps/blog", "apps/blog/controllers", "models"}:
                     (folder / "__init__.py").write_text("", encoding="utf-8")
             (root / "apps/home/controllers/home.py").write_text(
                 _MODULAR_HOME.format(name=name), encoding="utf-8"
@@ -207,6 +251,8 @@ def create_project(name: str, *, directory: Path | None = None, mvc: bool = Fals
             (root / "apps/home/views/index.html").write_text(_MODULAR_HOME_VIEW.format(), encoding="utf-8")
             (root / "apps/blog/views/index.html").write_text(_MODULAR_BLOG_VIEW.format(), encoding="utf-8")
         elif mvc:
+            (root / "models").mkdir()
+            (root / "models" / "__init__.py").write_text("", encoding="utf-8")
             (root / "controllers").mkdir()
             (root / "controllers" / "__init__.py").write_text("", encoding="utf-8")
             (root / "controllers" / "home.py").write_text(
@@ -222,10 +268,7 @@ def create_project(name: str, *, directory: Path | None = None, mvc: bool = Fals
             css = root / "statics" / "css"
             css.mkdir()
             (css / "site.css").write_text(
-                "/* Public Aurora starter styles. Edit or replace freely. */\n"
-                "body { font-family: system-ui, sans-serif; margin: 2rem auto; "
-                "max-width: 56rem; padding: 0 1rem; line-height: 1.6; }\n"
-                "nav a { margin-right: 1rem; }\n",
+                (_MVC_CSS if not modular else _MODULAR_CSS),
                 encoding="utf-8",
             )
         # Explicit, inert database starter files. Never open or create a database
@@ -244,6 +287,7 @@ def create_project(name: str, *, directory: Path | None = None, mvc: bool = Fals
             f"`aurora run {name}.app:app`\n\n"
             "## Database setup\n\n"
             "- `aurora_databases.json` configures the `default` SQLite alias.\n"
+            "- MVC and modular starters include an empty `models/` package; no model is registered automatically.\n"
             "- `aurora_models.json` intentionally starts empty. Register trusted "
             "`MODULE:CLASS` model references under `databases.default` before using "
             "model-aware migration commands.\n"
@@ -311,6 +355,9 @@ def add_app(name: str, *, directory: Path | None = None) -> Path:
             f'        return View("{name}/index", title="{name.replace("_", " ").title()}")\n',
             encoding="utf-8",
         )
+        models = staging / "models"
+        models.mkdir()
+        (models / "__init__.py").write_text("", encoding="utf-8")
         view_dir = staging / "views"
         view_dir.mkdir()
         (view_dir / "index.html").write_text(
@@ -829,7 +876,7 @@ def main(argv: list[str] | None = None) -> int:
             registered.add_argument("--database", default="default", help="Database alias (default: default)")
             registered.add_argument("--models-config", default="aurora_models.json", help="Model manifest JSON path")
     # Read-only named database commands; no model imports or schema writes.
-    db_group = sub.add_parser("db", help="Inspect databases and safely migrate SQLite schemas")
+    db_group = sub.add_parser("db", help="Inspect databases and safely migrate SQLite schemas; guarded MySQL migrations")
     db_group.description = "Database commands: init creates selected model tables once; inspection and migration commands are separate."
     db_group.epilog = "First setup: aurora db init --config aurora_databases.json --models-config aurora_models.json"
     db_actions = db_group.add_subparsers(dest="action", required=True)
@@ -873,6 +920,31 @@ def main(argv: list[str] | None = None) -> int:
     init.add_argument("--database", default="default", help="Configured database alias")
     init.add_argument("--model", action="append", default=[], metavar="MODULE:CLASS", help="Explicit Aurora model; repeat as needed")
     init.add_argument("--models-config", default="aurora_models.json", help="Explicit model manifest JSON path")
+    mysql_table = db_actions.add_parser(
+        'mysql-create-table', help='Review or explicitly apply one guarded MySQL CREATE TABLE'
+    )
+    mysql_table.add_argument('--config', default='aurora_databases.json')
+    mysql_table.add_argument('--database', required=True, help='Explicit configured MySQL alias')
+    mysql_table.add_argument('--schema', required=True, help='Exact selected MySQL schema')
+    mysql_table.add_argument('--table', required=True)
+    mysql_table.add_argument('--model', required=True, metavar='MODULE:CLASS')
+    mysql_table.add_argument('--apply', action='store_true', help='Execute approved DDL (writes database)')
+    mysql_table.add_argument('--approve-review', help='Exact reviewed SHA-256')
+    mysql_table.add_argument('--approve-sql', help='Exact reviewed SQL SHA-256')
+    mysql_table.add_argument('--confirm', help='Must be APPLY when --apply is used')
+    mysql_column = db_actions.add_parser(
+        'mysql-add-column', help='Review or explicitly apply one guarded MySQL nullable ADD COLUMN'
+    )
+    mysql_column.add_argument('--config', default='aurora_databases.json')
+    mysql_column.add_argument('--database', required=True, help='Explicit configured MySQL alias')
+    mysql_column.add_argument('--schema', required=True, help='Exact selected MySQL schema')
+    mysql_column.add_argument('--table', required=True)
+    mysql_column.add_argument('--model', required=True, metavar='MODULE:CLASS')
+    mysql_column.add_argument('--column', required=True)
+    mysql_column.add_argument('--apply', action='store_true', help='Execute approved DDL (writes database)')
+    mysql_column.add_argument('--approve-review', help='Exact reviewed history SHA-256')
+    mysql_column.add_argument('--approve-sql', help='Exact reviewed SQL SHA-256')
+    mysql_column.add_argument('--confirm', help='Must be APPLY when --apply is used')
     sync = db_actions.add_parser('sync', aliases=['s'], help='Preview or safely apply SQLite CREATE TABLE / nullable ADD COLUMN migrations')
     sync.add_argument('--config', default='aurora_databases.json', help='Database configuration JSON path')
     sync.add_argument('--database', default='default', help='Configured database alias (default: default)')
@@ -914,11 +986,44 @@ def main(argv: list[str] | None = None) -> int:
     # Restrict this to commands that load project models; help and read-only
     # database listing/inspection do not need to change import resolution.
     if args.command == "db" and args.action in (
-        "init", "plan", "validate", "status", "sync", "s", "migration", "compat", "policy"
+        "init", "plan", "validate", "status", "sync", "s", "migration", "compat", "policy", "mysql-add-column", "mysql-create-table"
     ):
         project_dir = str(Path.cwd().resolve())
         if project_dir not in sys.path:
             sys.path.insert(0, project_dir)
+    if args.command == 'db' and args.action == 'mysql-create-table':
+        from aurora.database.cli_mysql_create_table import run_mysql_create_table
+        try:
+            report = run_mysql_create_table(
+                config_path=args.config, alias=args.database, schema=args.schema,
+                table=args.table, model=args.model, apply=args.apply,
+                approved_review=args.approve_review, approved_sql=args.approve_sql,
+                confirmation=args.confirm,
+            )
+        except Exception as exc:
+            if isinstance(exc, (ValueError, PermissionError, FileNotFoundError)):
+                parser.exit(1, f'aurora: {exc}\n')
+            parser.exit(1, 'aurora: MySQL migration refused or outcome uncertain; '
+                           'inspect schema and history manually before retrying.\n')
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
+    if args.command == 'db' and args.action == 'mysql-add-column':
+        from aurora.database.cli_mysql_add_column import run_mysql_add_column
+        try:
+            report = run_mysql_add_column(
+                config_path=args.config, alias=args.database, schema=args.schema,
+                table=args.table, model=args.model, column=args.column,
+                apply=args.apply, approved_review=args.approve_review,
+                approved_sql=args.approve_sql, confirmation=args.confirm,
+            )
+        except Exception as exc:
+            # Do not expose connection URLs, credentials, or DBAPI exception details.
+            if isinstance(exc, (ValueError, PermissionError, FileNotFoundError)):
+                parser.exit(1, f'aurora: {exc}\n')
+            parser.exit(1, 'aurora: MySQL migration refused or outcome uncertain; '
+                           'inspect the selected schema and history manually before retrying.\n')
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
     if args.command == "db" and args.action == "init":
         if os.environ.get("AURORA_ENV", "development").lower() == "production":
             parser.exit(1, "aurora: Refusing to initialize a database in production environment.\n")
@@ -954,7 +1059,6 @@ def main(argv: list[str] | None = None) -> int:
             model_refs = select_model_refs(explicit=args.model, database=args.database, manifest=args.models_config)
             if args.format == 'json':
                 from aurora.database.cli_reports import report_for_refs
-                import json
                 report = report_for_refs(config_path=args.config, alias=args.database, model_refs=model_refs)
                 print(__import__("json").dumps(report, indent=2, sort_keys=True))
                 return 2 if args.check and report['schema_status'] == 'DRIFT' else 0
@@ -1118,7 +1222,6 @@ def main(argv: list[str] | None = None) -> int:
                 if args.action == "plan":
                     if args.format == 'json':
                         from aurora.database.cli_reports import report_for_plan
-                        import json
                         report = report_for_plan(args.database, selected_refs, plan, models)
                         print(__import__("json").dumps(report, indent=2, sort_keys=True))
                         return 2 if args.check and report['schema_status'] == 'DRIFT' else 0

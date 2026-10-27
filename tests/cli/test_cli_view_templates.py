@@ -16,7 +16,8 @@ class TestViewTemplates(unittest.TestCase):
             self.assertIn('{% block content %}', layout)
             self.assertIn('/statics/css/site.css', layout)
             self.assertIn('{% extends "layout.html" %}', home)
-            self.assertIn('\n    <h1>', home)
+            self.assertIn('<h1 id="welcome-title">{{ title }}</h1>', home)
+            self.assertIn('aria-labelledby="welcome-title"', home)
             self.assertIn('{% block title %}', home)
 
     def test_modular_views_are_readable_and_inherit_layout(self):

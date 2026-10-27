@@ -34,7 +34,7 @@ def revalidate_mysql_preflight_locked(config, *, reviewed, candidate):
         raise ValueError('MySQL revalidation requires mysql+pymysql')
 
     # MySQL lock names have a 64-character limit. Do not expose credentials.
-    digest = hashlib.sha256((reviewed.schema_name + '\0' + reviewed.database_alias).encode()).hexdigest()[:48]
+    digest = hashlib.sha256((reviewed.schema_name + '\0' + reviewed.database_alias).encode()).hexdigest()[:47]
     lock_name = 'aurora:migration:' + digest
     engine = None
     try:

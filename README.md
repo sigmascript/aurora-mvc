@@ -2,7 +2,7 @@
 
 **Aurora MVC** is a lightweight, ASGI-first Python web framework built around a clear MVC structure, simple routing, and practical developer tooling.
 
-> **Release status:** `1.0.0a2` is the published alpha. `1.0.0a3` is under development in this repository and is not yet released. Documentation for the development checkout may describe functionality not available in Alpha 1.
+> **Release status:** `1.0.0a2` is published on PyPI. `1.0.0a3` is under development in this repository and has not yet been released. Development-checkout features may not be available in the published Alpha 2 package.
 
 ## Requirements
 
@@ -11,7 +11,7 @@
 
 ## Install and get started
 
-Install the published alpha and an ASGI server:
+Install the published Alpha 2 and an ASGI server:
 
 ```bash
 python -m pip install "aurora-mvc==1.0.0a2" "uvicorn>=0.30"
@@ -44,7 +44,11 @@ Using `python -m aurora` from the checkout helps distinguish local development c
 - Database configuration and model registration using SQLAlchemy
 - CLI commands for scaffolding, development, and guarded database workflows
 
-The precise availability and limitations of database operations depend on the backend and release version. **MySQL support is being developed for Alpha 2.** MySQL migration execution is **not** part of the current approved Alpha 2 scope; do not assume SQLite and MySQL have identical migration capabilities.
+The precise availability and limitations of database operations depend on the backend and release version. **Alpha 3 development checkouts** include guarded MySQL migration review and explicitly approved execution for one `CREATE TABLE` or one nullable `ADD COLUMN` at a time. This is not a general-purpose MySQL migration engine, and it is not available in published Alpha 2. See the [database safety guide](docs/database.md).
+
+## Alpha 3 MySQL migrations (development checkout only)
+
+Install the optional MySQL driver with `python -m pip install -e ".[mysql,dev]"`, configure an explicit MySQL alias and schema, and consult the [MySQL Alpha 3 guide](docs/database.md#mysql-alpha-3-guarded-create-table-and-add-column-development-only) before proceeding. `aurora db mysql-create-table` and `aurora db mysql-add-column` default to review mode; writing requires the explicit migration gate, exact review and SQL digests, `--apply`, and `--confirm APPLY`. MySQL DDL may commit even if subsequent history recording fails. **Never automatically retry an uncertain migration.**
 
 ## Documentation
 
