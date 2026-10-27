@@ -53,5 +53,5 @@ jobs:
           aurora --version
           python -m aurora --version
 
-      - name: Run framework tests
-        run: python -m unittest discover -s tests -q
+      - name: Run complete test suite
+        run: python -m pytest tests -q --tb=short
