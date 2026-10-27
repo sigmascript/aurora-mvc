@@ -2,8 +2,8 @@
 from pathlib import Path
 
 from aurora import Aurora
-from apps.home.controllers.home import Home
-from apps.blog.controllers.blog import Blog
+from apps.home.controllers.Home import Home
+from apps.blog.controllers.Blog import Blog
 # aurora:imports
 
 ROOT = Path(__file__).resolve().parent
@@ -18,5 +18,5 @@ app = Aurora(
     statics_directory=ROOT / "statics",
 )
 app.route("/", Home)
-app.route("/blog", Blog)
+app.route("/blog/", Blog)
 # aurora:routes

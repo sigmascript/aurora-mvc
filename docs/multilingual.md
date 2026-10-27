@@ -19,10 +19,10 @@ Try these routes:
 | --- | --- |
 | `/` | Redirects to `/en/` with HTTP 302 (example middleware) |
 | `/en/`, `/ku/`, `/ar/` | Displays the active URL locale |
-| `/en/articles/123` | Displays article `123` in the `en` locale context |
+| `/en/articles/123/` | Displays article `123` in the `en` locale context |
 | `/es/` | Returns HTTP 404 because `es` is unsupported |
 
-The application registers ordinary routes (`/` and `/articles/{id}`); Aurora handles the configured locale prefixes. The root redirect is implemented by **example-specific middleware**, not a universal framework redirect policy.
+The application registers ordinary routes (`/` and `/articles/{id}/`); Aurora handles the configured locale prefixes. The root redirect is implemented by **example-specific middleware**, not a universal framework redirect policy.
 
 ## Locale selection and cookies
 

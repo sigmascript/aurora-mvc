@@ -24,11 +24,11 @@ class TestStandaloneControllerCommands(unittest.TestCase):
 
     def test_add_register_list_and_show(self):
         self.assertEqual(self.invoke("controller", "add", "User")[0], 0)
-        self.assertIn("class User(Controller)", (self.root / "controllers/user.py").read_text())
+        self.assertIn("class User(Controller)", (self.root / "controllers/User.py").read_text())
         source = (self.root / "app.py").read_text()
-        self.assertIn("from controllers.user import User", source)
-        self.assertIn('app.route("/user", User)', source)
-        self.assertIn("user", self.invoke("controller", "list")[1])
+        self.assertIn("from controllers.User import User", source)
+        self.assertIn('app.route("/user/", User)', source)
+        self.assertIn("User", self.invoke("controller", "list")[1])
         self.assertIn("controllers", self.invoke("controller", "show", "user")[1])
 
     def test_duplicate_preserves_existing_files(self):
@@ -43,10 +43,10 @@ class TestStandaloneControllerCommands(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.invoke("controller", "add", "user")
         self.assertEqual((self.root / "app.py").read_bytes(), source)
-        self.assertFalse((self.root / "controllers/user.py").exists())
+        self.assertFalse((self.root / "controllers/User.py").exists())
 
     def test_rejects_unrecognized_application(self):
         (self.root / "app.py").write_text("# custom application\n")
         with self.assertRaises(SystemExit):
             self.invoke("controller", "add", "User")
-        self.assertFalse((self.root / "controllers/user.py").exists())
+        self.assertFalse((self.root / "controllers/User.py").exists())

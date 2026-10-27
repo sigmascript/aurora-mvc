@@ -20,12 +20,12 @@ class ComponentInspectTests(unittest.TestCase):
         return buf.getvalue()
 
     def test_controller_list(self):
-        self.assertIn('blog', self.call('controller','list','blog'))
+        self.assertIn('Blog', self.call('controller','list','blog'))
 
     def test_controller_show(self):
         out=self.call('controller','show','blog','blog')
-        self.assertIn('Controller: blog',out)
-        self.assertIn('blog.py',out)
+        self.assertIn('Controller: Blog',out)
+        self.assertIn('Blog.py',out)
 
     def test_view_list(self):
         self.assertIn('index.html', self.call('view','list','blog'))

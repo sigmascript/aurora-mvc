@@ -29,8 +29,8 @@ class Alpha3VersionConsistencyTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         readme = (root / "README.md").read_text(encoding="utf-8")
 
-        self.assertIn("`1.0.0a2` is published", readme)
-        self.assertIn("`1.0.0a3` is under development", readme)
+        self.assertIn("`1.0.0a3` is published", readme)
+        self.assertIn("`1.0.0a4` is under development", readme)
 
 
 if __name__ == "__main__":

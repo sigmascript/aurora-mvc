@@ -16,7 +16,7 @@ def test_modular_starter_is_complete_and_inert(tmp_path: Path) -> None:
     assert '/statics/css/site.css' in layout
     assert '{% extends "layout.html" %}' in home
     assert '{% extends "layout.html" %}' in blog
-    assert 'apps/home/controllers/home.py' in home
+    assert 'apps/home/controllers/Home.py' in home
     assert 'focus-visible' in css
     assert 'nav a' in css
     assert (root / "models/__init__.py").read_text(encoding="utf-8") == ""
@@ -32,6 +32,6 @@ def test_added_module_preserves_starter_and_empty_models(tmp_path: Path) -> None
     assert '{% extends "layout.html" %}' in (added / "views/index.html").read_text(encoding="utf-8")
     assert (root / "views/layout.html").read_bytes() == before
     app = (root / "app.py").read_text(encoding="utf-8")
-    assert 'app.route("/news", News)' in app
+    assert 'app.route("/news/", News)' in app
     assert '"news": ROOT / "apps" / "news" / "views"' in app
     assert not (root / "data.sqlite3").exists()

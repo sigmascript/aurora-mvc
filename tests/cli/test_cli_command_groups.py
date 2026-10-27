@@ -35,7 +35,7 @@ class GroupedCLITests(unittest.TestCase):
     def test_controller_and_view_add(self):
         self.invoke('controller', 'add', 'blog', 'News')
         self.invoke('view', 'add', 'blog', 'news')
-        self.assertTrue((self.root / 'apps/blog/controllers/news.py').is_file())
+        self.assertTrue((self.root / 'apps/blog/controllers/News.py').is_file())
         self.assertTrue((self.root / 'apps/blog/views/news.html').is_file())
         self.assertIn('News', (self.root / 'app.py').read_text())
 

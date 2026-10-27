@@ -12,10 +12,10 @@ class CleanModularScaffoldTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = create_project('demo', directory=Path(temp), modular=True)
             source = (root / 'app.py').read_text()
-            self.assertIn('from apps.blog.controllers.blog import Blog', source)
-            self.assertIn('app.route("/blog", Blog)', source)
+            self.assertIn('from apps.blog.controllers.Blog import Blog', source)
+            self.assertIn('app.route("/blog/", Blog)', source)
             self.assertNotIn('BlogIndex', source)
-            self.assertIn('class Blog(Controller):', (root / 'apps/blog/controllers/blog.py').read_text())
+            self.assertIn('class Blog(Controller):', (root / 'apps/blog/controllers/Blog.py').read_text())
             self.assertFalse((root / 'apps/blog/controllers/index.py').exists())
             self.assertFalse((root / 'views/shared').exists())
             for name in ('layout.html', 'navigation.html', 'components.html'):

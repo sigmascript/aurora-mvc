@@ -43,11 +43,11 @@ class ModelMigrationJourneyTests(unittest.TestCase):
 
     def test_complete_project_model_migration_journey(self):
         self.call('model', 'add', 'Product')
-        self.assertTrue((self.root / 'models' / 'product.py').is_file())
-        self.call('model', 'register', 'journey.models.product:Product')
-        self.assertIn('journey.models.product:Product', self.call('model', 'registered'))
+        self.assertTrue((self.root / 'models' / 'Product.py').is_file())
+        self.call('model', 'register', 'journey.models.Product:Product')
+        self.assertIn('journey.models.Product:Product', self.call('model', 'registered'))
         self.assertEqual(json.loads((self.root / 'aurora_models.json').read_text())['databases']['default'],
-                         ['journey.models.product:Product'])
+                         ['journey.models.Product:Product'])
         preview = self.call('db', 'sync', '--dry-run')
         self.assertIn('CREATE TABLE', preview)
         digest = next(line.split(': ', 1)[1] for line in preview.splitlines() if line.startswith('Plan SHA-256: '))
@@ -66,7 +66,7 @@ class ModelMigrationJourneyTests(unittest.TestCase):
 
     def test_declined_confirmation_creates_no_artifacts(self):
         self.call('model', 'add', 'Product')
-        self.call('model', 'register', 'journey.models.product:Product')
+        self.call('model', 'register', 'journey.models.Product:Product')
         preview = self.call('db', 'sync', '--dry-run')
         digest = next(line.split(': ', 1)[1] for line in preview.splitlines() if line.startswith('Plan SHA-256: '))
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
@@ -78,9 +78,9 @@ class ModelMigrationJourneyTests(unittest.TestCase):
 
     def test_manifest_registration_is_idempotent(self):
         self.call('model', 'add', 'Product')
-        self.call('model', 'register', 'journey.models.product:Product')
-        self.call('model', 'register', 'journey.models.product:Product')
-        self.assertEqual(self.call('model', 'registered').count('journey.models.product:Product'), 1)
+        self.call('model', 'register', 'journey.models.Product:Product')
+        self.call('model', 'register', 'journey.models.Product:Product')
+        self.assertEqual(self.call('model', 'registered').count('journey.models.Product:Product'), 1)
 
 if __name__ == '__main__':
     unittest.main()

@@ -24,7 +24,7 @@ class TestReusableViews(unittest.TestCase):
             renderer = ViewRenderer(root / 'views', view_namespaces={'blog': root / 'apps/blog/views'})
             html = renderer.render(view('blog/index', title='Blog'))
             self.assertIn('aria-label="Main navigation"', html)
-            self.assertIn('href="/blog"', html)
+            self.assertIn('href="/blog/"', html)
             self.assertIn('class="action-link"', html)
 
     def test_create_app_preserves_customized_shared_files(self):

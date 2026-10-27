@@ -40,13 +40,13 @@ class CLIErrorMessageTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("'user'", message)
         self.assertIn("CamelCase", message)
-        self.assertFalse((root / "controllers/user.py").exists())
+        self.assertFalse((root / "controllers/User.py").exists())
 
     def test_duplicate_controller_preserves_file(self):
         root = create_project("site", directory=self.parent, mvc=True)
         with patch("pathlib.Path.cwd", return_value=root), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(main(["controller", "add", "User"]), 0)
-        target = root / "controllers/user.py"
+        target = root / "controllers/User.py"
         original = target.read_bytes()
         code, message = self.invoke_error(root, "controller", "add", "User")
         self.assertEqual(code, 1)
@@ -63,7 +63,7 @@ class CLIErrorMessageTests(unittest.TestCase):
         root = create_project("modular", directory=self.parent, modular=True)
         with patch("pathlib.Path.cwd", return_value=root), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(main(["controller", "add", "News", "--app", "blog"]), 0)
-        self.assertTrue((root / "apps/blog/controllers/news.py").is_file())
+        self.assertTrue((root / "apps/blog/controllers/News.py").is_file())
 
 
 if __name__ == "__main__":

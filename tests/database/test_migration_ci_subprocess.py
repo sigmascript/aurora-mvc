@@ -25,7 +25,7 @@ class MigrationCISubprocessTests(unittest.TestCase):
         connection = sqlite3.connect(self.project / 'data.sqlite3')
         connection.close()
         self.assertEqual(self.cli('model', 'add', 'Product').returncode, 0)
-        registered = self.cli('model', 'register', 'ci_project.models.product:Product')
+        registered = self.cli('model', 'register', 'ci_project.models.Product:Product')
         self.assertEqual(registered.returncode, 0, registered.stderr)
 
     def cli(self, *args, cwd=None):

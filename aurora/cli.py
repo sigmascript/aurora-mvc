@@ -30,7 +30,7 @@ _MVC_APP = '''"""{name} MVC application."""
 from pathlib import Path
 
 from aurora import Aurora
-from controllers.home import Home
+from controllers.Home import Home
 
 app = Aurora(views_directory=Path(__file__).resolve().parent / "views",
              statics_directory=Path(__file__).resolve().parent / "statics")
@@ -75,7 +75,7 @@ _MVC_VIEW = '''{{% extends "layout.html" %}}
     <section class="welcome" aria-labelledby="welcome-title">
         <h1 id="welcome-title">{{{{ title }}}}</h1>
         <p>Your Aurora MVC application is ready. Edit
-           <code>controllers/home.py</code> and <code>views/home.html</code>
+           <code>controllers/Home.py</code> and <code>views/home.html</code>
            to build your first page.</p>
         {{{{ action_link("Aurora documentation", "https://auroramvc.com") }}}}
     </section>
@@ -87,8 +87,8 @@ _MODULAR_APP = '''"""{name} modular MVC application."""
 from pathlib import Path
 
 from aurora import Aurora
-from apps.home.controllers.home import Home
-from apps.blog.controllers.blog import Blog
+from apps.home.controllers.Home import Home
+from apps.blog.controllers.Blog import Blog
 # aurora:imports
 
 ROOT = Path(__file__).resolve().parent
@@ -103,7 +103,7 @@ app = Aurora(
     statics_directory=ROOT / "statics",
 )
 app.route("/", Home)
-app.route("/blog", Blog)
+app.route("/blog/", Blog)
 # aurora:routes
 '''
 
@@ -148,16 +148,20 @@ _MODULAR_LAYOUT = '''<!DOCTYPE html>
 
 _MODULAR_HOME_VIEW = '''{{% extends "layout.html" %}}
 
+{{% block title %}}{{{{ title }}}}{{% endblock %}}
+
 {{% block content %}}
     <h1>{{{{ title }}}}</h1>
     <p>Your modular Aurora project is ready. Edit
-       <code>apps/home/controllers/home.py</code> and
+       <code>apps/home/controllers/Home.py</code> and
        <code>apps/home/views/index.html</code> to get started.</p>
 {{% endblock %}}
 '''
 
 _MODULAR_BLOG_VIEW = '''{{% extends "layout.html" %}}
 {{% from "components.html" import action_link %}}
+
+{{% block title %}}{{{{ title }}}}{{% endblock %}}
 
 {{% block content %}}
     <h1>{{{{ title }}}}</h1>
@@ -175,7 +179,7 @@ _MVC_COMPONENTS = '''{% macro action_link(label, href) -%}
 
 _MODULAR_NAVIGATION = '''<nav aria-label="Main navigation">
     <a href="/">Home</a>
-    <a href="/blog">Blog</a>
+    <a href="/blog/">Blog</a>
 </nav>
 '''
 
@@ -239,10 +243,10 @@ def create_project(name: str, *, directory: Path | None = None, mvc: bool = Fals
                 folder.mkdir()
                 if relative in {"apps", "apps/home", "apps/home/controllers", "apps/blog", "apps/blog/controllers", "models"}:
                     (folder / "__init__.py").write_text("", encoding="utf-8")
-            (root / "apps/home/controllers/home.py").write_text(
+            (root / "apps/home/controllers/Home.py").write_text(
                 _MODULAR_HOME.format(name=name), encoding="utf-8"
             )
-            (root / "apps/blog/controllers/blog.py").write_text(
+            (root / "apps/blog/controllers/Blog.py").write_text(
                 _MODULAR_BLOG, encoding="utf-8"
             )
             (root / "views/layout.html").write_text(_MODULAR_LAYOUT.format(), encoding="utf-8")
@@ -255,7 +259,7 @@ def create_project(name: str, *, directory: Path | None = None, mvc: bool = Fals
             (root / "models" / "__init__.py").write_text("", encoding="utf-8")
             (root / "controllers").mkdir()
             (root / "controllers" / "__init__.py").write_text("", encoding="utf-8")
-            (root / "controllers" / "home.py").write_text(
+            (root / "controllers" / "Home.py").write_text(
                 _MVC_HOME.format(name=name), encoding="utf-8"
             )
             (root / "views").mkdir()
@@ -331,13 +335,13 @@ def add_app(name: str, *, directory: Path | None = None) -> Path:
     if any(source.count(anchor) != 1 for anchor in anchors):
         raise ValueError("This project's app.py has no scaffold insertion anchors; add the app manually.")
     # Keep generated routes predictable; do not silently introduce collisions.
-    route = f"/{name}"
-    if f'app.route("{route}"' in source:
+    route = f"/{name}/"
+    if re.search(r"app\.route\(\s*[\'\"]" + re.escape(route) + r"[\'\"]", source):
         raise ValueError(f"Route already registered: {route}")
     class_name = "".join(part.capitalize() for part in name.split("_"))
-    updated = source.replace("# aurora:imports", f"from apps.{name}.controllers.{name} import {class_name}\n# aurora:imports")
+    updated = source.replace("# aurora:imports", f"from apps.{name}.controllers.{class_name} import {class_name}\n# aurora:imports")
     updated = updated.replace("        # aurora:views", f'        "{name}": ROOT / "apps" / "{name}" / "views",\n        # aurora:views')
-    updated = updated.replace("# aurora:routes", f'app.route("/{name}", {class_name})\n# aurora:routes')
+    updated = updated.replace("# aurora:routes", f'app.route("/{name}/", {class_name})\n# aurora:routes')
     # Prepare the new app in a sibling staging directory. No developer file is
     # changed until all scaffold files have been written successfully.
     import shutil
@@ -348,7 +352,7 @@ def add_app(name: str, *, directory: Path | None = None) -> Path:
         controllers = staging / "controllers"
         controllers.mkdir()
         (controllers / "__init__.py").write_text("", encoding="utf-8")
-        (controllers / f"{name}.py").write_text(
+        (controllers / f"{class_name}.py").write_text(
             f'"""{class_name} controller."""\nfrom aurora import Controller, View\n\n\n'
             f'class {class_name}(Controller):\n'
             '    def get(self):\n'
@@ -363,6 +367,7 @@ def add_app(name: str, *, directory: Path | None = None) -> Path:
         (view_dir / "index.html").write_text(
             '{% extends "layout.html" %}\n'
             '{% from "components.html" import action_link %}\n\n'
+            '{% block title %}{{ title }}{% endblock %}\n\n'
             '{% block content %}\n'
             '    <h1>{{ title }}</h1>\n'
             '    <p>Your new Aurora app is ready.</p>\n'
@@ -457,6 +462,41 @@ def _create_scaffold_file(folder: Path, filename: str, content: str) -> Path:
 
 
 
+def _controller_slug(name: str) -> str:
+    """Convert CamelCase to a readable URL segment."""
+    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "-", name).lower()
+
+
+def _existing_component(folder: Path, name: str, resource: str) -> Path | None:
+    """Resolve exact or legacy filenames without importing user code."""
+    if not folder.is_dir() or folder.is_symlink():
+        return None
+    candidates = {name.casefold()}
+    if resource == "controller":
+        candidates.add(name.lower().casefold())
+    if resource == "model":
+        candidates.add(re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower().casefold())
+    matches = [item for item in folder.iterdir()
+               if item.suffix == ".py" and item.name != "__init__.py"
+               and item.stem.casefold() in candidates]
+    if len(matches) > 1:
+        raise ValueError(f"Ambiguous {resource} name: {name}")
+    return matches[0] if matches else None
+
+
+def _reject_component_collision(folder: Path, name: str, resource: str) -> None:
+    existing = _existing_component(folder, name, resource)
+    if existing is not None:
+        raise FileExistsError(f"{resource.title()} already exists (existing file will not be overwritten): {existing}")
+
+
+def _resolve_component(folder: Path, name: str, resource: str) -> Path:
+    path = _existing_component(folder, name, resource)
+    if path is None or path.is_symlink() or not path.is_file():
+        raise ValueError(f"{resource.title()} not found: {name}")
+    return path
+
+
 def _controller_binding(source: str, app_name: str, name: str) -> str:
     """Use a plain name unless a top-level binding already occupies it."""
     tree = ast.parse(source)
@@ -525,13 +565,12 @@ def create_controller(app_name: str, name: str, *,
     anchors = ("# aurora:imports", "# aurora:routes")
     if any(source.count(anchor) != 1 for anchor in anchors):
         raise ValueError("app.py must have unique Aurora import and route anchors.")
-    module = name.lower()
+    module = name
     destination = root / "controllers" / f"{module}.py"
-    if destination.exists():
-        raise FileExistsError(f"Controller already exists (existing file will not be overwritten): {destination}")
-    route = f"/{app_name}/{module.replace('_', '-')}"
+    _reject_component_collision(root / "controllers", name, "controller")
+    route = f"/{app_name}/{_controller_slug(name)}/"
     # Keep the existing app's base route untouched and avoid duplicate registrations.
-    if f'app.route("{route}"' in source or f"app.route('{route}'" in source:
+    if re.search(r"app\.route\(\s*[\'\"]" + re.escape(route) + r"[\'\"]", source):
         raise ValueError(f"Route already registered: {route}")
     binding = _controller_binding(source, app_name, name)
     suffix = f" as {binding}" if binding != name else ""
@@ -593,11 +632,10 @@ def create_standalone_controller(name: str, *, directory: Path | None = None) ->
     # Aurora application before appending the registration.
     if not re.search(r"(?m)^app\s*=\s*Aurora\(", source):
         raise ValueError("Cannot safely register controller: app.py has no standard Aurora app assignment.")
-    module = name.lower()
+    module = name
     destination = root / "controllers" / f"{module}.py"
-    if destination.exists() or destination.is_symlink():
-        raise FileExistsError(f"Controller already exists (existing file will not be overwritten): {destination}")
-    route = f"/{module}"
+    _reject_component_collision(root / "controllers", name, "controller")
+    route = f"/{_controller_slug(name)}/"
     if re.search(r"app\.route\(\s*['\"]" + re.escape(route) + r"['\"]", source):
         raise ValueError(f"Route already registered: {route}")
     binding = _controller_binding(source, "", name)
@@ -651,11 +689,10 @@ def list_standalone_controllers(*, directory: Path | None = None) -> list[str]:
 
 
 def show_standalone_controller(name: str, *, directory: Path | None = None) -> dict[str, str]:
-    if name not in list_standalone_controllers(directory=directory):
-        raise ValueError(f"Controller not found: {name}")
     root = _standalone_controller_root(directory)
-    path = root / "controllers" / (name + ".py")
-    return {"app": "(standalone)", "name": name, "path": str(path)}
+    path = _resolve_component(root / "controllers", name, "controller")
+    return {"app": "(standalone)", "name": path.stem, "path": str(path)}
+
 
 
 def create_view(app_name: str, name: str, *,
@@ -665,6 +702,7 @@ def create_view(app_name: str, name: str, *,
         raise ValueError(f"Invalid view name {name!r}. Use lowercase letters, numbers, underscores or hyphens (e.g. account_settings).")
     root = _scaffold_app_root(app_name, directory)
     content = ('{% extends "layout.html" %}\n\n'
+               '{% block title %}' + name.replace('_', ' ').replace('-', ' ').title() + '{% endblock %}\n\n'
                '{% block content %}\n'
                f'    <h1>{name.replace("_", " ").replace("-", " ").title()}</h1>\n'
                '{% endblock %}\n')
@@ -690,13 +728,14 @@ def create_model(app_name: str, name: str, *, directory: Path | None = None) -> 
         created_folder = True
     elif not folder.is_dir():
         raise ValueError("models path must be a directory.")
-    module = re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+    module = name
     source = (f'"""{name} model for the {app_name} application."""\n'
               'from aurora.database import Model, column\n\n\n'
               f'class {name}(Model):\n'
               '    id = column(int, primary_key=True)\n'
               '    # Add your model columns here.\n')
     try:
+        _reject_component_collision(folder, name, "model")
         destination = _create_scaffold_file(folder, f"{module}.py", source)
     except BaseException:
         if created_folder:
@@ -730,20 +769,18 @@ def show_component(resource: str, app_name: str, name: str, *,
     """Report a component's path and name; never execute or display its code."""
     if resource not in ("controller", "view", "model"):
         raise ValueError("Unsupported component type.")
-    entries = list_components(resource, app_name, directory=directory)
-    valid = name in entries or (resource == "view" and name + ".html" in entries)
-    if not valid:
-        raise ValueError(f"{resource.title()} not found: {name}")
     root = _scaffold_app_root(app_name, directory)
-    filename = name if resource == "view" and name.endswith(".html") else (
-        name + (".html" if resource == "view" else ".py"))
-    target = (
-        root
-        / {"controller": "controllers", "view": "views", "model": "models"}[resource]
-        / filename
-    )
-    if target.is_symlink() or not target.is_file():
-        raise ValueError("Component is not a regular file.")
+    folder = root / {"controller": "controllers", "view": "views", "model": "models"}[resource]
+    if resource != "view":
+        target = _resolve_component(folder, name, resource)
+    else:
+        entries = list_components(resource, app_name, directory=directory)
+        filename = name if name.endswith(".html") else name + ".html"
+        if filename not in entries:
+            raise ValueError(f"View not found: {name}")
+        target = folder / filename
+        if target.is_symlink() or not target.is_file():
+            raise ValueError("Component is not a regular file.")
     return {"app": app_name, "name": target.stem, "path": str(target)}
 
 
@@ -771,7 +808,7 @@ def create_shared_component(resource: str, name: str, *, directory: Path | None 
     if resource == "model":
         if not re.fullmatch(r"[A-Z][A-Za-z0-9]*", name):
             raise ValueError(f"Invalid model name {name!r}. Use CamelCase (e.g. BlogPost).")
-        module = re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+        module = name
         filename = module + ".py"
         content = (f'"""Shared {name} model."""\nfrom aurora.database import Model, column\n\n\n'
                    f'class {name}(Model):\n    id = column(int, primary_key=True)\n'
@@ -780,7 +817,9 @@ def create_shared_component(resource: str, name: str, *, directory: Path | None 
         if not re.fullmatch(r"[a-z][a-z0-9_-]*", name):
             raise ValueError(f"Invalid view name {name!r}. Use lowercase letters, numbers, underscores or hyphens (e.g. account_settings).")
         filename = name + ".html"
-        content = ('{% extends "layout.html" %}\n\n{% block content %}\n'
+        content = ('{% extends "layout.html" %}\n\n'
+                   '{% block title %}' + name.replace('_', ' ').replace('-', ' ').title() + '{% endblock %}\n\n'
+                   '{% block content %}\n'
                    f'    <h1>{name.replace("_", " ").replace("-", " ").title()}</h1>\n'
                    '{% endblock %}\n')
     else:
@@ -790,6 +829,8 @@ def create_shared_component(resource: str, name: str, *, directory: Path | None 
         folder.mkdir()
         made = True
     try:
+        if resource == "model":
+            _reject_component_collision(folder, name, "model")
         return _create_scaffold_file(folder, filename, content)
     except BaseException:
         if made:
@@ -808,18 +849,19 @@ def list_shared_components(resource: str, *, directory: Path | None = None) -> l
 
 
 def show_shared_component(resource: str, name: str, *, directory: Path | None = None) -> dict[str, str]:
-    entries = list_shared_components(resource, directory=directory)
-    if name not in entries and not (resource == "view" and name + ".html" in entries):
-        raise ValueError(f"Shared {resource} not found: {name}")
     folder = _shared_component_root(resource, directory)
-    filename = (
-        name if resource == "view" and name.endswith(".html")
-        else name + (".py" if resource == "model" else ".html")
-    )
-    path = folder / filename
-    if path.is_symlink() or not path.is_file():
-        raise ValueError("Component is not a regular file.")
+    if resource == "model":
+        path = _resolve_component(folder, name, resource)
+    else:
+        entries = list_shared_components(resource, directory=directory)
+        filename = name if name.endswith(".html") else name + ".html"
+        if filename not in entries:
+            raise ValueError(f"Shared {resource} not found: {name}")
+        path = folder / filename
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("Component is not a regular file.")
     return {"app": "(shared)", "name": path.stem, "path": str(path)}
+
 
 
 def main(argv: list[str] | None = None) -> int:

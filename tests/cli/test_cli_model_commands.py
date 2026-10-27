@@ -22,7 +22,7 @@ class ModelCLITests(unittest.TestCase):
 
     def test_add_scaffolds_model(self):
         out = self.invoke('model', 'add', 'blog', 'BlogPost')
-        path = self.root / 'apps/blog/models/blog_post.py'
+        path = self.root / 'apps/blog/models/BlogPost.py'
         self.assertTrue(path.is_file())
         self.assertIn('class BlogPost(Model)', path.read_text())
         self.assertIn('database unchanged', out)
@@ -30,8 +30,8 @@ class ModelCLITests(unittest.TestCase):
 
     def test_list_and_show(self):
         self.invoke('model', 'add', 'blog', 'BlogPost')
-        self.assertIn('blog_post', self.invoke('model', 'list', 'blog'))
-        self.assertIn('blog_post.py', self.invoke('model', 'show', 'blog', 'blog_post'))
+        self.assertIn('BlogPost', self.invoke('model', 'list', 'blog'))
+        self.assertIn('BlogPost.py', self.invoke('model', 'show', 'blog', 'BlogPost'))
 
     def test_missing_models_directory_lists_empty(self):
         self.assertEqual(list_components('model', 'blog', directory=self.root), [])
@@ -61,9 +61,9 @@ class ModelCLITests(unittest.TestCase):
 
     def test_model_not_imported_on_inspection(self):
         self.invoke('model','add','blog','Article')
-        path = self.root/'apps/blog/models/article.py'
+        path = self.root/'apps/blog/models/Article.py'
         path.write_text('raise RuntimeError("not imported")')
-        self.assertIn('article', list_components('model','blog',directory=self.root))
-        self.assertEqual(show_component('model','blog','article',directory=self.root)['name'],'article')
+        self.assertIn('Article', list_components('model','blog',directory=self.root))
+        self.assertEqual(show_component('model','blog','Article',directory=self.root)['name'],'Article')
 
 if __name__=='__main__': unittest.main()

@@ -15,7 +15,7 @@ def article(request, id):
 
 
 app.add_route("/", home, name="home")
-app.add_route("/articles/{id}", article, name="article")
+app.add_route("/articles/{id}/", article, name="article")
 
 
 @app.add_middleware

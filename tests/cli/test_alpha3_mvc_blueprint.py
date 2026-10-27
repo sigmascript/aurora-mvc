@@ -13,7 +13,7 @@ def test_mvc_starter_contains_accessible_view_and_styles(tmp_path: Path) -> None
     assert 'id="main-content"' in layout
     assert 'href="/statics/css/site.css"' in layout
     assert '{% extends "layout.html" %}' in home
-    assert 'controllers/home.py' in home
+    assert 'controllers/Home.py' in home
     assert 'views/home.html' in home
     assert '.action-link' in css
     assert 'focus-visible' in css

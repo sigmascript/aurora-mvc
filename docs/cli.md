@@ -18,7 +18,7 @@ aurora -v
 python -m aurora --version
 ```
 
-These commands report the version installed in the active environment. The published Alpha 2 release is `1.0.0a2`; Alpha 3 (`1.0.0a3`) remains unreleased and is available only in a development checkout or locally built distribution. The CLI reads installed distribution metadata when available and otherwise falls back to Aurora’s package version.
+These commands report the version installed in the active environment. The published Alpha 3 release is `1.0.0a3`; Alpha 4 is under development. The CLI reads installed distribution metadata when available and otherwise falls back to Aurora’s package version.
 
 ## Commands at a glance
 
@@ -62,13 +62,13 @@ aurora app add news
 aurora app list
 aurora app show news
 
-aurora controller add index --app news
+aurora controller add Index --app news
 aurora controller list --app news
 aurora view list --app news
 aurora model list --app news
 ```
 
-Component creation has project-layout requirements. A controller must target a modular app; shared views and models can also be managed without `--app`. Consult the corresponding subcommand help before modifying a project.
+Component creation has project-layout requirements. Controllers can be generated in standalone MVC projects or modular apps; shared views and models can also be managed without `--app`. Consult the corresponding subcommand help before modifying a project.
 
 Model registration is separate from creating a model file:
 
@@ -96,7 +96,7 @@ aurora db sync --dry-run --model myapp.models:Article
 
 **Do not use database apply or sync-approval commands against valuable databases without reviewing the generated plan and backup requirements.** See the [database guide](database.md) for the safety model. CLI validation can refuse operations in production environments.
 
-## Alpha 3 guarded MySQL commands (unreleased)
+## Alpha 3 guarded MySQL commands
 
 Use `aurora db mysql-create-table --help` and `aurora db mysql-add-column --help` to inspect the exact arguments. Both commands require `--database`, `--schema`, `--table`, and `--model MODULE:CLASS`; `mysql-add-column` also requires `--column`. `--config` defaults to `aurora_databases.json`.
 
@@ -122,3 +122,7 @@ aurora db sync --help
 aurora db mysql-create-table --help
 aurora db mysql-add-column --help
 ```
+
+## Alpha 4 scaffolding conventions (development checkout)
+
+Generated controller and model filenames preserve CamelCase, for example `controllers/AccountSettings.py` and `models/BlogPost.py`. Inspection accepts the exact generated name and recognizes older lowercase or snake_case filenames without renaming developer files. New page routes use trailing slashes, for example `/account-settings/` and `/blog/news/`. Existing developer-defined routes are not rewritten and remain exact-match. Generated views include a `title` block.

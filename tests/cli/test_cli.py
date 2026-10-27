@@ -57,7 +57,7 @@ class TestModularMultipleApps(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = create_project("multi", directory=Path(tmp), modular=True)
             source = (root / "app.py").read_text(encoding="utf-8")
-            self.assertIn('app.route("/blog", Blog)', source)
+            self.assertIn('app.route("/blog/", Blog)', source)
             self.assertIn('ROOT / "views"', source)
             self.assertTrue((root / "views/layout.html").is_file())
             self.assertTrue((root / "apps/home/views/index.html").is_file())
@@ -72,7 +72,7 @@ class TestModularMultipleApps(unittest.TestCase):
             home = renderer.render(View("home/index", title="Home"))
             blog = renderer.render(View("blog/index", title="Blog"))
             self.assertIn("Your modular Aurora project is ready", home)
-            self.assertIn('href="/blog"', home)
+            self.assertIn('href="/blog/"', home)
             self.assertIn("Your blog app is ready", blog)
             self.assertIn('href="/"', blog)
 
@@ -93,10 +93,10 @@ class TestAddModularApp(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = create_project("multi", directory=Path(tmp), modular=True)
             created = add_app("news_feed", directory=root)
-            self.assertTrue((created / "controllers/news_feed.py").is_file())
+            self.assertTrue((created / "controllers/NewsFeed.py").is_file())
             self.assertTrue((created / "views/index.html").is_file())
             source = (root / "app.py").read_text()
-            self.assertIn('app.route("/news_feed", NewsFeed)', source)
+            self.assertIn('app.route("/news_feed/", NewsFeed)', source)
             self.assertIn('"news_feed": ROOT / "apps" / "news_feed" / "views"', source)
             from aurora.rendering import ViewRenderer
             from aurora.view import View
@@ -128,7 +128,7 @@ class TestAddModularApp(unittest.TestCase):
             root = create_project("multi", directory=Path(tmp), modular=True)
             with patch("aurora.cli.Path.cwd", return_value=root):
                 self.assertEqual(main(["add-app", "news"]), 0)
-            self.assertTrue((root / "apps/news/controllers/news.py").is_file())
+            self.assertTrue((root / "apps/news/controllers/News.py").is_file())
 
 class TestAppCrudRead(unittest.TestCase):
     def test_list_apps_and_show_app(self):
@@ -137,7 +137,7 @@ class TestAppCrudRead(unittest.TestCase):
             root = create_project("multi", directory=Path(tmp), modular=True)
             self.assertEqual(list_apps(directory=root), ["blog", "home"])
             info = show_app("blog", directory=root)
-            self.assertEqual(info["controllers"], ["blog"])
+            self.assertEqual(info["controllers"], ["Blog"])
             self.assertEqual(info["views"], ["index.html"])
 
     def test_create_app_command_and_compatibility_alias(self):
