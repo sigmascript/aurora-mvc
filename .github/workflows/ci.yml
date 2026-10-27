@@ -49,15 +49,10 @@ jobs:
           python -m pip install ".[dev]"
           python -m pip check
 
-      - name: Verify test dependencies
-        run: |
-          python -m pip show pytest
-          python -c "import pytest; print('pytest', pytest.__version__)"
-
       - name: Check installed CLI
         run: |
           aurora --version
           python -m aurora --version
 
-      - name: Run framework tests
-        run: python -m unittest discover -s tests -q
+      - name: Run complete test suite
+        run: python -m pytest tests -q --tb=short
