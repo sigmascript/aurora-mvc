@@ -54,7 +54,7 @@ class GroupedCLITests(unittest.TestCase):
         self.assertEqual(raised.exception.code, 1)
 
     def test_unimplemented_actions_not_advertised(self):
-        for argv in (['app', 'remove', 'blog'], ['db', 'migrate']):
+        for argv in (['app', 'remove', 'blog'],):
             with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
                 main(argv)
             self.assertEqual(raised.exception.code, 2)

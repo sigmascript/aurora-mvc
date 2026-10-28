@@ -33,8 +33,10 @@ class DatabaseCLIWorkflowTests(unittest.TestCase):
     def test_inspect_missing_does_not_create(self):
         with self.assertRaises(SystemExit): self.call('inspect', '--database', 'analytics')
         self.assertFalse((self.root/'missing.sqlite3').exists())
-    def test_plan_requires_explicit_models(self):
-        with self.assertRaises(SystemExit): self.call('plan')
+    def test_plan_without_models_inspects_only(self):
+        output = self.call('plan')
+        self.assertIn('Schema readable; 1 user table(s).', output)
+        self.assertIn('schema differences cannot be evaluated', output)
     def test_plan_invalid_model_reference(self):
         with self.assertRaises(SystemExit): self.call('plan', '--model', 'broken')
     def test_plan_explicit_model(self):

@@ -942,6 +942,20 @@ def main(argv: list[str] | None = None) -> int:
         if verb == "history":
             command.add_argument("--history-file",
                                  help="Optional legacy dedicated history SQLite file; otherwise reads applied migrations from target database")
+    for verb in ("backup", "restore"):
+        command = db_actions.add_parser(verb, help=("Create a verified SQLite or MySQL backup" if verb == "backup" else "Guided SQLite recovery or guarded MySQL staging restore"))
+        command.add_argument("--config", default="aurora_databases.json")
+        command.add_argument("--database", default="default")
+        if verb == "backup":
+            command.add_argument("--to", help="New backup path; SQLite uses .sqlite3, MySQL uses .sql")
+            command.add_argument("--login-path", help="MySQL login profile configured with mysql_config_editor")
+        else:
+            command.add_argument("--from", dest="source", required=True, help="Existing SQLite backup or MySQL .sql dump")
+            command.add_argument("--check-only", action="store_true", help="Read-only MySQL restore preflight; never executes SQL")
+            command.add_argument("--login-path", help="MySQL client login profile (preflight only)")
+            command.add_argument("--staging-database", help="Proposed distinct MySQL staging database name")
+            command.add_argument("--staging-login-path", help="Separate restricted MySQL staging login profile")
+            command.add_argument("--staging-only", action="store_true", help="Import validated SQL only into empty staging database")
     init = db_actions.add_parser(
         "init",
         help="Create selected tables in an empty SQLite or MySQL database (writes once)",
@@ -987,7 +1001,7 @@ def main(argv: list[str] | None = None) -> int:
     mysql_column.add_argument('--approve-review', help='Exact reviewed history SHA-256')
     mysql_column.add_argument('--approve-sql', help='Exact reviewed SQL SHA-256')
     mysql_column.add_argument('--confirm', help='Must be APPLY when --apply is used')
-    sync = db_actions.add_parser('sync', aliases=['s'], help='Preview or safely apply SQLite CREATE TABLE / nullable ADD COLUMN migrations')
+    sync = db_actions.add_parser('migrate', aliases=['sync', 's'], help='Preview or safely apply approved SQLite CREATE TABLE / nullable ADD COLUMN migrations')
     sync.add_argument('--config', default='aurora_databases.json', help='Database configuration JSON path')
     sync.add_argument('--database', default='default', help='Configured database alias (default: default)')
     sync.add_argument('--model', action='append', metavar='MODULE:CLASS', help='Explicit trusted Aurora model; repeat for multiple models')
@@ -1082,7 +1096,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(f"Database: {args.database}\nDatabase initialized successfully.")
         return 0
-    if args.command == 'db' and args.action in ('sync', 's'):
+    if args.command == 'db' and args.action in ('migrate', 'sync', 's'):
         from aurora.database.cli_sync import sync_database
         def confirm(text):
             print(f"Proposed changes:\n{text}\nPlan SHA-256: {args.approve}")
@@ -1152,6 +1166,58 @@ def main(argv: list[str] | None = None) -> int:
         except (ValueError, OSError, UnicodeError, __import__('json').JSONDecodeError) as exc:
             parser.exit(1, f"aurora: {exc}\n")
         return 0
+    if args.command == "db" and args.action in ("backup", "restore"):
+        from aurora.database.cli_recovery import backup_database, restore_database
+        try:
+            if args.action == "backup":
+                output = backup_database(args.config, args.database, args.to, login_path=args.login_path)
+                print(f"Verified database backup: {output}")
+            else:
+                from aurora.database.cli_inspection import load_cli_database_config
+                selected_config, _ = load_cli_database_config(args.config)
+                if selected_config.resolve(args.database).get_backend_name() == "mysql":
+                    if args.staging_only or args.staging_login_path:
+                        if not args.staging_only:
+                            raise ValueError("--staging-login-path requires --staging-only")
+                        from aurora.database.cli_mysql_staging_restore import staging_restore
+                        def confirm_stage(plan):
+                            print(f"STAGING-ONLY MySQL import\nSource: {plan.source_database}\n"
+                                  f"Staging: {plan.staging_database}\nBackup: {plan.backup}\n"
+                                  f"SHA-256: {plan.digest}\nTables: {plan.tables}")
+                            print("WARNING: MySQL imports are not atomic. A failed import may leave partial staging objects.")
+                            try:
+                                return input(f"Type RESTORE {plan.staging_database} to confirm: ").strip() == f"RESTORE {plan.staging_database}"
+                            except (EOFError, KeyboardInterrupt):
+                                return False
+                        plan = staging_restore(args.config, args.database, args.source,
+                                               args.login_path, args.staging_database,
+                                               args.staging_login_path, check_only=args.check_only,
+                                               confirm=confirm_stage)
+                        print(f"{'Staging readiness verified (READ ONLY)' if args.check_only else 'Staging import completed'}: "
+                              f"{plan.staging_database} (SHA-256: {plan.digest})")
+                        return 0
+                    if not args.check_only:
+                        raise ValueError("MySQL restore is disabled; use --check-only for read-only preflight")
+                    from aurora.database.cli_mysql_restore_preflight import check_mysql_restore
+                    report = check_mysql_restore(args.config, args.database, args.source,
+                                                 args.login_path, args.staging_database)
+                    print(report.format_text())
+                    if not report.staging_available:
+                        parser.exit(2, "aurora: staging database collision; no changes made\n")
+                    return 0
+                if args.check_only or args.login_path or args.staging_database or args.staging_login_path or args.staging_only:
+                    raise ValueError("--check-only, --login-path and --staging-database are MySQL-only restore options")
+                def confirm_restore():
+                    try:
+                        return input("Type RESTORE to confirm: ").strip() == "RESTORE"
+                    except (EOFError, KeyboardInterrupt):
+                        return False
+                result = restore_database(args.config, args.database, args.source, confirm_restore)
+                if result:
+                    print(f"Restore verified: {result[0]}\nPrevious database preserved: {result[1]}")
+        except (ValueError, OSError, RuntimeError, __import__("sqlite3").Error) as exc:
+            parser.exit(1, f"aurora: {exc}\n")
+        return 0
     if args.command == "db":
         from aurora.database.cli_inspection import (
             load_cli_database_config, describe_database, inspect_database,
@@ -1169,6 +1235,27 @@ def main(argv: list[str] | None = None) -> int:
             elif args.action == "check":
                 count = inspect_database(config, args.database, base_dir=base_dir)
                 print(f"Database: {args.database}\nSchema readable; {count} user table(s).")
+            elif (args.action == "plan" and not args.model
+                  and config.resolve(args.database).get_backend_name() == "sqlite"
+                  and not Path(args.models_config).expanduser().is_file()):
+                # Preserve model-free schema inspection when no manifest exists.
+                # An existing but invalid manifest must not silently fall back.
+                count = inspect_database(config, args.database, base_dir=base_dir)
+                if args.format == "json":
+                    print(__import__("json").dumps({
+                        "database_alias": args.database,
+                        "mode": "inspection_only",
+                        "read_only": True,
+                        "table_count": count,
+                        "schema_status": "UNVERIFIED",
+                        "warnings": ["No models supplied or registered; schema differences cannot be evaluated."],
+                    }, indent=2, sort_keys=True))
+                else:
+                    print(f"Database: {args.database}\nSchema readable; {count} user table(s).")
+                    print("Safety warnings:")
+                    print("  No models supplied or registered; schema differences cannot be evaluated.")
+                    print("  Inspection only; no database changes applied.")
+                return 3 if args.check else 0
             elif args.action == "plan" and config.resolve(args.database).get_backend_name() == "mysql":
                 from aurora.database.cli_mysql_plan import plan_mysql_schema
                 report = plan_mysql_schema(
@@ -1183,6 +1270,11 @@ def main(argv: list[str] | None = None) -> int:
                         print(f"  {item['category']} [{item['policy']}]: {item['detail']}")
                     if not report['items']:
                         print("  No differences in supported comparisons.")
+                    print("Safety warnings:")
+                    for item in report['items']:
+                        print(f"  [{item['policy']}] {item['detail']}")
+                    if not report['items']:
+                        print("  No classified differences among selected models.")
                     print("Advisory only; no executable SQL, approvals, or MySQL migrations.")
                     print("Unselected tables and some MySQL features are not verified.")
                 if args.check:
@@ -1268,6 +1360,16 @@ def main(argv: list[str] | None = None) -> int:
                         print(__import__("json").dumps(report, indent=2, sort_keys=True))
                         return 2 if args.check and report['schema_status'] == 'DRIFT' else 0
                     print(f"Database: {args.database}\n{plan.format_text()}")
+                    from aurora.database.cli_reports import report_for_plan
+                    safety_report = report_for_plan(args.database, selected_refs, plan, models)
+                    print("\nSafety warnings:")
+                    if not safety_report['changes']:
+                        print("  None for the selected models; unselected schema is not verified.")
+                    else:
+                        for change in safety_report['changes']:
+                            label = change['table'] + ('.' + change['column'] if change['column'] else '')
+                            print(f"  [{change['classification']}] {label}: {change['reason']}")
+                        print("  Candidate changes are not execution approval; revalidation, backup, and explicit consent remain mandatory.")
                     if args.check:
                         from aurora.database.cli_reports import report_for_plan
                         report = report_for_plan(args.database, selected_refs, plan, models)
