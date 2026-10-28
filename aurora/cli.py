@@ -1001,7 +1001,7 @@ def main(argv: list[str] | None = None) -> int:
     mysql_column.add_argument('--approve-review', help='Exact reviewed history SHA-256')
     mysql_column.add_argument('--approve-sql', help='Exact reviewed SQL SHA-256')
     mysql_column.add_argument('--confirm', help='Must be APPLY when --apply is used')
-    sync = db_actions.add_parser('migrate', aliases=['sync', 's'], help='Preview or safely apply approved SQLite CREATE TABLE / nullable ADD COLUMN migrations')
+    sync = db_actions.add_parser('migrate', aliases=['sync', 's'], help='Preview/apply SQLite migrations or one guarded MySQL operation')
     sync.add_argument('--config', default='aurora_databases.json', help='Database configuration JSON path')
     sync.add_argument('--database', default='default', help='Configured database alias (default: default)')
     sync.add_argument('--model', action='append', metavar='MODULE:CLASS', help='Explicit trusted Aurora model; repeat for multiple models')
@@ -1014,6 +1014,13 @@ def main(argv: list[str] | None = None) -> int:
     sync.add_argument('--name', help='New migration review filename stem (required to apply)')
     sync.add_argument('--output-dir', default='migrations', help='Existing review directory (default: migrations)')
     sync.add_argument('--backup', help='New backup filename in an existing directory (required to apply)')
+    sync.add_argument('--schema', help='Exact MySQL schema (required for MySQL)')
+    sync.add_argument('--table', help='One MySQL target table')
+    sync.add_argument('--column', help='One nullable MySQL column; omit for CREATE TABLE')
+    sync.add_argument('--apply', action='store_true', help='Explicit MySQL DDL execution only')
+    sync.add_argument('--approve-review', help='Exact MySQL review SHA-256')
+    sync.add_argument('--approve-sql', help='Exact MySQL SQL SHA-256')
+    sync.add_argument('--confirm', help='Must be APPLY for MySQL execution')
     migration_group = db_actions.add_parser("migration", help="Create/show reviews or apply approved SQLite migrations")
     migration_actions = migration_group.add_subparsers(dest="migration_action", required=True)
     create = migration_actions.add_parser("create", help="Save an advisory JSON review (no SQL)")
@@ -1042,7 +1049,7 @@ def main(argv: list[str] | None = None) -> int:
     # Restrict this to commands that load project models; help and read-only
     # database listing/inspection do not need to change import resolution.
     if args.command == "db" and args.action in (
-        "init", "plan", "validate", "status", "sync", "s", "migration", "compat", "policy", "mysql-add-column", "mysql-create-table"
+        "init", "plan", "validate", "status", "migrate", "sync", "s", "migration", "compat", "policy", "mysql-add-column", "mysql-create-table"
     ):
         project_dir = str(Path.cwd().resolve())
         if project_dir not in sys.path:
@@ -1097,6 +1104,28 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Database: {args.database}\nDatabase initialized successfully.")
         return 0
     if args.command == 'db' and args.action in ('migrate', 'sync', 's'):
+        # Preserve the legacy sync/s entry points and their CI report contract.
+        # Only the unified migrate command needs early backend dispatch.
+        backend = None
+        if args.action == 'migrate':
+            from aurora.database.cli_inspection import load_cli_database_config
+            try:
+                config, _ = load_cli_database_config(args.config)
+                backend = config.resolve(args.database).get_backend_name()
+            except (ValueError, OSError, KeyError) as exc:
+                parser.exit(1, f'aurora: {exc}\n')
+        if backend == 'mysql':
+            try:
+                from aurora.database.cli_unified_mysql_migrate import run_unified_mysql_migrate
+                report = run_unified_mysql_migrate(args)
+            except (ValueError, PermissionError, FileNotFoundError) as exc:
+                parser.exit(1, f'aurora: {exc}\n')
+            except Exception:
+                parser.exit(1, 'aurora: MySQL migration refused or outcome uncertain; inspect schema and history manually before retrying.\n')
+            print(json.dumps(report, indent=2, sort_keys=True))
+            return 0
+        if any((args.schema, args.table, args.column, args.apply, args.approve_review, args.approve_sql, args.confirm)):
+            parser.exit(1, 'aurora: MySQL-specific migration arguments cannot be used for SQLite.\n')
         from aurora.database.cli_sync import sync_database
         def confirm(text):
             print(f"Proposed changes:\n{text}\nPlan SHA-256: {args.approve}")
