@@ -34,12 +34,12 @@ class AppliedMigrationStatusTests(unittest.TestCase):
                 conn.execute('INSERT INTO _aurora_migration_history VALUES (?,?,?,?,?)', ('abc123', alias, '2026-10-12T12:00:00Z', 'before.sqlite3', 'def456'))
 
     def test_status_before_first_migration(self):
-        self.assertIn('Migration history: not initialized', self.call('status'))
+        self.assertIn('Migration history: not initialized', self.call('history'))
     def test_history_defaults_to_target_database(self):
         self.assertIn('Applied migrations: 0', self.call('history'))
     def test_status_applied_migration(self):
         self.add_history()
-        output = self.call('status')
+        output = self.call('history')
         self.assertIn('abc123', output)
         self.assertIn('before.sqlite3', output)
     def test_history_applied_migration(self):
@@ -47,20 +47,20 @@ class AppliedMigrationStatusTests(unittest.TestCase):
         self.assertIn('Applied migrations: 1', self.call('history'))
     def test_missing_database_does_not_create_file(self):
         with self.assertRaises(SystemExit):
-            self.call('status', '--database', 'analytics')
+            self.call('history', '--database', 'analytics')
         self.assertFalse((self.root/'missing.sqlite3').exists())
     def test_rejects_wrong_alias_history(self):
         self.add_history('analytics')
         with self.assertRaises(SystemExit):
-            self.call('status')
+            self.call('history')
     def test_rejects_incompatible_history_table(self):
         with closing(sqlite3.connect(self.db)) as conn:
             with conn:
                 conn.execute('CREATE TABLE _aurora_migration_history (id INTEGER)')
         with self.assertRaises(SystemExit):
-            self.call('status')
+            self.call('history')
     def test_connection_closed_on_windows(self):
-        self.call('status')
+        self.call('history')
         self.db.unlink()
         self.assertFalse(self.db.exists())
 

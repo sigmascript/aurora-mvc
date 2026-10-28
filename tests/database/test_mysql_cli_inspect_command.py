@@ -20,17 +20,18 @@ class MySQLCLIInspectCommandTests(unittest.TestCase):
             'analytics': {'url': 'mysql+pymysql://user:private_password@localhost/demo'},
         }}), encoding='utf-8')
 
-    def test_inspect_reports_metadata_without_compatibility_claim(self):
+    def test_plan_reports_metadata_limitations_without_compatibility_claim(self):
+        report = {'database_alias': 'analytics', 'schema_status': 'UNVERIFIED',
+                  'scope': 'selected models only', 'read_only': True,
+                  'executable': False, 'items': []}
         output = io.StringIO()
-        with patch('aurora.database.cli_inspection.inspect_mysql_details',
-                   return_value=(('records', 3, 1, 0),)) as inspect, \
+        with patch('aurora.database.cli_mysql_plan.plan_mysql_schema', return_value=report), \
              contextlib.redirect_stdout(output):
-            result = main(['db', 'inspect', '--config', str(self.config),
+            result = main(['db', 'plan', '--config', str(self.config),
                            '--database', 'analytics'])
         self.assertEqual(result, 0)
-        self.assertIn('records: 3 column(s), 1 index(es), 0 foreign key(s)', output.getvalue())
-        self.assertIn('model compatibility not verified', output.getvalue())
-        inspect.assert_called_once()
+        self.assertIn('Unselected tables and some MySQL features are not verified.', output.getvalue())
+        self.assertIn('Advisory only', output.getvalue())
 
 
 if __name__ == '__main__':

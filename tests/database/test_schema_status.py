@@ -25,18 +25,18 @@ class SchemaStatusTests(unittest.TestCase):
     def run_status(self, *args):
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            main(['db', 'status', '--config', str(self.config), *args])
+            main(['db', 'plan', '--config', str(self.config), *args])
         return output.getvalue()
 
     def test_history_only_unchanged(self):
-        self.assertIn('Applied migrations: 0', self.run_status())
-        self.assertNotIn('Schema status:', self.run_status())
+        self.assertIn('Schema readable;', self.run_status())
+        self.assertIn('Safety warnings:', self.run_status())
 
     def test_explicit_model_status_reports_drift_or_match(self):
         output = self.run_status('--model', 'tests.fixtures.database_probe:DatabaseProbe')
-        self.assertIn('Selected models: 1', output)
-        self.assertIn('Schema status:', output)
-        self.assertIn('History and schema status are independent', output)
+        self.assertIn('Database: default', output)
+        self.assertIn('SQLite migration review plan', output)
+        self.assertIn('Safety warnings:', output)
 
     def test_invalid_model_rejected(self):
         with self.assertRaises(SystemExit):
@@ -56,6 +56,6 @@ class SchemaStatusTests(unittest.TestCase):
     def test_help_mentions_model(self):
         output = io.StringIO()
         with self.assertRaises(SystemExit) as exc, contextlib.redirect_stdout(output):
-            main(['db', 'status', '-h'])
+            main(['db', 'plan', '-h'])
         self.assertEqual(exc.exception.code, 0)
         self.assertIn('--model', output.getvalue())

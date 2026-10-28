@@ -30,18 +30,20 @@ class DatabaseCLITests(unittest.TestCase):
         return output.getvalue()
 
     def test_list_aliases(self):
-        result = self.call('list')
-        self.assertIn('default (sqlite)', result)
-        self.assertIn('analytics (sqlite)', result)
+        sqlite3.connect(self.root / 'data.sqlite3').close()
+        result = self.call('plan')
+        self.assertIn('Database: default', result)
+        self.assertIn('Safety warnings:', result)
 
     def test_show_hides_url(self):
-        result = self.call('show', 'default')
-        self.assertIn('Alias: default', result)
+        sqlite3.connect(self.root / 'data.sqlite3').close()
+        result = self.call('plan')
+        self.assertIn('Database: default', result)
         self.assertNotIn('data.sqlite3', result)
 
     def test_show_unknown_alias_fails(self):
         with self.assertRaises(SystemExit) as error:
-            self.call('show', 'unknown')
+            self.call('plan', '--database', 'unknown')
         self.assertEqual(error.exception.code, 1)
 
     def test_check_existing_file(self):
@@ -51,34 +53,35 @@ class DatabaseCLITests(unittest.TestCase):
         with closing(sqlite3.connect(db_path)) as connection:
             with connection:
                 connection.execute('CREATE TABLE items (id INTEGER PRIMARY KEY)')
-        self.assertIn('1 user table(s)', self.call('check'))
+        self.assertIn('1 user table(s)', self.call('plan'))
         # The CLI must also release its read-only connection.
         db_path.unlink()
         self.assertFalse(db_path.exists())
 
     def test_check_missing_file_does_not_create(self):
         with self.assertRaises(SystemExit):
-            self.call('check', '--database', 'analytics')
+            self.call('plan', '--database', 'analytics')
         self.assertFalse((self.root / 'missing.sqlite3').exists())
 
     def test_invalid_config(self):
         self.config.write_text('{broken')
         with self.assertRaises(SystemExit):
-            self.call('list')
+            self.call('plan')
 
     def test_no_config(self):
         self.config.unlink()
         with self.assertRaises(SystemExit):
-            self.call('list')
+            self.call('plan')
 
     def test_unsupported_dialect(self):
         self.config.write_text(json.dumps({'databases': {'default': {'url': 'postgresql://example/db'}}}))
         with self.assertRaises(SystemExit):
-            self.call('check')
+            self.call('plan')
 
     def test_no_engine_creation_on_list(self):
+        sqlite3.connect(self.root / 'data.sqlite3').close()
         with patch('aurora.database.database.Database.__init__', side_effect=AssertionError('engine initialized')):
-            self.call('list')
+            self.call('plan')
 
 
 if __name__ == '__main__':

@@ -298,7 +298,7 @@ def create_project(name: str, *, directory: Path | None = None, mvc: bool = Fals
             "- No SQLite file or tables are created by scaffolding. Initialize "
             "your database explicitly before inspection or migrations.\n"
             "- `aurora db list` shows configured aliases; "
-            "`aurora db sync --dry-run` previews changes after setup.\n"
+            "`aurora db migrate --dry-run` previews changes after setup.\n"
             "- `migrations/` and `backups/` are prepared for reviewed operations.\n",
             encoding="utf-8",
         )
@@ -919,29 +919,23 @@ def main(argv: list[str] | None = None) -> int:
             registered.add_argument("--models-config", default="aurora_models.json", help="Model manifest JSON path")
     # Read-only named database commands; no model imports or schema writes.
     db_group = sub.add_parser("db", help="Inspect databases and safely migrate SQLite schemas; guarded MySQL migrations")
-    db_group.description = "Database commands: init creates selected model tables once; inspection and migration commands are separate."
+    db_group.description = "Database commands: init, plan, migrate, backup, restore, history."
     db_group.epilog = "First setup: aurora db init --config aurora_databases.json --models-config aurora_models.json"
     db_actions = db_group.add_subparsers(dest="action", required=True)
-    for verb in ("list", "show", "check", "inspect", "plan", "history", "status", "validate", "compat", "policy", "readiness"):
-        command = db_actions.add_parser(verb, help=("Read applied SQLite migrations (or --history-file for legacy store)" if verb == "history" else "Read applied migrations and optionally compare selected models" if verb == "status" else {"list": "List configured database aliases", "show": "Show configured database details", "check": "Check existing SQLite or MySQL schema readability", "inspect": "Inspect existing SQLite or MySQL schema", "plan": "Preview SQLite differences or advisory MySQL schema changes", "validate": "Review migration readiness", "compat": "Read-only MySQL model/schema compatibility", "policy": "Read-only MySQL migration safety policy review", "readiness": "Read-only MySQL execution readiness assessment"}.get(verb, f"Read-only database {verb}")))
-        command.add_argument("--config", default="aurora_databases.json", help="JSON database config path")
-        if verb == "show":
-            command.add_argument("alias", nargs="?", default="default")
-        if verb in ("check", "inspect", "plan", "history", "status", "validate", "compat", "policy", "readiness"):
-            command.add_argument("--database", default="default", help="Configured database alias")
-        if verb in ("plan", "validate", "status", "compat", "policy", "readiness"):
-            command.add_argument("--model", action="append", default=[], metavar="MODULE:CLASS",
-                                 help="Override project manifest with explicit Aurora models")
-            command.add_argument("--models-config", default="aurora_models.json", help="Explicit project model manifest JSON path")
-        if verb in ("policy", "readiness"):
-            command.add_argument("--format", choices=("text", "json"), default="text", help="Output format")
+    for verb in ("plan", "history"):
+        command = db_actions.add_parser(verb, help=(
+            "Read applied migration history" if verb == "history"
+            else "Inspect schema, plan changes, and report safety warnings (read-only)"))
+        command.add_argument("--config", default="aurora_databases.json")
+        command.add_argument("--database", default="default")
         if verb == "plan":
-            command.add_argument("--explain", action="store_true", help="Explain classifications and reasons (read-only)")
-            command.add_argument("--format", choices=("text", "json"), default="text", help="Output format (default: text)")
-            command.add_argument("--check", action="store_true", help="CI check: return exit code 2 if schema drift is detected")
-        if verb == "history":
-            command.add_argument("--history-file",
-                                 help="Optional legacy dedicated history SQLite file; otherwise reads applied migrations from target database")
+            command.add_argument("--model", action="append", default=[], metavar="MODULE:CLASS")
+            command.add_argument("--models-config", default="aurora_models.json")
+            command.add_argument("--explain", action="store_true")
+            command.add_argument("--format", choices=("text", "json"), default="text")
+            command.add_argument("--check", action="store_true")
+        else:
+            command.add_argument("--history-file", help="Optional legacy history SQLite file")
     for verb in ("backup", "restore"):
         command = db_actions.add_parser(verb, help=("Create a verified SQLite or MySQL backup" if verb == "backup" else "Guided SQLite recovery or guarded MySQL staging restore"))
         command.add_argument("--config", default="aurora_databases.json")
@@ -976,32 +970,7 @@ def main(argv: list[str] | None = None) -> int:
     init.add_argument("--database", default="default", help="Configured database alias")
     init.add_argument("--model", action="append", default=[], metavar="MODULE:CLASS", help="Explicit Aurora model; repeat as needed")
     init.add_argument("--models-config", default="aurora_models.json", help="Explicit model manifest JSON path")
-    mysql_table = db_actions.add_parser(
-        'mysql-create-table', help='Review or explicitly apply one guarded MySQL CREATE TABLE'
-    )
-    mysql_table.add_argument('--config', default='aurora_databases.json')
-    mysql_table.add_argument('--database', required=True, help='Explicit configured MySQL alias')
-    mysql_table.add_argument('--schema', required=True, help='Exact selected MySQL schema')
-    mysql_table.add_argument('--table', required=True)
-    mysql_table.add_argument('--model', required=True, metavar='MODULE:CLASS')
-    mysql_table.add_argument('--apply', action='store_true', help='Execute approved DDL (writes database)')
-    mysql_table.add_argument('--approve-review', help='Exact reviewed SHA-256')
-    mysql_table.add_argument('--approve-sql', help='Exact reviewed SQL SHA-256')
-    mysql_table.add_argument('--confirm', help='Must be APPLY when --apply is used')
-    mysql_column = db_actions.add_parser(
-        'mysql-add-column', help='Review or explicitly apply one guarded MySQL nullable ADD COLUMN'
-    )
-    mysql_column.add_argument('--config', default='aurora_databases.json')
-    mysql_column.add_argument('--database', required=True, help='Explicit configured MySQL alias')
-    mysql_column.add_argument('--schema', required=True, help='Exact selected MySQL schema')
-    mysql_column.add_argument('--table', required=True)
-    mysql_column.add_argument('--model', required=True, metavar='MODULE:CLASS')
-    mysql_column.add_argument('--column', required=True)
-    mysql_column.add_argument('--apply', action='store_true', help='Execute approved DDL (writes database)')
-    mysql_column.add_argument('--approve-review', help='Exact reviewed history SHA-256')
-    mysql_column.add_argument('--approve-sql', help='Exact reviewed SQL SHA-256')
-    mysql_column.add_argument('--confirm', help='Must be APPLY when --apply is used')
-    sync = db_actions.add_parser('migrate', aliases=['sync', 's'], help='Preview/apply SQLite migrations or one guarded MySQL operation')
+    sync = db_actions.add_parser('migrate', help='Preview/apply SQLite migrations or one guarded MySQL operation')
     sync.add_argument('--config', default='aurora_databases.json', help='Database configuration JSON path')
     sync.add_argument('--database', default='default', help='Configured database alias (default: default)')
     sync.add_argument('--model', action='append', metavar='MODULE:CLASS', help='Explicit trusted Aurora model; repeat for multiple models')
@@ -1021,22 +990,6 @@ def main(argv: list[str] | None = None) -> int:
     sync.add_argument('--approve-review', help='Exact MySQL review SHA-256')
     sync.add_argument('--approve-sql', help='Exact MySQL SQL SHA-256')
     sync.add_argument('--confirm', help='Must be APPLY for MySQL execution')
-    migration_group = db_actions.add_parser("migration", help="Create/show reviews or apply approved SQLite migrations")
-    migration_actions = migration_group.add_subparsers(dest="migration_action", required=True)
-    create = migration_actions.add_parser("create", help="Save an advisory JSON review (no SQL)")
-    create.add_argument("--config", default="aurora_databases.json")
-    create.add_argument("--database", default="default")
-    create.add_argument("--model", action="append", default=[], metavar="MODULE:CLASS")
-    create.add_argument("--models-config", default="aurora_models.json", help="Explicit project model manifest JSON path")
-    create.add_argument("--name", required=True, help="New review filename stem")
-    create.add_argument("--output-dir", default="migrations", help="Existing output directory")
-    show_review_cmd = migration_actions.add_parser("show", help="Verify and display a review JSON file")
-    show_review_cmd.add_argument("path")
-    apply_cmd = migration_actions.add_parser("apply", help="Apply approved SQLite additive review (WRITES DATABASE)")
-    apply_cmd.add_argument("path", help="Existing reviewed JSON file")
-    apply_cmd.add_argument("--config", default="aurora_databases.json")
-    apply_cmd.add_argument("--approve", required=True, help="Exact plan SHA-256 shown by migration show")
-    apply_cmd.add_argument("--backup", required=True, help="New SQLite backup path (must not exist)")
     # Destructive operations remain deliberately unavailable.
     run = sub.add_parser("run", help="Run an ASGI application with Uvicorn")
     run.add_argument("application", nargs="?", default="app:app", help="ASGI import path (default: app:app); run from the project directory")
@@ -1049,44 +1002,11 @@ def main(argv: list[str] | None = None) -> int:
     # Restrict this to commands that load project models; help and read-only
     # database listing/inspection do not need to change import resolution.
     if args.command == "db" and args.action in (
-        "init", "plan", "validate", "status", "migrate", "sync", "s", "migration", "compat", "policy", "mysql-add-column", "mysql-create-table"
+        "init", "plan", "migrate"
     ):
         project_dir = str(Path.cwd().resolve())
         if project_dir not in sys.path:
             sys.path.insert(0, project_dir)
-    if args.command == 'db' and args.action == 'mysql-create-table':
-        from aurora.database.cli_mysql_create_table import run_mysql_create_table
-        try:
-            report = run_mysql_create_table(
-                config_path=args.config, alias=args.database, schema=args.schema,
-                table=args.table, model=args.model, apply=args.apply,
-                approved_review=args.approve_review, approved_sql=args.approve_sql,
-                confirmation=args.confirm,
-            )
-        except Exception as exc:
-            if isinstance(exc, (ValueError, PermissionError, FileNotFoundError)):
-                parser.exit(1, f'aurora: {exc}\n')
-            parser.exit(1, 'aurora: MySQL migration refused or outcome uncertain; '
-                           'inspect schema and history manually before retrying.\n')
-        print(json.dumps(report, indent=2, sort_keys=True))
-        return 0
-    if args.command == 'db' and args.action == 'mysql-add-column':
-        from aurora.database.cli_mysql_add_column import run_mysql_add_column
-        try:
-            report = run_mysql_add_column(
-                config_path=args.config, alias=args.database, schema=args.schema,
-                table=args.table, model=args.model, column=args.column,
-                apply=args.apply, approved_review=args.approve_review,
-                approved_sql=args.approve_sql, confirmation=args.confirm,
-            )
-        except Exception as exc:
-            # Do not expose connection URLs, credentials, or DBAPI exception details.
-            if isinstance(exc, (ValueError, PermissionError, FileNotFoundError)):
-                parser.exit(1, f'aurora: {exc}\n')
-            parser.exit(1, 'aurora: MySQL migration refused or outcome uncertain; '
-                           'inspect the selected schema and history manually before retrying.\n')
-        print(json.dumps(report, indent=2, sort_keys=True))
-        return 0
     if args.command == "db" and args.action == "init":
         if os.environ.get("AURORA_ENV", "development").lower() == "production":
             parser.exit(1, "aurora: Refusing to initialize a database in production environment.\n")
@@ -1103,17 +1023,13 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(f"Database: {args.database}\nDatabase initialized successfully.")
         return 0
-    if args.command == 'db' and args.action in ('migrate', 'sync', 's'):
-        # Preserve the legacy sync/s entry points and their CI report contract.
-        # Only the unified migrate command needs early backend dispatch.
-        backend = None
-        if args.action == 'migrate':
-            from aurora.database.cli_inspection import load_cli_database_config
-            try:
-                config, _ = load_cli_database_config(args.config)
-                backend = config.resolve(args.database).get_backend_name()
-            except (ValueError, OSError, KeyError) as exc:
-                parser.exit(1, f'aurora: {exc}\n')
+    if args.command == 'db' and args.action == 'migrate':
+        from aurora.database.cli_inspection import load_cli_database_config
+        try:
+            config, _ = load_cli_database_config(args.config)
+            backend = config.resolve(args.database).get_backend_name()
+        except (ValueError, OSError, KeyError) as exc:
+            parser.exit(1, f'aurora: {exc}\n')
         if backend == 'mysql':
             try:
                 from aurora.database.cli_unified_mysql_migrate import run_unified_mysql_migrate
@@ -1178,23 +1094,6 @@ def main(argv: list[str] | None = None) -> int:
         except (ValueError, OSError, ImportError, AttributeError, __import__('sqlite3').Error) as exc:
             parser.exit(1, f"aurora: {exc}\n")
         return 0
-    if args.command == "db" and args.action == "migration" and args.migration_action == "apply":
-        from aurora.database.sqlite_migration_executor import apply_create_tables
-        try:
-            manifest, tables = apply_create_tables(args.path, config_path=args.config,
-                approval=args.approve, backup_path=args.backup)
-            print(f"Migration applied: {len(tables)} operation(s). Backup: {manifest.filename} ({manifest.sha256_hex})")
-        except (ValueError, OSError, ImportError, AttributeError, __import__('sqlite3').Error) as exc:
-            parser.exit(1, f"aurora: {exc}\n")
-        return 0
-    if args.command == "db" and args.action == "migration" and args.migration_action == "show":
-        from aurora.database.cli_review import show_review
-        try:
-            data, plan = show_review(args.path)
-            print(f"Database: {data['database_alias']}\nPlan SHA-256: {data['plan_sha256']}\n{plan.format_text()}\nExecution disabled. This command only displays the review; apply separately with explicit approval and backup.")
-        except (ValueError, OSError, UnicodeError, __import__('json').JSONDecodeError) as exc:
-            parser.exit(1, f"aurora: {exc}\n")
-        return 0
     if args.command == "db" and args.action in ("backup", "restore"):
         from aurora.database.cli_recovery import backup_database, restore_database
         try:
@@ -1254,17 +1153,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         try:
             config, base_dir = load_cli_database_config(args.config)
-            if args.action == "list":
-                for alias in config.aliases():
-                    info = describe_database(config, alias)
-                    print(f"{alias} ({info['dialect']})")
-            elif args.action == "show":
-                info = describe_database(config, args.alias)
-                print(f"Alias: {info['alias']}\nDialect: {info['dialect']}\nDriver: {info['driver']}")
-            elif args.action == "check":
-                count = inspect_database(config, args.database, base_dir=base_dir)
-                print(f"Database: {args.database}\nSchema readable; {count} user table(s).")
-            elif (args.action == "plan" and not args.model
+            if (args.action == "plan" and not args.model
                   and config.resolve(args.database).get_backend_name() == "sqlite"
                   and not Path(args.models_config).expanduser().is_file()):
                 # Preserve model-free schema inspection when no manifest exists.
@@ -1291,6 +1180,13 @@ def main(argv: list[str] | None = None) -> int:
                     config, args.database, model_refs=args.model,
                     models_config=args.models_config,
                 )
+                from aurora.database.cli_mysql_policy import review_mysql_plan
+                from aurora.database.cli_mysql_readiness import assess_mysql_policy
+                policy = review_mysql_plan(report)
+                readiness = assess_mysql_policy(policy)
+                report = dict(report)
+                report['safety_policy'] = policy
+                report['readiness'] = readiness
                 if args.format == 'json':
                     print(__import__('json').dumps(report, indent=2, sort_keys=True))
                 else:
@@ -1304,70 +1200,16 @@ def main(argv: list[str] | None = None) -> int:
                         print(f"  [{item['policy']}] {item['detail']}")
                     if not report['items']:
                         print("  No classified differences among selected models.")
-                    print("Advisory only; no executable SQL, approvals, or MySQL migrations.")
+                    for decision in policy['decisions']:
+                        print(f"  [{decision['decision']}] {decision['detail']}: {decision['reason']}")
+                    for reason in readiness['blocking_reasons']:
+                        print(f"  [READINESS] {reason}")
+                    print("Advisory only; no executable SQL or approvals.")
                     print("Unselected tables and some MySQL features are not verified.")
                 if args.check:
                     return 2 if report['schema_status'] == 'DRIFT' else 3 if report['schema_status'] == 'UNVERIFIED' else 0
                 return 0
-            elif args.action == "policy":
-                if config.resolve(args.database).get_backend_name() != "mysql":
-                    raise ValueError("db policy supports MySQL aliases only")
-                from aurora.database.cli_mysql_policy import review_mysql_schema
-                report = review_mysql_schema(config, args.database, model_refs=args.model,
-                                             models_config=args.models_config)
-                if args.format == "json":
-                    print(__import__("json").dumps(report, indent=2, sort_keys=True))
-                else:
-                    print(f"Database: {args.database}\nMySQL policy review: {report['schema_status']}")
-                    for item in report["decisions"]:
-                        print(f"  {item['category']} [{item['decision']}]: {item['detail']}")
-                    if not report["decisions"]:
-                        print("  No classified changes." if not report["requires_review"] else "  Incomplete plan; manual review required.")
-                    print(report["warning"])
-                return 2 if report["schema_status"] == "DRIFT" else 3 if report["schema_status"] == "UNVERIFIED" else 0
-            elif args.action == "readiness":
-                if config.resolve(args.database).get_backend_name() != "mysql":
-                    raise ValueError("db readiness supports MySQL aliases only")
-                from aurora.database.cli_mysql_readiness import assess_mysql_schema
-                report = assess_mysql_schema(config, args.database, model_refs=args.model,
-                                             models_config=args.models_config)
-                if args.format == "json":
-                    print(__import__("json").dumps(report, indent=2, sort_keys=True))
-                else:
-                    print(f"Database: {args.database}\nMySQL readiness: NOT EXECUTABLE ({report['schema_status']})")
-                    print(f"Candidates for future review: {report['candidate_count']}")
-                    for reason in report['blocking_reasons']:
-                        print(f"  BLOCKED: {reason}")
-                    print(report['warning'])
-                return 2 if report['schema_status'] == 'DRIFT' else 3 if report['schema_status'] == 'UNVERIFIED' else 0
-            elif args.action == "compat":
-                from aurora.database.cli_mysql_compat import check_mysql_compatibility
-                status, drift, unverified = check_mysql_compatibility(
-                    config, args.database, model_refs=args.model,
-                    models_config=args.models_config,
-                )
-                print(f"Database: {args.database}\nSchema compatibility: {status} (selected models only)")
-                for message in drift:
-                    print(f"  DRIFT: {message}")
-                for message in unverified:
-                    print(f"  UNVERIFIED: {message}")
-                print("Read-only comparison; unselected tables and some MySQL features are not verified.")
-                return 2 if status == 'DRIFT' else 3 if status == 'UNVERIFIED' else 0
-            elif args.action == "inspect":
-                if config.resolve(args.database).get_backend_name() == "mysql":
-                    details = inspect_mysql_details(config, args.database)
-                    print(f"Database: {args.database}\nTables: {len(details)}")
-                    for name, columns, indexes, foreign_keys in details:
-                        print(f"  {name}: {columns} column(s), "
-                              f"{indexes} index(es), {foreign_keys} foreign key(s)")
-                    print("Read-only metadata; model compatibility not verified.")
-                else:
-                    schema = inspect_database_details(config, args.database, base_dir=base_dir)
-                    print(f"Database: {args.database}\nTables: {len(schema.tables)}")
-                    for table in schema.tables:
-                        print(f"  {table.name}: {len(table.columns)} column(s), "
-                              f"{len(table.indexes)} index(es), {len(table.foreign_keys)} foreign key(s)")
-            elif args.action in ("plan", "validate") or (args.action == "migration" and args.migration_action == "create"):
+            elif args.action == "plan":
                 from aurora.database.cli_model_manifest import select_model_refs
                 selected_refs = select_model_refs(explicit=args.model, database=args.database, manifest=args.models_config)
                 import importlib
@@ -1406,19 +1248,7 @@ def main(argv: list[str] | None = None) -> int:
                     if args.explain:
                         from aurora.database.cli_diagnostics import explain_plan
                         print(explain_plan(plan, models))
-                elif args.action == "validate":
-                    from aurora.database.cli_review import validate_plan
-                    review, readiness = validate_plan(plan)
-                    print(f"Database: {args.database}\n{review.format_text()}\n{readiness.format_text()}")
-                else:
-                    from aurora.database.cli_review import create_review
-                    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}", args.name):
-                        raise ValueError("Invalid migration review name")
-                    folder = Path(args.output_dir).expanduser()
-                    target = create_review(folder / (args.name + ".json"), alias=args.database,
-                                           models=selected_refs, plan=plan)
-                    print(f"Created NON-EXECUTABLE review: {target}")
-            elif args.action in ("history", "status") and (args.action == "status" or not args.history_file):
+            elif args.action == "history" and not args.history_file:
                 from aurora.database.cli_migration_status import read_applied_migrations
                 present, records = read_applied_migrations(config, args.database, base_dir=base_dir)
                 print(f"Database: {args.database}\nApplied migrations: {len(records)}")
@@ -1426,20 +1256,6 @@ def main(argv: list[str] | None = None) -> int:
                     print("Migration history: not initialized")
                 for digest, record_alias, applied_at, backup_name, backup_digest in records:
                     print(f"  {digest}: applied {applied_at}; backup {backup_name} (SHA-256: {backup_digest})")
-                if args.action == "status" and (args.model or Path(args.models_config).expanduser().is_file()):
-                    from aurora.database.cli_model_manifest import select_model_refs
-                    selected_refs = select_model_refs(explicit=args.model, database=args.database, manifest=args.models_config)
-                    from aurora.database.cli_schema_status import compare_selected_models
-                    plan = compare_selected_models(config, args.database, selected_refs, base_dir=base_dir)
-                    print(f"Selected models: {len(selected_refs)}")
-                    if plan.is_empty:
-                        print("Schema status: MATCH (selected models only)")
-                    else:
-                        print(f"Schema status: DRIFT ({len(plan.steps)} difference(s); selected models only)")
-                        for step in plan.steps:
-                            location = step.table + ('.' + step.column if step.column else '')
-                            print(f"  [{step.risk.upper()}] {step.kind}: {location}")
-                    print("History and schema status are independent; neither proves the other.")
             elif args.action == "history":
                 config.resolve(args.database)  # Legacy separate history store, explicit opt-in.
                 history_path = Path(args.history_file).expanduser()

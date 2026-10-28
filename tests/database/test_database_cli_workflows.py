@@ -29,9 +29,9 @@ class DatabaseCLIWorkflowTests(unittest.TestCase):
         return stream.getvalue()
 
     def test_inspect_existing(self):
-        self.assertIn('items: 2 column(s)', self.call('inspect'))
+        self.assertIn('1 user table(s)', self.call('plan'))
     def test_inspect_missing_does_not_create(self):
-        with self.assertRaises(SystemExit): self.call('inspect', '--database', 'analytics')
+        with self.assertRaises(SystemExit): self.call('plan', '--database', 'analytics')
         self.assertFalse((self.root/'missing.sqlite3').exists())
     def test_plan_without_models_inspects_only(self):
         output = self.call('plan')
@@ -54,10 +54,10 @@ class DatabaseCLIWorkflowTests(unittest.TestCase):
     def test_history_unknown_alias(self):
         with self.assertRaises(SystemExit): self.call('history', '--database', 'unknown', '--history-file', 'audit.sqlite3')
     def test_inspect_closes_file(self):
-        self.call('inspect')
+        self.call('plan')
         (self.root/'main.sqlite3').unlink()
     def test_no_engine_for_inspection(self):
         with patch('aurora.database.database.Database.__init__', side_effect=AssertionError('engine created')):
-            self.call('inspect')
+            self.call('plan')
 
 if __name__ == '__main__': unittest.main()

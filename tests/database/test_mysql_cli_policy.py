@@ -4,6 +4,7 @@ import io
 import json
 import unittest
 from unittest.mock import MagicMock, patch
+from pathlib import Path
 
 from aurora.cli import main
 from aurora.database.cli_mysql_policy import review_mysql_plan
@@ -36,27 +37,31 @@ class MySQLPolicyTests(unittest.TestCase):
                                     'executable': False, 'items': []})
         self.assertTrue(result['requires_review'])
 
-    def test_cli_json_is_read_only(self):
+    def test_consolidated_plan_is_read_only(self):
         config = MagicMock()
         config.resolve.return_value.get_backend_name.return_value = 'mysql'
         plan = {'database_alias': 'analytics', 'schema_status': 'MATCH',
-                'scope': 'selected models only', 'read_only': True, 'executable': False, 'items': []}
+                'scope': 'selected models only', 'read_only': True,
+                'executable': False, 'items': []}
+        output = io.StringIO()
         with patch('aurora.database.cli_inspection.load_cli_database_config', return_value=(config, object())), \
-             patch('aurora.database.cli_mysql_policy.plan_mysql_schema', return_value=plan):
-            output = io.StringIO()
-            with contextlib.redirect_stdout(output):
-                code = main(['db', 'policy', '--database', 'analytics', '--format', 'json'])
+             patch('aurora.database.cli_mysql_plan.plan_mysql_schema', return_value=plan), \
+             contextlib.redirect_stdout(output):
+            code = main(['db', 'plan', '--database', 'analytics', '--format', 'json'])
         self.assertEqual(code, 0)
-        self.assertFalse(json.loads(output.getvalue())['execution_available'])
+        report = json.loads(output.getvalue())
+        self.assertFalse(report['readiness']['ready_to_execute'])
+        self.assertFalse(report['safety_policy']['execution_available'])
+        self.assertFalse(report['executable'])
 
-    def test_cli_rejects_sqlite(self):
+    def test_sqlite_plan_does_not_invoke_mysql_planner(self):
         config = MagicMock()
         config.resolve.return_value.get_backend_name.return_value = 'sqlite'
-        with patch('aurora.database.cli_inspection.load_cli_database_config', return_value=(config, object())), \
-             contextlib.redirect_stderr(io.StringIO()):
-            with self.assertRaises(SystemExit) as result:
-                main(['db', 'policy'])
-        self.assertEqual(result.exception.code, 1)
+        with patch('aurora.database.cli_inspection.load_cli_database_config', return_value=(config, Path('.'))), \
+             patch('aurora.database.cli_mysql_plan.plan_mysql_schema', side_effect=AssertionError('MySQL planner invoked')), \
+             patch('aurora.database.cli_inspection.inspect_database', return_value=0), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main(['db', 'plan']), 0)
 
 
 if __name__ == '__main__':
