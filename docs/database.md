@@ -234,3 +234,21 @@ Stop writes to the selected schema. Using a separate read-only connection and an
 ### Existing MySQL read-only tools remain separate
 
 `aurora db compat`, `policy`, `readiness`, and advisory `plan` remain read-only. Their earlier Alpha 2 / pre-execution descriptions above document the history of the design and **do not** override the Alpha 3 execution workflow. SQLite `sync` and `migration apply` remain separate backend-specific workflows.
+
+
+## Environment-based database URLs (Alpha 4 Batch 3)
+
+Database aliases accept **exactly one** of `url` and `url_env`. Existing `url`
+configurations remain compatible. With `url_env`, the environment variable must
+exist and contain a valid supported SQLAlchemy URL before configuration loads:
+
+```json
+{"databases": {"default": {"url_env": "AURORA_DATABASE_URL"}}}
+```
+
+For example, set `AURORA_DATABASE_URL=sqlite:///app.sqlite3` in the process
+environment. Environment variables are read when `DatabaseConfiguration` is
+constructed, not on every `resolve()` call. Missing or empty variables, invalid
+names, unsupported drivers, and ambiguous `url` + `url_env` entries fail closed.
+Do not commit credentials, print complete URLs, or put passwords in command history.
+This is application configuration, independent of MySQL CLI login-path profiles.

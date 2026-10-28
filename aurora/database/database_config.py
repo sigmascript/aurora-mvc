@@ -1,6 +1,7 @@
 """Validated, immutable named database URLs without opening connections."""
 
 from collections.abc import Mapping
+import os
 import re
 from types import MappingProxyType
 
@@ -8,6 +9,7 @@ from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import ArgumentError
 
 
+_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _ALIAS = re.compile(r"^[a-z][a-z0-9_]*$")
 _SUPPORTED_DRIVERS = frozenset({"sqlite", "sqlite+pysqlite", "mysql+pymysql"})
 
@@ -15,7 +17,8 @@ _SUPPORTED_DRIVERS = frozenset({"sqlite", "sqlite+pysqlite", "mysql+pymysql"})
 class DatabaseConfiguration:
     """Named SQLAlchemy URLs with an explicit default database.
 
-    Supports SQLite and MySQL via PyMySQL. Configuration is I/O-free;
+    Supports SQLite and MySQL via PyMySQL. Environment values are resolved
+    once at construction; configuration never opens database connections.
     credentials are never included in Aurora validation errors or reprs.
     """
 
@@ -29,10 +32,18 @@ class DatabaseConfiguration:
         for alias, entry in databases.items():
             if not isinstance(alias, str) or not _ALIAS.fullmatch(alias):
                 raise ValueError("Database aliases must be lowercase identifiers")
-            if not isinstance(entry, Mapping) or set(entry) != {"url"}:
-                raise ValueError(f"Database '{alias}' requires exactly a 'url' setting")
+            if not isinstance(entry, Mapping) or len(entry) != 1 or not (set(entry) == {"url"} or set(entry) == {"url_env"}):
+                raise ValueError(f"Database '{alias}' requires exactly one of 'url' or 'url_env'")
 
-            url = entry["url"]
+            if "url_env" in entry:
+                name = entry["url_env"]
+                if not isinstance(name, str) or not _ENV_NAME.fullmatch(name):
+                    raise ValueError(f"Database '{alias}' has an invalid environment variable name")
+                url = os.environ.get(name)
+                if url is None or not url.strip():
+                    raise ValueError(f"Database '{alias}' requires a nonempty environment variable '{name}'")
+            else:
+                url = entry["url"]
             if not isinstance(url, (str, URL)):
                 raise TypeError(f"Database '{alias}' URL must be a string or SQLAlchemy URL")
             if isinstance(url, str) and not url.strip():
