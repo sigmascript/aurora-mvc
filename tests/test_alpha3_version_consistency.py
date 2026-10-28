@@ -1,4 +1,4 @@
-"""Version consistency checks for the Alpha 3 development checkout."""
+"""Version consistency and release documentation checks."""
 
 from pathlib import Path
 import unittest
@@ -12,25 +12,28 @@ import aurora
 import aurora.core
 
 
-class Alpha3VersionConsistencyTests(unittest.TestCase):
-    """Verify package versions and development release documentation."""
+class VersionConsistencyTests(unittest.TestCase):
+    """Verify package versions and release documentation."""
 
-    def test_alpha3_versions_match(self):
+    def test_package_versions_match(self):
         root = Path(__file__).resolve().parents[1]
         project = tomllib.loads(
             (root / "pyproject.toml").read_text(encoding="utf-8")
         )
 
-        self.assertEqual(project["project"]["version"], "1.0.0a3")
-        self.assertEqual(aurora.__version__, "1.0.0a3")
-        self.assertEqual(aurora.core.__version__, "1.0.0a3")
+        expected_version = project["project"]["version"]
 
-    def test_readme_distinguishes_published_from_development(self):
+        self.assertEqual(aurora.__version__, expected_version)
+        self.assertEqual(aurora.core.__version__, expected_version)
+
+    def test_readme_identifies_checkout_version(self):
         root = Path(__file__).resolve().parents[1]
         readme = (root / "README.md").read_text(encoding="utf-8")
 
-        self.assertIn("`1.0.0a3` is published", readme)
-        self.assertIn("`1.0.0a4` is under development", readme)
+        project = tomllib.loads(
+            (root / "pyproject.toml").read_text(encoding="utf-8")
+        )
+        self.assertIn(f"`{project['project']['version']}`", readme)
 
 
 if __name__ == "__main__":

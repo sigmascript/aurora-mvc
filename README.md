@@ -44,11 +44,13 @@ Using `python -m aurora` from the checkout helps distinguish local development c
 - Database configuration and model registration using SQLAlchemy
 - CLI commands for scaffolding, development, and guarded database workflows
 
-The precise availability and limitations of database operations depend on the backend and release version. **Alpha 3** includes guarded MySQL migration review and explicitly approved execution for one `CREATE TABLE` or one nullable `ADD COLUMN` at a time. This is not a general-purpose MySQL migration engine, and it is subject to the published Alpha 3 safety contract. See the [database safety guide](docs/database.md).
+The precise availability and limitations of database operations depend on the backend and release version. The Alpha 4 development checkout exposes six guarded database commands: `init`, `plan`, `migrate`, `backup`, `restore`, and `history`. Backend support and approval requirements vary. See the [database safety guide](docs/database.md).
 
-## Alpha 3 MySQL migrations
+## MySQL migration safety
 
-Install the optional MySQL driver with `python -m pip install -e ".[mysql,dev]"`, configure an explicit MySQL alias and schema, and consult the [MySQL Alpha 3 guide](docs/database.md#mysql-alpha-3-guarded-create-table-and-add-column-development-only) before proceeding. `aurora db mysql-create-table` and `aurora db mysql-add-column` default to review mode; writing requires the explicit migration gate, exact review and SQL digests, `--apply`, and `--confirm APPLY`. MySQL DDL may commit even if subsequent history recording fails. **Never automatically retry an uncertain migration.**
+The published Alpha 3 package provided separate `aurora db mysql-create-table` and `aurora db mysql-add-column` commands. Those are historical Alpha 3 interfaces and are **not available** in the Alpha 4 development CLI.
+
+Alpha 4 routes supported guarded operations through `aurora db plan` and `aurora db migrate`. MySQL support remains narrowly scoped to explicitly reviewed operations, including supported `CREATE TABLE` and nullable `ADD COLUMN` cases. Consult the [database safety guide](docs/database.md) for the applicable safety gates and limitations. MySQL DDL can commit even if later verification or history recording fails. **Never automatically retry a migration with an uncertain outcome.**
 
 ## Documentation
 
@@ -73,7 +75,7 @@ python -m pip install -e ".[dev]"
 Run the test suite:
 
 ```bash
-python -m unittest discover -s tests
+python -m pytest -q
 ```
 
 Some live database integration tests are opt-in and require explicitly configured disposable databases. Never use a production database for integration tests.
