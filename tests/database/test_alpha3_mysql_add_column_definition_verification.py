@@ -38,3 +38,30 @@ def test_accepts_exact_nullable_column_definition():
         inspector.return_value.get_columns.assert_called_once_with(
             "a3_nullable_column_probe", schema="sandbox"
         )
+
+
+@pytest.mark.parametrize("collation", ["utf8mb4_unicode_ci", "utf8mb4_0900_ai_ci"])
+def test_accepts_inherited_mysql_varchar_collation(collation):
+    with patch("aurora.database.mysql_add_column_executor.inspect") as inspector:
+        inspector.return_value.get_columns.return_value = [
+            {"name": "description", "type": VARCHAR(120, collation=collation), "nullable": True}
+        ]
+        _verify_applied_column_definition(Mock(), _proposal())
+
+
+def test_rejects_wrong_length_even_with_inherited_collation():
+    with patch("aurora.database.mysql_add_column_executor.inspect") as inspector:
+        inspector.return_value.get_columns.return_value = [
+            {"name": "description", "type": VARCHAR(121, collation="utf8mb4_unicode_ci"), "nullable": True}
+        ]
+        with pytest.raises(RuntimeError, match="differs"):
+            _verify_applied_column_definition(Mock(), _proposal())
+
+
+def test_rejects_nonnullable_column_even_with_inherited_collation():
+    with patch("aurora.database.mysql_add_column_executor.inspect") as inspector:
+        inspector.return_value.get_columns.return_value = [
+            {"name": "description", "type": VARCHAR(120, collation="utf8mb4_unicode_ci"), "nullable": False}
+        ]
+        with pytest.raises(RuntimeError, match="differs"):
+            _verify_applied_column_definition(Mock(), _proposal())

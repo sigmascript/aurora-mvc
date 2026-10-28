@@ -46,6 +46,22 @@ def _verify_applied_column_definition(connection: Connection, proposal: MySQLAdd
     actual = matches[0]
     expected_type = expected.type.compile(dialect=mysql.dialect()).upper()
     actual_type = actual["type"].compile(dialect=mysql.dialect()).upper()
+    # MySQL reflection may report the inherited column collation even when
+    # the model did not explicitly request one. This is not a type mismatch.
+    # Keep explicit collation, type, and length requirements strict.
+    expected_collation = getattr(expected.type, "collation", None)
+    reflected_type = actual["type"]
+    reflected_collation = getattr(reflected_type, "collation", None)
+    if (
+        expected_collation is None
+        and reflected_collation is not None
+        and isinstance(reflected_type, mysql.VARCHAR)
+        and expected_type.startswith("VARCHAR(")
+    ):
+        suffix = " COLLATE " + reflected_collation.upper()
+        if actual_type.endswith(suffix):
+            actual_type = actual_type[:-len(suffix)]
+
     if actual_type != expected_type or actual["nullable"] is not True:
         raise RuntimeError("Added column definition differs from approved model")
 
