@@ -1,6 +1,6 @@
 # Database operations and safety
 
-Aurora MVC supports SQLite and guarded MySQL database workflows. This document describes the Alpha 4 **six-command public CLI**. Use `aurora db COMMAND --help` for the complete supported flags.
+Aurora MVC supports SQLite and guarded MySQL database workflows. This document describes the **six-command public CLI** in the unreleased `1.0.0a5` checkout. These commands still use the existing SQLAlchemy-backed database implementation; experimental `aurora.aurorasql` is separate and is not wired into this CLI. Use `aurora db COMMAND --help` for the complete supported flags.
 
 ## Configuration
 

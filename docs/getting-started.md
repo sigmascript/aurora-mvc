@@ -1,6 +1,6 @@
 # Getting started
 
-**Status:** Aurora MVC `1.0.0a1` is published on PyPI. These instructions target the current development checkout, which contains additional unreleased Alpha 2 functionality.
+**Status:** These instructions target the unreleased Aurora MVC `1.0.0a5` development checkout. The latest published version identified by the repository documentation is `1.0.0a3`; check PyPI for current publication status. AuroraSQL is experimental and opt-in; the existing database CLI remains unchanged.
 
 ## Requirements and installation
 
@@ -32,7 +32,7 @@ The `--mvc` generator includes `aurora_databases.json` (a default SQLite configu
 
 ```bash
 aurora db init --model models.users:Users
-aurora db status --model models.users:Users
+aurora db plan --model models.users:Users
 ```
 
 To avoid repeating `--model`, register its import reference in the manifest:
