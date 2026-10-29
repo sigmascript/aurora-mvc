@@ -43,17 +43,17 @@ class ModelMigrationJourneyTests(unittest.TestCase):
 
     def test_complete_project_model_migration_journey(self):
         self.call('model', 'add', 'Product')
-        self.assertTrue((self.root / 'models' / 'product.py').is_file())
-        self.call('model', 'register', 'journey.models.product:Product')
-        self.assertIn('journey.models.product:Product', self.call('model', 'registered'))
+        self.assertTrue((self.root / 'models' / 'Product.py').is_file())
+        self.call('model', 'register', 'journey.models.Product:Product')
+        self.assertIn('journey.models.Product:Product', self.call('model', 'registered'))
         self.assertEqual(json.loads((self.root / 'aurora_models.json').read_text())['databases']['default'],
-                         ['journey.models.product:Product'])
-        preview = self.call('db', 'sync', '--dry-run')
+                         ['journey.models.Product:Product'])
+        preview = self.call('db', 'migrate', '--dry-run')
         self.assertIn('CREATE TABLE', preview)
         digest = next(line.split(': ', 1)[1] for line in preview.splitlines() if line.startswith('Plan SHA-256: '))
         self.assertFalse((self.root / 'migrations' / 'create_product.json').exists())
         self.assertFalse((self.root / 'backups' / 'before_product.sqlite3').exists())
-        result = self.call('db', 'sync', '--approve', digest, '--name', 'create_product',
+        result = self.call('db', 'migrate', '--approve', digest, '--name', 'create_product',
                            '--backup', 'backups/before_product.sqlite3', input_text='APPLY')
         self.assertIn('Status: applied', result)
         self.assertTrue((self.root / 'migrations' / 'create_product.json').is_file())
@@ -61,16 +61,16 @@ class ModelMigrationJourneyTests(unittest.TestCase):
         with contextlib.closing(sqlite3.connect(self.root / 'data.sqlite3')) as conn:
             self.assertIn('product', [row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")])
             self.assertEqual(conn.execute('SELECT note FROM preexisting WHERE id=1').fetchone(), ('keep me',))
-        self.assertIn('no_changes', self.call('db', 'sync', '--dry-run'))
-        self.assertIn('MATCH', self.call('db', 'status'))
+        self.assertIn('no_changes', self.call('db', 'migrate', '--dry-run'))
+        self.assertIn('No supported schema differences found', self.call('db', 'plan'))
 
     def test_declined_confirmation_creates_no_artifacts(self):
         self.call('model', 'add', 'Product')
-        self.call('model', 'register', 'journey.models.product:Product')
-        preview = self.call('db', 'sync', '--dry-run')
+        self.call('model', 'register', 'journey.models.Product:Product')
+        preview = self.call('db', 'migrate', '--dry-run')
         digest = next(line.split(': ', 1)[1] for line in preview.splitlines() if line.startswith('Plan SHA-256: '))
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
-            self.call('db', 'sync', '--approve', digest, '--name', 'declined',
+            self.call('db', 'migrate', '--approve', digest, '--name', 'declined',
                       '--backup', 'backups/declined.sqlite3', input_text='NO')
         self.assertEqual(caught.exception.code, 1)
         self.assertFalse((self.root / 'migrations' / 'declined.json').exists())
@@ -78,9 +78,9 @@ class ModelMigrationJourneyTests(unittest.TestCase):
 
     def test_manifest_registration_is_idempotent(self):
         self.call('model', 'add', 'Product')
-        self.call('model', 'register', 'journey.models.product:Product')
-        self.call('model', 'register', 'journey.models.product:Product')
-        self.assertEqual(self.call('model', 'registered').count('journey.models.product:Product'), 1)
+        self.call('model', 'register', 'journey.models.Product:Product')
+        self.call('model', 'register', 'journey.models.Product:Product')
+        self.assertEqual(self.call('model', 'registered').count('journey.models.Product:Product'), 1)
 
 if __name__ == '__main__':
     unittest.main()

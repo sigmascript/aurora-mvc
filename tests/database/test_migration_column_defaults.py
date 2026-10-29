@@ -59,7 +59,7 @@ class DefaultColumnMigrationTests(unittest.TestCase):
         from contextlib import redirect_stdout
         stream=io.StringIO()
         with redirect_stdout(stream), self.assertRaises(SystemExit):
-            main(['db','sync','-h'])
+            main(['db','migrate','-h'])
         self.assertIn('APPLY still required', stream.getvalue())
 
 if __name__ == '__main__': unittest.main()

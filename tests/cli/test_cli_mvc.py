@@ -14,9 +14,9 @@ class TestMVCScaffold(unittest.TestCase):
     def test_mvc_files_and_concrete_controller(self):
         with tempfile.TemporaryDirectory() as temp:
             root = create_project('sample_mvc', directory=Path(temp), mvc=True)
-            self.assertTrue((root / 'controllers' / 'home.py').is_file())
+            self.assertTrue((root / 'controllers' / 'Home.py').is_file())
             self.assertTrue((root / 'views' / 'home.html').is_file())
-            self.assertIn('class Home(Controller)', (root / 'controllers' / 'home.py').read_text())
+            self.assertIn('class Home(Controller)', (root / 'controllers' / 'Home.py').read_text())
             self.assertIn('app.route("/", Home)', (root / 'app.py').read_text())
             self.assertFalse((root / 'services').exists())
 
@@ -31,7 +31,7 @@ class TestMVCScaffold(unittest.TestCase):
     def test_cli_new_mvc(self):
         with tempfile.TemporaryDirectory() as temp, patch('aurora.cli.Path.cwd', return_value=Path(temp)):
             self.assertEqual(main(['new', 'sample_mvc', '--mvc']), 0)
-            self.assertTrue((Path(temp) / 'sample_mvc' / 'controllers' / 'home.py').exists())
+            self.assertTrue((Path(temp) / 'sample_mvc' / 'controllers' / 'Home.py').exists())
 
     def test_mvc_refuses_overwrite(self):
         with tempfile.TemporaryDirectory() as temp:

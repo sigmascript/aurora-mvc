@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from importlib.util import find_spec
 from importlib.metadata import PackageNotFoundError, version
 import ast
 import os
@@ -29,7 +30,7 @@ _MVC_APP = '''"""{name} MVC application."""
 from pathlib import Path
 
 from aurora import Aurora
-from controllers.home import Home
+from controllers.Home import Home
 
 app = Aurora(views_directory=Path(__file__).resolve().parent / "views",
              statics_directory=Path(__file__).resolve().parent / "statics")
@@ -50,11 +51,15 @@ _MVC_LAYOUT = '''<!DOCTYPE html>
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Aurora MVC starter application">
     <title>{{% block title %}}Aurora MVC{{% endblock %}}</title>
     <link rel="stylesheet" href="/statics/css/site.css">
 </head>
 <body>
-    <main>
+    <header class="site-header">
+        <a class="brand" href="/">Aurora MVC</a>
+    </header>
+    <main id="main-content">
         {{% block content %}}{{% endblock %}}
     </main>
 </body>
@@ -67,9 +72,13 @@ _MVC_VIEW = '''{{% extends "layout.html" %}}
 {{% block title %}}{{{{ title }}}}{{% endblock %}}
 
 {{% block content %}}
-    <h1>{{{{ title }}}}</h1>
-    <p>Your Aurora MVC project is ready.</p>
-    {{{{ action_link("Aurora documentation", "https://auroramvc.com") }}}}
+    <section class="welcome" aria-labelledby="welcome-title">
+        <h1 id="welcome-title">{{{{ title }}}}</h1>
+        <p>Your Aurora MVC application is ready. Edit
+           <code>controllers/Home.py</code> and <code>views/home.html</code>
+           to build your first page.</p>
+        {{{{ action_link("Aurora documentation", "https://auroramvc.com") }}}}
+    </section>
 {{% endblock %}}
 '''
 
@@ -78,8 +87,8 @@ _MODULAR_APP = '''"""{name} modular MVC application."""
 from pathlib import Path
 
 from aurora import Aurora
-from apps.home.controllers.home import Home
-from apps.blog.controllers.blog import Blog
+from apps.home.controllers.Home import Home
+from apps.blog.controllers.Blog import Blog
 # aurora:imports
 
 ROOT = Path(__file__).resolve().parent
@@ -94,7 +103,7 @@ app = Aurora(
     statics_directory=ROOT / "statics",
 )
 app.route("/", Home)
-app.route("/blog", Blog)
+app.route("/blog/", Blog)
 # aurora:routes
 '''
 
@@ -121,11 +130,15 @@ _MODULAR_LAYOUT = '''<!DOCTYPE html>
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Aurora modular MVC starter application">
     <title>{{% block title %}}{{{{ title }}}}{{% endblock %}}</title>
     <link rel="stylesheet" href="/statics/css/site.css">
 </head>
 <body>
-    {{% include "navigation.html" %}}
+    <header class="site-header">
+        <a class="brand" href="/">Aurora MVC</a>
+        {{% include "navigation.html" %}}
+    </header>
     <main>
         {{% block content %}}{{% endblock %}}
     </main>
@@ -135,18 +148,24 @@ _MODULAR_LAYOUT = '''<!DOCTYPE html>
 
 _MODULAR_HOME_VIEW = '''{{% extends "layout.html" %}}
 
+{{% block title %}}{{{{ title }}}}{{% endblock %}}
+
 {{% block content %}}
     <h1>{{{{ title }}}}</h1>
-    <p>Your modular Aurora project is ready.</p>
+    <p>Your modular Aurora project is ready. Edit
+       <code>apps/home/controllers/Home.py</code> and
+       <code>apps/home/views/index.html</code> to get started.</p>
 {{% endblock %}}
 '''
 
 _MODULAR_BLOG_VIEW = '''{{% extends "layout.html" %}}
 {{% from "components.html" import action_link %}}
 
+{{% block title %}}{{{{ title }}}}{{% endblock %}}
+
 {{% block content %}}
     <h1>{{{{ title }}}}</h1>
-    <p>Your blog app is ready.</p>
+    <p>Your blog app is ready. Each app has its own controllers and views.</p>
     {{{{ action_link("Back to home", "/") }}}}
 {{% endblock %}}
 '''
@@ -160,13 +179,43 @@ _MVC_COMPONENTS = '''{% macro action_link(label, href) -%}
 
 _MODULAR_NAVIGATION = '''<nav aria-label="Main navigation">
     <a href="/">Home</a>
-    <a href="/blog">Blog</a>
+    <a href="/blog/">Blog</a>
 </nav>
 '''
 
 _MODULAR_COMPONENTS = '''{% macro action_link(label, href) -%}
     <a class="action-link" href="{{ href }}">{{ label }}</a>
 {%- endmacro %}
+'''
+
+
+_MVC_CSS = '''/* Aurora MVC starter: no external CSS dependencies. */
+:root { color-scheme: light; font-family: system-ui, sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; color: #17212b; background: #f7f9fc; line-height: 1.6; }
+.site-header { padding: 1rem max(1rem, calc((100% - 56rem) / 2)); background: #fff; border-bottom: 1px solid #dce3eb; }
+.brand { color: #173e73; font-weight: 700; text-decoration: none; }
+main { max-width: 56rem; margin: 3rem auto; padding: 0 1rem; }
+.welcome { padding: 2rem; background: #fff; border: 1px solid #dce3eb; border-radius: .75rem; }
+h1 { line-height: 1.2; }
+.action-link { display: inline-block; padding: .6rem 1rem; background: #173e73; color: #fff; border-radius: .4rem; text-decoration: none; }
+a:focus-visible { outline: 3px solid #ffab40; outline-offset: 3px; }
+@media (max-width: 40rem) { main { margin: 1.5rem auto; } .welcome { padding: 1.25rem; } }
+'''
+
+_MODULAR_CSS = '''/* Aurora modular starter: no external CSS dependencies. */
+:root { color-scheme: light; font-family: system-ui, sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; color: #17212b; background: #f7f9fc; line-height: 1.6; }
+.site-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem max(1rem, calc((100% - 56rem) / 2)); background: #fff; border-bottom: 1px solid #dce3eb; }
+.brand { color: #173e73; font-weight: 700; text-decoration: none; }
+nav { display: flex; flex-wrap: wrap; gap: 1rem; }
+nav a { color: #173e73; text-decoration: none; }
+main { max-width: 56rem; margin: 3rem auto; padding: 2rem; background: #fff; border: 1px solid #dce3eb; border-radius: .75rem; }
+h1 { line-height: 1.2; }
+.action-link { display: inline-block; padding: .6rem 1rem; background: #173e73; color: #fff; border-radius: .4rem; text-decoration: none; }
+a:focus-visible { outline: 3px solid #ffab40; outline-offset: 3px; }
+@media (max-width: 40rem) { main { margin: 1.5rem 1rem; padding: 1.25rem; } }
 '''
 
 
@@ -188,16 +237,16 @@ def create_project(name: str, *, directory: Path | None = None, mvc: bool = Fals
             for relative in (
                 "apps", "apps/home", "apps/home/controllers", "apps/home/views",
                 "apps/blog", "apps/blog/controllers",
-                "apps/blog/views", "views", "statics",
+                "apps/blog/views", "views", "statics", "models",
             ):
                 folder = root / relative
                 folder.mkdir()
-                if relative in {"apps", "apps/home", "apps/home/controllers", "apps/blog", "apps/blog/controllers"}:
+                if relative in {"apps", "apps/home", "apps/home/controllers", "apps/blog", "apps/blog/controllers", "models"}:
                     (folder / "__init__.py").write_text("", encoding="utf-8")
-            (root / "apps/home/controllers/home.py").write_text(
+            (root / "apps/home/controllers/Home.py").write_text(
                 _MODULAR_HOME.format(name=name), encoding="utf-8"
             )
-            (root / "apps/blog/controllers/blog.py").write_text(
+            (root / "apps/blog/controllers/Blog.py").write_text(
                 _MODULAR_BLOG, encoding="utf-8"
             )
             (root / "views/layout.html").write_text(_MODULAR_LAYOUT.format(), encoding="utf-8")
@@ -206,9 +255,11 @@ def create_project(name: str, *, directory: Path | None = None, mvc: bool = Fals
             (root / "apps/home/views/index.html").write_text(_MODULAR_HOME_VIEW.format(), encoding="utf-8")
             (root / "apps/blog/views/index.html").write_text(_MODULAR_BLOG_VIEW.format(), encoding="utf-8")
         elif mvc:
+            (root / "models").mkdir()
+            (root / "models" / "__init__.py").write_text("", encoding="utf-8")
             (root / "controllers").mkdir()
             (root / "controllers" / "__init__.py").write_text("", encoding="utf-8")
-            (root / "controllers" / "home.py").write_text(
+            (root / "controllers" / "Home.py").write_text(
                 _MVC_HOME.format(name=name), encoding="utf-8"
             )
             (root / "views").mkdir()
@@ -221,10 +272,7 @@ def create_project(name: str, *, directory: Path | None = None, mvc: bool = Fals
             css = root / "statics" / "css"
             css.mkdir()
             (css / "site.css").write_text(
-                "/* Public Aurora starter styles. Edit or replace freely. */\n"
-                "body { font-family: system-ui, sans-serif; margin: 2rem auto; "
-                "max-width: 56rem; padding: 0 1rem; line-height: 1.6; }\n"
-                "nav a { margin-right: 1rem; }\n",
+                (_MVC_CSS if not modular else _MODULAR_CSS),
                 encoding="utf-8",
             )
         # Explicit, inert database starter files. Never open or create a database
@@ -243,13 +291,14 @@ def create_project(name: str, *, directory: Path | None = None, mvc: bool = Fals
             f"`aurora run {name}.app:app`\n\n"
             "## Database setup\n\n"
             "- `aurora_databases.json` configures the `default` SQLite alias.\n"
+            "- MVC and modular starters include an empty `models/` package; no model is registered automatically.\n"
             "- `aurora_models.json` intentionally starts empty. Register trusted "
             "`MODULE:CLASS` model references under `databases.default` before using "
             "model-aware migration commands.\n"
             "- No SQLite file or tables are created by scaffolding. Initialize "
             "your database explicitly before inspection or migrations.\n"
             "- `aurora db list` shows configured aliases; "
-            "`aurora db sync --dry-run` previews changes after setup.\n"
+            "`aurora db migrate --dry-run` previews changes after setup.\n"
             "- `migrations/` and `backups/` are prepared for reviewed operations.\n",
             encoding="utf-8",
         )
@@ -286,13 +335,13 @@ def add_app(name: str, *, directory: Path | None = None) -> Path:
     if any(source.count(anchor) != 1 for anchor in anchors):
         raise ValueError("This project's app.py has no scaffold insertion anchors; add the app manually.")
     # Keep generated routes predictable; do not silently introduce collisions.
-    route = f"/{name}"
-    if f'app.route("{route}"' in source:
+    route = f"/{name}/"
+    if re.search(r"app\.route\(\s*[\'\"]" + re.escape(route) + r"[\'\"]", source):
         raise ValueError(f"Route already registered: {route}")
     class_name = "".join(part.capitalize() for part in name.split("_"))
-    updated = source.replace("# aurora:imports", f"from apps.{name}.controllers.{name} import {class_name}\n# aurora:imports")
+    updated = source.replace("# aurora:imports", f"from apps.{name}.controllers.{class_name} import {class_name}\n# aurora:imports")
     updated = updated.replace("        # aurora:views", f'        "{name}": ROOT / "apps" / "{name}" / "views",\n        # aurora:views')
-    updated = updated.replace("# aurora:routes", f'app.route("/{name}", {class_name})\n# aurora:routes')
+    updated = updated.replace("# aurora:routes", f'app.route("/{name}/", {class_name})\n# aurora:routes')
     # Prepare the new app in a sibling staging directory. No developer file is
     # changed until all scaffold files have been written successfully.
     import shutil
@@ -303,18 +352,22 @@ def add_app(name: str, *, directory: Path | None = None) -> Path:
         controllers = staging / "controllers"
         controllers.mkdir()
         (controllers / "__init__.py").write_text("", encoding="utf-8")
-        (controllers / f"{name}.py").write_text(
+        (controllers / f"{class_name}.py").write_text(
             f'"""{class_name} controller."""\nfrom aurora import Controller, View\n\n\n'
             f'class {class_name}(Controller):\n'
             '    def get(self):\n'
             f'        return View("{name}/index", title="{name.replace("_", " ").title()}")\n',
             encoding="utf-8",
         )
+        models = staging / "models"
+        models.mkdir()
+        (models / "__init__.py").write_text("", encoding="utf-8")
         view_dir = staging / "views"
         view_dir.mkdir()
         (view_dir / "index.html").write_text(
             '{% extends "layout.html" %}\n'
             '{% from "components.html" import action_link %}\n\n'
+            '{% block title %}{{ title }}{% endblock %}\n\n'
             '{% block content %}\n'
             '    <h1>{{ title }}</h1>\n'
             '    <p>Your new Aurora app is ready.</p>\n'
@@ -409,6 +462,41 @@ def _create_scaffold_file(folder: Path, filename: str, content: str) -> Path:
 
 
 
+def _controller_slug(name: str) -> str:
+    """Convert CamelCase to a readable URL segment."""
+    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "-", name).lower()
+
+
+def _existing_component(folder: Path, name: str, resource: str) -> Path | None:
+    """Resolve exact or legacy filenames without importing user code."""
+    if not folder.is_dir() or folder.is_symlink():
+        return None
+    candidates = {name.casefold()}
+    if resource == "controller":
+        candidates.add(name.lower().casefold())
+    if resource == "model":
+        candidates.add(re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower().casefold())
+    matches = [item for item in folder.iterdir()
+               if item.suffix == ".py" and item.name != "__init__.py"
+               and item.stem.casefold() in candidates]
+    if len(matches) > 1:
+        raise ValueError(f"Ambiguous {resource} name: {name}")
+    return matches[0] if matches else None
+
+
+def _reject_component_collision(folder: Path, name: str, resource: str) -> None:
+    existing = _existing_component(folder, name, resource)
+    if existing is not None:
+        raise FileExistsError(f"{resource.title()} already exists (existing file will not be overwritten): {existing}")
+
+
+def _resolve_component(folder: Path, name: str, resource: str) -> Path:
+    path = _existing_component(folder, name, resource)
+    if path is None or path.is_symlink() or not path.is_file():
+        raise ValueError(f"{resource.title()} not found: {name}")
+    return path
+
+
 def _controller_binding(source: str, app_name: str, name: str) -> str:
     """Use a plain name unless a top-level binding already occupies it."""
     tree = ast.parse(source)
@@ -469,7 +557,7 @@ def create_controller(app_name: str, name: str, *,
                       directory: Path | None = None) -> Path:
     """Generate and register a controller in an anchored modular project."""
     if not re.fullmatch(r"[A-Z][A-Za-z0-9]*", name) or keyword.iskeyword(name):
-        raise ValueError("Controller name must be CamelCase (e.g. AccountSettings).")
+        raise ValueError(f"Invalid controller name {name!r}. Use CamelCase (e.g. User or AccountSettings).")
     root = _scaffold_app_root(app_name, directory)
     project = root.parent.parent
     app_file = project / "app.py"
@@ -477,13 +565,12 @@ def create_controller(app_name: str, name: str, *,
     anchors = ("# aurora:imports", "# aurora:routes")
     if any(source.count(anchor) != 1 for anchor in anchors):
         raise ValueError("app.py must have unique Aurora import and route anchors.")
-    module = name.lower()
+    module = name
     destination = root / "controllers" / f"{module}.py"
-    if destination.exists():
-        raise FileExistsError(f"Controller already exists: {destination}")
-    route = f"/{app_name}/{module.replace('_', '-')}"
+    _reject_component_collision(root / "controllers", name, "controller")
+    route = f"/{app_name}/{_controller_slug(name)}/"
     # Keep the existing app's base route untouched and avoid duplicate registrations.
-    if f'app.route("{route}"' in source or f"app.route('{route}'" in source:
+    if re.search(r"app\.route\(\s*[\'\"]" + re.escape(route) + r"[\'\"]", source):
         raise ValueError(f"Route already registered: {route}")
     binding = _controller_binding(source, app_name, name)
     suffix = f" as {binding}" if binding != name else ""
@@ -522,13 +609,100 @@ def create_controller(app_name: str, name: str, *,
     return destination
 
 
+def _standalone_controller_root(directory: Path | None = None) -> Path:
+    """Locate a generated standalone MVC project without executing its code."""
+    root = (directory or Path.cwd()).resolve()
+    controllers = root / "controllers"
+    if ((root / "app.py").is_symlink() or not (root / "app.py").is_file()
+            or controllers.is_symlink() or not controllers.is_dir()
+            or not (controllers / "__init__.py").is_file()
+            or (root / "apps").exists()):
+        raise ValueError("Cannot use standalone controllers here. Run this command inside a standalone MVC project created with: aurora new myapp --mvc")
+    return root
+
+
+def create_standalone_controller(name: str, *, directory: Path | None = None) -> Path:
+    """Create and register a controller in a standalone MVC scaffold."""
+    if not re.fullmatch(r"[A-Z][A-Za-z0-9]*", name) or keyword.iskeyword(name):
+        raise ValueError(f"Invalid controller name {name!r}. Use CamelCase (e.g. User or AccountSettings).")
+    root = _standalone_controller_root(directory)
+    app_file = root / "app.py"
+    source = app_file.read_text(encoding="utf-8")
+    # The original standalone scaffold has no anchors. Require a recognizable
+    # Aurora application before appending the registration.
+    if not re.search(r"(?m)^app\s*=\s*Aurora\(", source):
+        raise ValueError("Cannot safely register controller: app.py has no standard Aurora app assignment.")
+    module = name
+    destination = root / "controllers" / f"{module}.py"
+    _reject_component_collision(root / "controllers", name, "controller")
+    route = f"/{_controller_slug(name)}/"
+    if re.search(r"app\.route\(\s*['\"]" + re.escape(route) + r"['\"]", source):
+        raise ValueError(f"Route already registered: {route}")
+    binding = _controller_binding(source, "", name)
+    suffix = f" as {binding}" if binding != name else ""
+    import_line = f"from controllers.{module} import {name}{suffix}"
+    if import_line in source:
+        raise ValueError("Controller import already registered.")
+    # Insert the import before the first top-level app assignment, so the
+    # controller is available when its route is registered.
+    tree = ast.parse(source)
+    app_assignments = [node for node in tree.body if isinstance(node, ast.Assign)
+                       and any(isinstance(t, ast.Name) and t.id == "app" for t in node.targets)]
+    if len(app_assignments) != 1:
+        raise ValueError("Cannot safely register controller: expected one top-level app assignment.")
+    lines = source.splitlines(keepends=True)
+    lines.insert(app_assignments[0].lineno - 1, import_line + "\n")
+    updated = "".join(lines).rstrip("\n") + f'\napp.route("{route}", {binding})\n'
+    ast.parse(updated)
+    content = (f'"""{name} page controller."""\n'
+               'from aurora import Controller\n\n\n'
+               f'class {name}(Controller):\n'
+               '    def get(self):\n'
+               '        return "TODO: implement this controller"\n')
+    temp_app = None
+    created = False
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=root,
+                                         prefix=".aurora-controller-", suffix=".tmp",
+                                         delete=False) as stream:
+            temp_app = Path(stream.name)
+            stream.write(updated)
+        _create_scaffold_file(root / "controllers", f"{module}.py", content)
+        created = True
+        os.replace(temp_app, app_file)
+        temp_app = None
+    except BaseException:
+        if created:
+            destination.unlink()
+        raise
+    finally:
+        if temp_app is not None:
+            temp_app.unlink(missing_ok=True)
+    return destination
+
+
+def list_standalone_controllers(*, directory: Path | None = None) -> list[str]:
+    root = _standalone_controller_root(directory)
+    return sorted(p.stem for p in (root / "controllers").iterdir()
+                  if p.is_file() and not p.is_symlink()
+                  and p.suffix == ".py" and p.name != "__init__.py")
+
+
+def show_standalone_controller(name: str, *, directory: Path | None = None) -> dict[str, str]:
+    root = _standalone_controller_root(directory)
+    path = _resolve_component(root / "controllers", name, "controller")
+    return {"app": "(standalone)", "name": path.stem, "path": str(path)}
+
+
+
 def create_view(app_name: str, name: str, *,
                 directory: Path | None = None) -> Path:
     """Generate a namespaced Jinja view without editing routes or templates."""
     if not re.fullmatch(r"[a-z][a-z0-9_-]*", name):
-        raise ValueError("View name must use lowercase letters, numbers, '_' or '-'.")
+        raise ValueError(f"Invalid view name {name!r}. Use lowercase letters, numbers, underscores or hyphens (e.g. account_settings).")
     root = _scaffold_app_root(app_name, directory)
     content = ('{% extends "layout.html" %}\n\n'
+               '{% block title %}' + name.replace('_', ' ').replace('-', ' ').title() + '{% endblock %}\n\n'
                '{% block content %}\n'
                f'    <h1>{name.replace("_", " ").replace("-", " ").title()}</h1>\n'
                '{% endblock %}\n')
@@ -543,7 +717,7 @@ def create_model(app_name: str, name: str, *, directory: Path | None = None) -> 
     metadata remains shared by Aurora's existing Model API.
     """
     if not re.fullmatch(r"[A-Z][A-Za-z0-9]*", name) or keyword.iskeyword(name):
-        raise ValueError("Model name must be CamelCase (e.g. BlogPost).")
+        raise ValueError(f"Invalid model name {name!r}. Use CamelCase (e.g. BlogPost).")
     root = _scaffold_app_root(app_name, directory)
     folder = root / "models"
     if folder.is_symlink():
@@ -554,13 +728,14 @@ def create_model(app_name: str, name: str, *, directory: Path | None = None) -> 
         created_folder = True
     elif not folder.is_dir():
         raise ValueError("models path must be a directory.")
-    module = re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+    module = name
     source = (f'"""{name} model for the {app_name} application."""\n'
               'from aurora.database import Model, column\n\n\n'
               f'class {name}(Model):\n'
               '    id = column(int, primary_key=True)\n'
               '    # Add your model columns here.\n')
     try:
+        _reject_component_collision(folder, name, "model")
         destination = _create_scaffold_file(folder, f"{module}.py", source)
     except BaseException:
         if created_folder:
@@ -594,20 +769,18 @@ def show_component(resource: str, app_name: str, name: str, *,
     """Report a component's path and name; never execute or display its code."""
     if resource not in ("controller", "view", "model"):
         raise ValueError("Unsupported component type.")
-    entries = list_components(resource, app_name, directory=directory)
-    valid = name in entries or (resource == "view" and name + ".html" in entries)
-    if not valid:
-        raise ValueError(f"{resource.title()} not found: {name}")
     root = _scaffold_app_root(app_name, directory)
-    filename = name if resource == "view" and name.endswith(".html") else (
-        name + (".html" if resource == "view" else ".py"))
-    target = (
-        root
-        / {"controller": "controllers", "view": "views", "model": "models"}[resource]
-        / filename
-    )
-    if target.is_symlink() or not target.is_file():
-        raise ValueError("Component is not a regular file.")
+    folder = root / {"controller": "controllers", "view": "views", "model": "models"}[resource]
+    if resource != "view":
+        target = _resolve_component(folder, name, resource)
+    else:
+        entries = list_components(resource, app_name, directory=directory)
+        filename = name if name.endswith(".html") else name + ".html"
+        if filename not in entries:
+            raise ValueError(f"View not found: {name}")
+        target = folder / filename
+        if target.is_symlink() or not target.is_file():
+            raise ValueError("Component is not a regular file.")
     return {"app": app_name, "name": target.stem, "path": str(target)}
 
 
@@ -620,9 +793,9 @@ def _shared_component_root(resource: str, directory: Path | None = None) -> Path
         or not (root / "app.py").is_file()
         or not (root / "views").is_dir()
     ):
-        raise ValueError("Shared components require an existing MVC project.")
+        raise ValueError(f"Cannot use shared {resource}s here. Run this command inside an MVC project created with: aurora new myapp --mvc (or --modular)")
     if resource == "model" and not ((root / "apps").is_dir() or (root / "controllers").is_dir()):
-        raise ValueError("Shared models require an MVC project.")
+        raise ValueError("Shared models require an MVC project created with: aurora new myapp --mvc (or --modular).")
     folder = root / ("models" if resource == "model" else "views")
     if folder.is_symlink() or (folder.exists() and not folder.is_dir()):
         raise ValueError("Refusing an invalid or symlinked component directory.")
@@ -634,17 +807,19 @@ def create_shared_component(resource: str, name: str, *, directory: Path | None 
     folder = _shared_component_root(resource, directory)
     if resource == "model":
         if not re.fullmatch(r"[A-Z][A-Za-z0-9]*", name):
-            raise ValueError("Model name must be CamelCase.")
-        module = re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+            raise ValueError(f"Invalid model name {name!r}. Use CamelCase (e.g. BlogPost).")
+        module = name
         filename = module + ".py"
         content = (f'"""Shared {name} model."""\nfrom aurora.database import Model, column\n\n\n'
                    f'class {name}(Model):\n    id = column(int, primary_key=True)\n'
                    '    # Add your model columns here.\n')
     elif resource == "view":
         if not re.fullmatch(r"[a-z][a-z0-9_-]*", name):
-            raise ValueError("View name must use lowercase letters, digits, _ or -.")
+            raise ValueError(f"Invalid view name {name!r}. Use lowercase letters, numbers, underscores or hyphens (e.g. account_settings).")
         filename = name + ".html"
-        content = ('{% extends "layout.html" %}\n\n{% block content %}\n'
+        content = ('{% extends "layout.html" %}\n\n'
+                   '{% block title %}' + name.replace('_', ' ').replace('-', ' ').title() + '{% endblock %}\n\n'
+                   '{% block content %}\n'
                    f'    <h1>{name.replace("_", " ").replace("-", " ").title()}</h1>\n'
                    '{% endblock %}\n')
     else:
@@ -654,6 +829,8 @@ def create_shared_component(resource: str, name: str, *, directory: Path | None 
         folder.mkdir()
         made = True
     try:
+        if resource == "model":
+            _reject_component_collision(folder, name, "model")
         return _create_scaffold_file(folder, filename, content)
     except BaseException:
         if made:
@@ -672,18 +849,19 @@ def list_shared_components(resource: str, *, directory: Path | None = None) -> l
 
 
 def show_shared_component(resource: str, name: str, *, directory: Path | None = None) -> dict[str, str]:
-    entries = list_shared_components(resource, directory=directory)
-    if name not in entries and not (resource == "view" and name + ".html" in entries):
-        raise ValueError(f"Shared {resource} not found: {name}")
     folder = _shared_component_root(resource, directory)
-    filename = (
-        name if resource == "view" and name.endswith(".html")
-        else name + (".py" if resource == "model" else ".html")
-    )
-    path = folder / filename
-    if path.is_symlink() or not path.is_file():
-        raise ValueError("Component is not a regular file.")
+    if resource == "model":
+        path = _resolve_component(folder, name, resource)
+    else:
+        entries = list_shared_components(resource, directory=directory)
+        filename = name if name.endswith(".html") else name + ".html"
+        if filename not in entries:
+            raise ValueError(f"Shared {resource} not found: {name}")
+        path = folder / filename
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("Component is not a regular file.")
     return {"app": "(shared)", "name": path.stem, "path": str(path)}
+
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -740,27 +918,59 @@ def main(argv: list[str] | None = None) -> int:
             registered.add_argument("--database", default="default", help="Database alias (default: default)")
             registered.add_argument("--models-config", default="aurora_models.json", help="Model manifest JSON path")
     # Read-only named database commands; no model imports or schema writes.
-    db_group = sub.add_parser("db", help="Inspect databases and safely migrate SQLite schemas")
+    db_group = sub.add_parser("db", help="Inspect databases and safely migrate SQLite schemas; guarded MySQL migrations")
+    db_group.description = "Database commands: init, plan, migrate, backup, restore, history."
+    db_group.epilog = "First setup: aurora db init --config aurora_databases.json --models-config aurora_models.json"
     db_actions = db_group.add_subparsers(dest="action", required=True)
-    for verb in ("list", "show", "check", "inspect", "plan", "history", "status", "validate"):
-        command = db_actions.add_parser(verb, help=("Read applied SQLite migrations (or --history-file for legacy store)" if verb == "history" else "Read applied migrations and optionally compare selected models" if verb == "status" else {"list": "List configured database aliases", "show": "Show configured database details", "check": "Check existing SQLite schema readability", "inspect": "Inspect existing SQLite schema", "plan": "Preview model-to-schema differences", "validate": "Review migration readiness"}.get(verb, f"Read-only database {verb}")))
-        command.add_argument("--config", default="aurora_databases.json", help="JSON database config path")
-        if verb == "show":
-            command.add_argument("alias", nargs="?", default="default")
-        if verb in ("check", "inspect", "plan", "history", "status", "validate"):
-            command.add_argument("--database", default="default", help="Configured database alias")
-        if verb in ("plan", "validate", "status"):
-            command.add_argument("--model", action="append", default=[], metavar="MODULE:CLASS",
-                                 help="Override project manifest with explicit Aurora models")
-            command.add_argument("--models-config", default="aurora_models.json", help="Explicit project model manifest JSON path")
+    for verb in ("plan", "history"):
+        command = db_actions.add_parser(verb, help=(
+            "Read applied migration history" if verb == "history"
+            else "Inspect schema, plan changes, and report safety warnings (read-only)"))
+        command.add_argument("--config", default="aurora_databases.json")
+        command.add_argument("--database", default="default")
         if verb == "plan":
-            command.add_argument("--explain", action="store_true", help="Explain classifications and reasons (read-only)")
-            command.add_argument("--format", choices=("text", "json"), default="text", help="Output format (default: text)")
-            command.add_argument("--check", action="store_true", help="CI check: return exit code 2 if schema drift is detected")
-        if verb == "history":
-            command.add_argument("--history-file",
-                                 help="Optional legacy dedicated history SQLite file; otherwise reads applied migrations from target database")
-    sync = db_actions.add_parser('sync', aliases=['s'], help='Preview or safely apply SQLite CREATE TABLE / nullable ADD COLUMN migrations')
+            command.add_argument("--model", action="append", default=[], metavar="MODULE:CLASS")
+            command.add_argument("--models-config", default="aurora_models.json")
+            command.add_argument("--explain", action="store_true")
+            command.add_argument("--format", choices=("text", "json"), default="text")
+            command.add_argument("--check", action="store_true")
+        else:
+            command.add_argument("--history-file", help="Optional legacy history SQLite file")
+    for verb in ("backup", "restore"):
+        command = db_actions.add_parser(verb, help=("Create a verified SQLite or MySQL backup" if verb == "backup" else "Guided SQLite recovery or guarded MySQL staging restore"))
+        command.add_argument("--config", default="aurora_databases.json")
+        command.add_argument("--database", default="default")
+        if verb == "backup":
+            command.add_argument("--to", help="New backup path; SQLite uses .sqlite3, MySQL uses .sql")
+            command.add_argument("--login-path", help="MySQL login profile configured with mysql_config_editor")
+        else:
+            command.add_argument("--from", dest="source", required=True, help="Existing SQLite backup or MySQL .sql dump")
+            command.add_argument("--check-only", action="store_true", help="Read-only MySQL restore preflight; never executes SQL")
+            command.add_argument("--login-path", help="MySQL client login profile (preflight only)")
+            command.add_argument("--staging-database", help="Proposed distinct MySQL staging database name")
+            command.add_argument("--staging-login-path", help="Separate restricted MySQL staging login profile")
+            command.add_argument("--staging-only", action="store_true", help="Import validated SQL only into empty staging database")
+    init = db_actions.add_parser(
+        "init",
+        help="Create selected tables in an empty SQLite or MySQL database (writes once)",
+        description=(
+            "Initialize an empty SQLite or MySQL database from explicitly selected Aurora models. "
+            "If every selected table exists, report already initialized without modifying the database. "
+            "Refuse partial or unrelated schemas; this command never migrates tables."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  aurora db init  # requires registered models in aurora_models.json\n"
+            "  aurora db init --database default --model myapp.models:User\n"
+            "  aurora db init --config aurora_databases.json --models-config aurora_models.json"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    init.add_argument("--config", default="aurora_databases.json", help="Database configuration JSON path")
+    init.add_argument("--database", default="default", help="Configured database alias")
+    init.add_argument("--model", action="append", default=[], metavar="MODULE:CLASS", help="Explicit Aurora model; repeat as needed")
+    init.add_argument("--models-config", default="aurora_models.json", help="Explicit model manifest JSON path")
+    sync = db_actions.add_parser('migrate', help='Preview/apply SQLite migrations or one guarded MySQL operation')
     sync.add_argument('--config', default='aurora_databases.json', help='Database configuration JSON path')
     sync.add_argument('--database', default='default', help='Configured database alias (default: default)')
     sync.add_argument('--model', action='append', metavar='MODULE:CLASS', help='Explicit trusted Aurora model; repeat for multiple models')
@@ -773,30 +983,65 @@ def main(argv: list[str] | None = None) -> int:
     sync.add_argument('--name', help='New migration review filename stem (required to apply)')
     sync.add_argument('--output-dir', default='migrations', help='Existing review directory (default: migrations)')
     sync.add_argument('--backup', help='New backup filename in an existing directory (required to apply)')
-    migration_group = db_actions.add_parser("migration", help="Create/show reviews or apply approved SQLite migrations")
-    migration_actions = migration_group.add_subparsers(dest="migration_action", required=True)
-    create = migration_actions.add_parser("create", help="Save an advisory JSON review (no SQL)")
-    create.add_argument("--config", default="aurora_databases.json")
-    create.add_argument("--database", default="default")
-    create.add_argument("--model", action="append", default=[], metavar="MODULE:CLASS")
-    create.add_argument("--models-config", default="aurora_models.json", help="Explicit project model manifest JSON path")
-    create.add_argument("--name", required=True, help="New review filename stem")
-    create.add_argument("--output-dir", default="migrations", help="Existing output directory")
-    show_review_cmd = migration_actions.add_parser("show", help="Verify and display a review JSON file")
-    show_review_cmd.add_argument("path")
-    apply_cmd = migration_actions.add_parser("apply", help="Apply approved SQLite additive review (WRITES DATABASE)")
-    apply_cmd.add_argument("path", help="Existing reviewed JSON file")
-    apply_cmd.add_argument("--config", default="aurora_databases.json")
-    apply_cmd.add_argument("--approve", required=True, help="Exact plan SHA-256 shown by migration show")
-    apply_cmd.add_argument("--backup", required=True, help="New SQLite backup path (must not exist)")
+    sync.add_argument('--schema', help='Exact MySQL schema (required for MySQL)')
+    sync.add_argument('--table', help='One MySQL target table')
+    sync.add_argument('--column', help='One nullable MySQL column; omit for CREATE TABLE')
+    sync.add_argument('--apply', action='store_true', help='Explicit MySQL DDL execution only')
+    sync.add_argument('--approve-review', help='Exact MySQL review SHA-256')
+    sync.add_argument('--approve-sql', help='Exact MySQL SQL SHA-256')
+    sync.add_argument('--confirm', help='Must be APPLY for MySQL execution')
     # Destructive operations remain deliberately unavailable.
     run = sub.add_parser("run", help="Run an ASGI application with Uvicorn")
-    run.add_argument("application", nargs="?", default="app:app", help="ASGI import path (default: app:app)")
+    run.add_argument("application", nargs="?", default="app:app", help="ASGI import path (default: app:app); run from the project directory")
     run.add_argument("--host", default="127.0.0.1")
     run.add_argument("--port", type=int, default=8000)
-    run.add_argument("--no-reload", action="store_true")
+    run.add_argument("--no-reload", action="store_true", help="Disable automatic reload (enabled by default)")
     args = parser.parse_args(argv)
-    if args.command == 'db' and args.action in ('sync', 's'):
+    # Installed console scripts may omit the project directory from sys.path.
+    # Explicit database model references must resolve like `python -m aurora`.
+    # Restrict this to commands that load project models; help and read-only
+    # database listing/inspection do not need to change import resolution.
+    if args.command == "db" and args.action in (
+        "init", "plan", "migrate"
+    ):
+        project_dir = str(Path.cwd().resolve())
+        if project_dir not in sys.path:
+            sys.path.insert(0, project_dir)
+    if args.command == "db" and args.action == "init":
+        if os.environ.get("AURORA_ENV", "development").lower() == "production":
+            parser.exit(1, "aurora: Refusing to initialize a database in production environment.\n")
+        from aurora.database.cli_init import initialize_database
+        try:
+            status = initialize_database(
+                config_path=args.config, alias=args.database,
+                model_refs=args.model, models_config=args.models_config,
+            )
+        except (ValueError, OSError, ImportError, AttributeError, __import__("sqlite3").Error) as exc:
+            parser.exit(1, f"aurora: {exc}\n")
+        if status == "already initialized":
+            print(f"Database: {args.database}\nAlready initialized; no changes made. Table presence alone does not prove schema compatibility.")
+        else:
+            print(f"Database: {args.database}\nDatabase initialized successfully.")
+        return 0
+    if args.command == 'db' and args.action == 'migrate':
+        from aurora.database.cli_inspection import load_cli_database_config
+        try:
+            config, _ = load_cli_database_config(args.config)
+            backend = config.resolve(args.database).get_backend_name()
+        except (ValueError, OSError, KeyError) as exc:
+            parser.exit(1, f'aurora: {exc}\n')
+        if backend == 'mysql':
+            try:
+                from aurora.database.cli_unified_mysql_migrate import run_unified_mysql_migrate
+                report = run_unified_mysql_migrate(args)
+            except (ValueError, PermissionError, FileNotFoundError) as exc:
+                parser.exit(1, f'aurora: {exc}\n')
+            except Exception:
+                parser.exit(1, 'aurora: MySQL migration refused or outcome uncertain; inspect schema and history manually before retrying.\n')
+            print(json.dumps(report, indent=2, sort_keys=True))
+            return 0
+        if any((args.schema, args.table, args.column, args.apply, args.approve_review, args.approve_sql, args.confirm)):
+            parser.exit(1, 'aurora: MySQL-specific migration arguments cannot be used for SQLite.\n')
         from aurora.database.cli_sync import sync_database
         def confirm(text):
             print(f"Proposed changes:\n{text}\nPlan SHA-256: {args.approve}")
@@ -815,9 +1060,8 @@ def main(argv: list[str] | None = None) -> int:
             model_refs = select_model_refs(explicit=args.model, database=args.database, manifest=args.models_config)
             if args.format == 'json':
                 from aurora.database.cli_reports import report_for_refs
-                import json
                 report = report_for_refs(config_path=args.config, alias=args.database, model_refs=model_refs)
-                print(json.dumps(report, indent=2, sort_keys=True))
+                print(__import__("json").dumps(report, indent=2, sort_keys=True))
                 return 2 if args.check and report['schema_status'] == 'DRIFT' else 0
             if args.check:
                 from aurora.database.cli_reports import report_for_refs
@@ -850,47 +1094,122 @@ def main(argv: list[str] | None = None) -> int:
         except (ValueError, OSError, ImportError, AttributeError, __import__('sqlite3').Error) as exc:
             parser.exit(1, f"aurora: {exc}\n")
         return 0
-    if args.command == "db" and args.action == "migration" and args.migration_action == "apply":
-        from aurora.database.sqlite_migration_executor import apply_create_tables
+    if args.command == "db" and args.action in ("backup", "restore"):
+        from aurora.database.cli_recovery import backup_database, restore_database
         try:
-            manifest, tables = apply_create_tables(args.path, config_path=args.config,
-                approval=args.approve, backup_path=args.backup)
-            print(f"Migration applied: {len(tables)} operation(s). Backup: {manifest.filename} ({manifest.sha256_hex})")
-        except (ValueError, OSError, ImportError, AttributeError, __import__('sqlite3').Error) as exc:
-            parser.exit(1, f"aurora: {exc}\n")
-        return 0
-    if args.command == "db" and args.action == "migration" and args.migration_action == "show":
-        from aurora.database.cli_review import show_review
-        try:
-            data, plan = show_review(args.path)
-            print(f"Database: {data['database_alias']}\nPlan SHA-256: {data['plan_sha256']}\n{plan.format_text()}\nExecution disabled. This command only displays the review; apply separately with explicit approval and backup.")
-        except (ValueError, OSError, UnicodeError, __import__('json').JSONDecodeError) as exc:
+            if args.action == "backup":
+                output = backup_database(args.config, args.database, args.to, login_path=args.login_path)
+                print(f"Verified database backup: {output}")
+            else:
+                from aurora.database.cli_inspection import load_cli_database_config
+                selected_config, _ = load_cli_database_config(args.config)
+                if selected_config.resolve(args.database).get_backend_name() == "mysql":
+                    if args.staging_only or args.staging_login_path:
+                        if not args.staging_only:
+                            raise ValueError("--staging-login-path requires --staging-only")
+                        from aurora.database.cli_mysql_staging_restore import staging_restore
+                        def confirm_stage(plan):
+                            print(f"STAGING-ONLY MySQL import\nSource: {plan.source_database}\n"
+                                  f"Staging: {plan.staging_database}\nBackup: {plan.backup}\n"
+                                  f"SHA-256: {plan.digest}\nTables: {plan.tables}")
+                            print("WARNING: MySQL imports are not atomic. A failed import may leave partial staging objects.")
+                            try:
+                                return input(f"Type RESTORE {plan.staging_database} to confirm: ").strip() == f"RESTORE {plan.staging_database}"
+                            except (EOFError, KeyboardInterrupt):
+                                return False
+                        plan = staging_restore(args.config, args.database, args.source,
+                                               args.login_path, args.staging_database,
+                                               args.staging_login_path, check_only=args.check_only,
+                                               confirm=confirm_stage)
+                        print(f"{'Staging readiness verified (READ ONLY)' if args.check_only else 'Staging import completed'}: "
+                              f"{plan.staging_database} (SHA-256: {plan.digest})")
+                        return 0
+                    if not args.check_only:
+                        raise ValueError("MySQL restore is disabled; use --check-only for read-only preflight")
+                    from aurora.database.cli_mysql_restore_preflight import check_mysql_restore
+                    report = check_mysql_restore(args.config, args.database, args.source,
+                                                 args.login_path, args.staging_database)
+                    print(report.format_text())
+                    if not report.staging_available:
+                        parser.exit(2, "aurora: staging database collision; no changes made\n")
+                    return 0
+                if args.check_only or args.login_path or args.staging_database or args.staging_login_path or args.staging_only:
+                    raise ValueError("--check-only, --login-path and --staging-database are MySQL-only restore options")
+                def confirm_restore():
+                    try:
+                        return input("Type RESTORE to confirm: ").strip() == "RESTORE"
+                    except (EOFError, KeyboardInterrupt):
+                        return False
+                result = restore_database(args.config, args.database, args.source, confirm_restore)
+                if result:
+                    print(f"Restore verified: {result[0]}\nPrevious database preserved: {result[1]}")
+        except (ValueError, OSError, RuntimeError, __import__("sqlite3").Error) as exc:
             parser.exit(1, f"aurora: {exc}\n")
         return 0
     if args.command == "db":
         from aurora.database.cli_inspection import (
             load_cli_database_config, describe_database, inspect_database,
-            inspect_database_details, plan_database, inspect_history_file,
+            inspect_database_details, inspect_mysql_details, plan_database, inspect_history_file,
         )
         try:
             config, base_dir = load_cli_database_config(args.config)
-            if args.action == "list":
-                for alias in config.aliases():
-                    info = describe_database(config, alias)
-                    print(f"{alias} ({info['dialect']})")
-            elif args.action == "show":
-                info = describe_database(config, args.alias)
-                print(f"Alias: {info['alias']}\nDialect: {info['dialect']}\nDriver: {info['driver']}")
-            elif args.action == "check":
+            if (args.action == "plan" and not args.model
+                  and config.resolve(args.database).get_backend_name() == "sqlite"
+                  and not Path(args.models_config).expanduser().is_file()):
+                # Preserve model-free schema inspection when no manifest exists.
+                # An existing but invalid manifest must not silently fall back.
                 count = inspect_database(config, args.database, base_dir=base_dir)
-                print(f"Database: {args.database}\nSQLite schema readable; {count} user table(s).")
-            elif args.action == "inspect":
-                schema = inspect_database_details(config, args.database, base_dir=base_dir)
-                print(f"Database: {args.database}\nTables: {len(schema.tables)}")
-                for table in schema.tables:
-                    print(f"  {table.name}: {len(table.columns)} column(s), "
-                          f"{len(table.indexes)} index(es), {len(table.foreign_keys)} foreign key(s)")
-            elif args.action in ("plan", "validate") or (args.action == "migration" and args.migration_action == "create"):
+                if args.format == "json":
+                    print(__import__("json").dumps({
+                        "database_alias": args.database,
+                        "mode": "inspection_only",
+                        "read_only": True,
+                        "table_count": count,
+                        "schema_status": "UNVERIFIED",
+                        "warnings": ["No models supplied or registered; schema differences cannot be evaluated."],
+                    }, indent=2, sort_keys=True))
+                else:
+                    print(f"Database: {args.database}\nSchema readable; {count} user table(s).")
+                    print("Safety warnings:")
+                    print("  No models supplied or registered; schema differences cannot be evaluated.")
+                    print("  Inspection only; no database changes applied.")
+                return 3 if args.check else 0
+            elif args.action == "plan" and config.resolve(args.database).get_backend_name() == "mysql":
+                from aurora.database.cli_mysql_plan import plan_mysql_schema
+                report = plan_mysql_schema(
+                    config, args.database, model_refs=args.model,
+                    models_config=args.models_config,
+                )
+                from aurora.database.cli_mysql_policy import review_mysql_plan
+                from aurora.database.cli_mysql_readiness import assess_mysql_policy
+                policy = review_mysql_plan(report)
+                readiness = assess_mysql_policy(policy)
+                report = dict(report)
+                report['safety_policy'] = policy
+                report['readiness'] = readiness
+                if args.format == 'json':
+                    print(__import__('json').dumps(report, indent=2, sort_keys=True))
+                else:
+                    print(f"Database: {args.database}\nSchema plan: {report['schema_status']} (selected models only)")
+                    for item in report['items']:
+                        print(f"  {item['category']} [{item['policy']}]: {item['detail']}")
+                    if not report['items']:
+                        print("  No differences in supported comparisons.")
+                    print("Safety warnings:")
+                    for item in report['items']:
+                        print(f"  [{item['policy']}] {item['detail']}")
+                    if not report['items']:
+                        print("  No classified differences among selected models.")
+                    for decision in policy['decisions']:
+                        print(f"  [{decision['decision']}] {decision['detail']}: {decision['reason']}")
+                    for reason in readiness['blocking_reasons']:
+                        print(f"  [READINESS] {reason}")
+                    print("Advisory only; no executable SQL or approvals.")
+                    print("Unselected tables and some MySQL features are not verified.")
+                if args.check:
+                    return 2 if report['schema_status'] == 'DRIFT' else 3 if report['schema_status'] == 'UNVERIFIED' else 0
+                return 0
+            elif args.action == "plan":
                 from aurora.database.cli_model_manifest import select_model_refs
                 selected_refs = select_model_refs(explicit=args.model, database=args.database, manifest=args.models_config)
                 import importlib
@@ -908,11 +1227,20 @@ def main(argv: list[str] | None = None) -> int:
                 if args.action == "plan":
                     if args.format == 'json':
                         from aurora.database.cli_reports import report_for_plan
-                        import json
                         report = report_for_plan(args.database, selected_refs, plan, models)
-                        print(json.dumps(report, indent=2, sort_keys=True))
+                        print(__import__("json").dumps(report, indent=2, sort_keys=True))
                         return 2 if args.check and report['schema_status'] == 'DRIFT' else 0
                     print(f"Database: {args.database}\n{plan.format_text()}")
+                    from aurora.database.cli_reports import report_for_plan
+                    safety_report = report_for_plan(args.database, selected_refs, plan, models)
+                    print("\nSafety warnings:")
+                    if not safety_report['changes']:
+                        print("  None for the selected models; unselected schema is not verified.")
+                    else:
+                        for change in safety_report['changes']:
+                            label = change['table'] + ('.' + change['column'] if change['column'] else '')
+                            print(f"  [{change['classification']}] {label}: {change['reason']}")
+                        print("  Candidate changes are not execution approval; revalidation, backup, and explicit consent remain mandatory.")
                     if args.check:
                         from aurora.database.cli_reports import report_for_plan
                         report = report_for_plan(args.database, selected_refs, plan, models)
@@ -920,19 +1248,7 @@ def main(argv: list[str] | None = None) -> int:
                     if args.explain:
                         from aurora.database.cli_diagnostics import explain_plan
                         print(explain_plan(plan, models))
-                elif args.action == "validate":
-                    from aurora.database.cli_review import validate_plan
-                    review, readiness = validate_plan(plan)
-                    print(f"Database: {args.database}\n{review.format_text()}\n{readiness.format_text()}")
-                else:
-                    from aurora.database.cli_review import create_review
-                    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}", args.name):
-                        raise ValueError("Invalid migration review name")
-                    folder = Path(args.output_dir).expanduser()
-                    target = create_review(folder / (args.name + ".json"), alias=args.database,
-                                           models=selected_refs, plan=plan)
-                    print(f"Created NON-EXECUTABLE review: {target}")
-            elif args.action in ("history", "status") and (args.action == "status" or not args.history_file):
+            elif args.action == "history" and not args.history_file:
                 from aurora.database.cli_migration_status import read_applied_migrations
                 present, records = read_applied_migrations(config, args.database, base_dir=base_dir)
                 print(f"Database: {args.database}\nApplied migrations: {len(records)}")
@@ -940,20 +1256,6 @@ def main(argv: list[str] | None = None) -> int:
                     print("Migration history: not initialized")
                 for digest, record_alias, applied_at, backup_name, backup_digest in records:
                     print(f"  {digest}: applied {applied_at}; backup {backup_name} (SHA-256: {backup_digest})")
-                if args.action == "status" and (args.model or Path(args.models_config).expanduser().is_file()):
-                    from aurora.database.cli_model_manifest import select_model_refs
-                    selected_refs = select_model_refs(explicit=args.model, database=args.database, manifest=args.models_config)
-                    from aurora.database.cli_schema_status import compare_selected_models
-                    plan = compare_selected_models(config, args.database, selected_refs, base_dir=base_dir)
-                    print(f"Selected models: {len(selected_refs)}")
-                    if plan.is_empty:
-                        print("Schema status: MATCH (selected models only)")
-                    else:
-                        print(f"Schema status: DRIFT ({len(plan.steps)} difference(s); selected models only)")
-                        for step in plan.steps:
-                            location = step.table + ('.' + step.column if step.column else '')
-                            print(f"  [{step.risk.upper()}] {step.kind}: {location}")
-                    print("History and schema status are independent; neither proves the other.")
             elif args.action == "history":
                 config.resolve(args.database)  # Legacy separate history store, explicit opt-in.
                 history_path = Path(args.history_file).expanduser()
@@ -988,24 +1290,22 @@ def main(argv: list[str] | None = None) -> int:
         resource = args.command
         if getattr(args, "second", None) is not None:
             if args.app_option is not None:
-                parser.error("Do not combine legacy positional app and --app.")
+                parser.error("Specify the app either positionally or with --app, not both. Example: aurora controller add User --app blog")
             app_name, name = args.first, args.second
         else:
             app_name, name = args.app_option, args.first
             if args.action == "list" and args.first is not None and args.app_option is None:
                 app_name, name = args.first, None  # Legacy: resource list APP
         if args.action != "list" and not name:
-            parser.error(f"{resource} {args.action} requires a component name.")
-        if resource == "controller" and app_name is None:
-            parser.error("Controller commands currently require --app APP (or legacy APP NAME).")
-        if resource == "controller" and args.action == "list" and app_name is None:
-            parser.error("Controller list requires --app APP.")
+            parser.error(f"{resource} {args.action} requires a component name. Example: aurora {resource} {args.action} "
+                         + ("user" if resource == "view" else "User"))
         if args.action == "add" and os.environ.get("AURORA_ENV", "development").lower() == "production":
             parser.exit(1, "aurora: Refusing to modify project in production environment.\n")
         try:
             if args.action == "add":
                 if app_name is None:
-                    destination = create_shared_component(resource, name)
+                    destination = (create_standalone_controller(name) if resource == "controller"
+                                   else create_shared_component(resource, name))
                 else:
                     destination = {"controller": create_controller, "view": create_view,
                                    "model": create_model}[resource](app_name, name)
@@ -1014,10 +1314,12 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Created {destination}" + note)
             elif args.action == "list":
                 entries = (list_components(resource, app_name) if app_name is not None
+                           else list_standalone_controllers() if resource == "controller"
                            else list_shared_components(resource))
                 print("\n".join(entries) if entries else f"No {resource}s found.")
             else:
                 info = (show_component(resource, app_name, name) if app_name is not None
+                        else show_standalone_controller(name) if resource == "controller"
                         else show_shared_component(resource, name))
                 print(f"{resource.title()}: {info['name']}\nApp: {info['app']}\nPath: {info['path']}")
         except (OSError, ValueError) as exc:
@@ -1081,6 +1383,20 @@ def main(argv: list[str] | None = None) -> int:
     if cwd in sys.path:
         sys.path.remove(cwd)
     sys.path.insert(0, cwd)
+    # Check simple modules consistently with and without reload. Do not import
+    # developer code during preflight; dotted modules remain Uvicorn-owned.
+    module_name = args.application.partition(":")[0]
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", module_name):
+        try:
+            module_spec = find_spec(module_name)
+        except (ImportError, ValueError, AttributeError):
+            module_spec = None
+        if module_spec is None:
+            parser.exit(
+                1,
+                f"aurora: Cannot find application module '{module_name}'. "
+                f"Check the target '{args.application}' or run from your project directory.\n",
+            )
     uvicorn.run(args.application, host=args.host, port=args.port, reload=not args.no_reload)
     return 0
 

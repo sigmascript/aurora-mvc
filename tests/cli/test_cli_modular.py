@@ -14,7 +14,7 @@ class TestModularScaffold(unittest.TestCase):
     def test_modular_layout_has_concrete_controller_and_view(self):
         with tempfile.TemporaryDirectory() as temp:
             root = create_project("sample_modular", directory=Path(temp), modular=True)
-            self.assertTrue((root / "apps/home/controllers/home.py").is_file())
+            self.assertTrue((root / "apps/home/controllers/Home.py").is_file())
             self.assertTrue((root / "apps/home/views/index.html").is_file())
             self.assertFalse((root / "controllers").exists())
             self.assertFalse((root / "services").exists())
@@ -31,7 +31,7 @@ class TestModularScaffold(unittest.TestCase):
     def test_cli_modular_option(self):
         with tempfile.TemporaryDirectory() as temp, patch("aurora.cli.Path.cwd", return_value=Path(temp)):
             self.assertEqual(main(["new", "sample_modular", "--modular"]), 0)
-            self.assertTrue((Path(temp) / "sample_modular/apps/home/controllers/home.py").exists())
+            self.assertTrue((Path(temp) / "sample_modular/apps/home/controllers/Home.py").exists())
 
     def test_modular_refuses_overwrite(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -30,11 +30,11 @@ class MigrationReportTests(unittest.TestCase):
 
     def test_sync_json_must_be_dry_run(self):
         with self.assertRaises(SystemExit) as error, contextlib.redirect_stderr(io.StringIO()):
-            main(['db', 'sync', '--format', 'json'])
+            main(['db', 'migrate', '--format', 'json'])
         self.assertEqual(error.exception.code, 1)
 
     def test_help(self):
-        for args in (['db', 'plan', '-h'], ['db', 'sync', '-h']):
+        for args in (['db', 'plan', '-h'], ['db', 'migrate', '-h']):
             with self.assertRaises(SystemExit) as result, contextlib.redirect_stdout(io.StringIO()) as output:
                 main(args)
             self.assertEqual(result.exception.code, 0)

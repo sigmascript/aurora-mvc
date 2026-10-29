@@ -28,9 +28,9 @@ class ScaffoldNamingAndAssetsTests(unittest.TestCase):
                 with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                     add_app(invalid, directory=root)
             add_app("news_feed", directory=root)
-            source = (root / "apps/news_feed/controllers/news_feed.py").read_text()
+            source = (root / "apps/news_feed/controllers/NewsFeed.py").read_text()
             self.assertIn("class NewsFeed(Controller)", source)
-            self.assertIn('app.route("/news_feed", NewsFeed)', (root / "app.py").read_text())
+            self.assertIn('app.route("/news_feed/", NewsFeed)', (root / "app.py").read_text())
 
     def test_production_guard(self):
         with tempfile.TemporaryDirectory() as tmp:

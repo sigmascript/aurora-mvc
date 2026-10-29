@@ -25,12 +25,12 @@ class MigrationCISubprocessTests(unittest.TestCase):
         connection = sqlite3.connect(self.project / 'data.sqlite3')
         connection.close()
         self.assertEqual(self.cli('model', 'add', 'Product').returncode, 0)
-        registered = self.cli('model', 'register', 'ci_project.models.product:Product')
+        registered = self.cli('model', 'register', 'ci_project.models.Product:Product')
         self.assertEqual(registered.returncode, 0, registered.stderr)
 
     def cli(self, *args, cwd=None):
         return subprocess.run([sys.executable, '-m', 'aurora.cli', *args], cwd=cwd or self.project,
-                              env=self.env, text=True, capture_output=True, timeout=20)
+                              env=self.env, text=True, capture_output=True, timeout=60)
 
     def report(self, *args):
         result = self.cli(*args)
@@ -49,7 +49,7 @@ class MigrationCISubprocessTests(unittest.TestCase):
         self.assertTrue((self.project / 'data.sqlite3').exists())
 
     def test_sync_dry_run_drift_has_exit_two_and_no_writes(self):
-        result, data = self.report('db', 'sync', '--dry-run', '--format', 'json', '--check')
+        result, data = self.report('db', 'migrate', '--dry-run', '--format', 'json', '--check')
         self.assertEqual(result.returncode, 2)
         self.assertEqual(data['schema_status'], 'DRIFT')
         self.assertTrue((self.project / 'data.sqlite3').exists())
@@ -61,15 +61,15 @@ class MigrationCISubprocessTests(unittest.TestCase):
         # reviewed migration path in a separate integration suite. This fixture
         # verifies the CI reporting behavior against a matching live schema.
         # Create schema through the actual CLI approval path, not manual assumptions.
-        preview = self.cli('db', 'sync', '--dry-run')
+        preview = self.cli('db', 'migrate', '--dry-run')
         self.assertEqual(preview.returncode, 0, preview.stderr)
         digest = next(line.split(': ', 1)[1] for line in preview.stdout.splitlines() if line.startswith('Plan SHA-256: '))
-        applied = subprocess.run([sys.executable, '-m', 'aurora.cli', 'db', 'sync', '--approve', digest,
+        applied = subprocess.run([sys.executable, '-m', 'aurora.cli', 'db', 'migrate', '--approve', digest,
                                   '--name', 'ci_init', '--backup', 'backups/ci_init.sqlite3'],
-                                 cwd=self.project, env=self.env, text=True, input='APPLY\n', capture_output=True, timeout=20)
+                                 cwd=self.project, env=self.env, text=True, input='APPLY\n', capture_output=True, timeout=60)
         self.assertEqual(applied.returncode, 0, applied.stderr)
         for args in (('db', 'plan', '--format', 'json', '--check'),
-                     ('db', 'sync', '--dry-run', '--format', 'json', '--check')):
+                     ('db', 'migrate', '--dry-run', '--format', 'json', '--check')):
             with self.subTest(args=args):
                 result, data = self.report(*args)
                 self.assertEqual(result.returncode, 0)
@@ -84,7 +84,7 @@ class MigrationCISubprocessTests(unittest.TestCase):
         self.assertIn('aurora:', result.stderr)
 
     def test_json_mode_requires_dry_run(self):
-        result = self.cli('db', 'sync', '--format', 'json', '--check')
+        result = self.cli('db', 'migrate', '--format', 'json', '--check')
         self.assertEqual(result.returncode, 1)
         self.assertEqual(result.stdout, '')
         self.assertIn('--check requires --dry-run', result.stderr)

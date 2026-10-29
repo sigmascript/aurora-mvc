@@ -23,16 +23,16 @@ class TestScopedComponents(unittest.TestCase):
 
     def test_shared_model_default(self):
         self.invoke('model', 'add', 'User')
-        self.assertTrue((self.root / 'models/user.py').is_file())
-        self.assertFalse((self.root / 'apps/blog/models/user.py').exists())
+        self.assertTrue((self.root / 'models/User.py').is_file())
+        self.assertFalse((self.root / 'apps/blog/models/User.py').exists())
 
     def test_local_model_flag(self):
         self.invoke('model', 'add', 'BlogPost', '--app', 'blog')
-        self.assertTrue((self.root / 'apps/blog/models/blog_post.py').is_file())
+        self.assertTrue((self.root / 'apps/blog/models/BlogPost.py').is_file())
 
     def test_legacy_model_positional(self):
         self.invoke('model', 'add', 'blog', 'BlogPost')
-        self.assertTrue((self.root / 'apps/blog/models/blog_post.py').is_file())
+        self.assertTrue((self.root / 'apps/blog/models/BlogPost.py').is_file())
 
     def test_shared_view_default(self):
         self.invoke('view', 'add', 'landing')
@@ -44,12 +44,12 @@ class TestScopedComponents(unittest.TestCase):
 
     def test_shared_list_show(self):
         self.invoke('model', 'add', 'User')
-        self.assertIn('user', self.invoke('model', 'list')[1])
-        self.assertIn('models', self.invoke('model', 'show', 'user')[1])
+        self.assertIn('User', self.invoke('model', 'list')[1])
+        self.assertIn('models', self.invoke('model', 'show', 'User')[1])
 
     def test_controller_flag(self):
         self.invoke('controller', 'add', 'Article', '--app', 'blog')
-        self.assertTrue((self.root / 'apps/blog/controllers/article.py').is_file())
+        self.assertTrue((self.root / 'apps/blog/controllers/Article.py').is_file())
 
     def test_never_overwrite(self):
         self.invoke('model', 'add', 'User')
@@ -60,7 +60,7 @@ class TestScopedComponents(unittest.TestCase):
         with patch.dict(os.environ, {'AURORA_ENV': 'production'}):
             with self.assertRaises(SystemExit):
                 self.invoke('model', 'add', 'User')
-        self.assertFalse((self.root / 'models/user.py').exists())
+        self.assertFalse((self.root / 'models/User.py').exists())
 
     def test_no_database_change(self):
         self.invoke('model', 'add', 'User')

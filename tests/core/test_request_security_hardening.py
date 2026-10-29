@@ -25,8 +25,8 @@ class RequestSecurityHardeningTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = create_project("demo", directory=Path(tmp), modular=True)
             add_app("news_feed", directory=root)
-            self.assertTrue((root / "apps/news_feed/controllers/news_feed.py").exists())
-            self.assertIn("controllers.news_feed import NewsFeed", (root / "app.py").read_text())
+            self.assertTrue((root / "apps/news_feed/controllers/NewsFeed.py").exists())
+            self.assertIn("controllers.NewsFeed import NewsFeed", (root / "app.py").read_text())
 
     def test_atomic_app_update_failure_keeps_original(self):
         with tempfile.TemporaryDirectory() as tmp:

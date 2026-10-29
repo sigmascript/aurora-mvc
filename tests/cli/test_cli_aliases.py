@@ -12,10 +12,10 @@ class ConditionalAliasTests(unittest.TestCase):
             create_controller('blog', 'News', directory=root)
             create_controller('home', 'News', directory=root)
             source = (root / 'app.py').read_text(encoding='utf-8')
-            self.assertIn('from apps.blog.controllers.news import News\n', source)
-            self.assertIn('from apps.home.controllers.news import News as HomeNews\n', source)
-            self.assertIn('app.route("/blog/news", News)', source)
-            self.assertIn('app.route("/home/news", HomeNews)', source)
+            self.assertIn('from apps.blog.controllers.News import News\n', source)
+            self.assertIn('from apps.home.controllers.News import News as HomeNews\n', source)
+            self.assertIn('app.route("/blog/news/", News)', source)
+            self.assertIn('app.route("/home/news/", HomeNews)', source)
             ast.parse(source)
 
     def test_alias_collision_uses_suffix(self):

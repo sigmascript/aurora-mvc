@@ -12,6 +12,7 @@ __pycache__/
 
 # Virtual environments
 .venv/
+.venv-*/
 venv/
 env/
 ENV/
@@ -73,6 +74,10 @@ id_ed25519
 *.pid.lock
 instance/
 local_settings.py
+
+# Local Aurora database configurations (may contain credentials)
+aurora_databases.json
+aurora_databases_*.json
 
 # Editors and IDEs
 .idea/

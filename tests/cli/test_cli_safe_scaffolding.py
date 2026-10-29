@@ -21,8 +21,8 @@ class SafeScaffoldingTests(unittest.TestCase):
         self.assertNotIn(r'\n', content)
         ast.parse(content)
         app_source = (self.root / 'app.py').read_text(encoding='utf-8')
-        self.assertIn('from apps.blog.controllers.news import News', app_source)
-        self.assertIn('app.route("/blog/news", News)', app_source)
+        self.assertIn('from apps.blog.controllers.News import News', app_source)
+        self.assertIn('app.route("/blog/news/", News)', app_source)
         ast.parse(app_source)
 
     def test_view_uses_existing_layout(self):
@@ -49,7 +49,7 @@ class SafeScaffoldingTests(unittest.TestCase):
         app.write_text(app.read_text().replace('# aurora:routes', '# custom routes'))
         with self.assertRaises(ValueError):
             create_controller('home', 'Settings', directory=self.root)
-        self.assertFalse((self.root / 'apps/home/controllers/settings.py').exists())
+        self.assertFalse((self.root / 'apps/home/controllers/Settings.py').exists())
 
     def test_rejects_invalid_names_and_missing_apps(self):
         for name in ('../evil', 'bad/name', 'lowercase', 'A-B'):

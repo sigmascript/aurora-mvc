@@ -1,104 +1,35 @@
-# Command-line interface
+# Aurora MVC command-line interface
 
-The installed console command is `aurora`; the module entry point `python -m aurora` exposes the same top-level command groups. Both were checked on Windows against the current development checkout.
+Aurora exposes project scaffolding and six public database commands. For exact flags, run `aurora --help`, `aurora db --help`, or `aurora db COMMAND --help`.
 
-```bash
-aurora --help
-aurora new --help
-aurora run --help
+## Database commands
+
+| Command | Purpose | Writes? |
+| --- | --- | --- |
+| `aurora db init` | Initialize selected model tables in an empty database | Yes, once, with safeguards |
+| `aurora db plan` | Inspect and compare selected schema, classify differences, report warnings | No |
+| `aurora db migrate` | Preview or apply supported migrations using backend-specific gates | Only after required approvals |
+| `aurora db backup` | Create verified database backup | Writes backup file, not schema |
+| `aurora db restore` | Guided SQLite recovery or restricted MySQL staging restore | Potentially destructive; explicit safeguards |
+| `aurora db history` | Read applied migration records | No |
+
+There are **no database command aliases**. Legacy commands such as `sync`, `check`, `inspect`, `status`, `policy`, `readiness`, `compat`, `migration`, `mysql-create-table`, and `mysql-add-column` are removed from the public CLI.
+
+## Examples
+
+```sh
+aurora db init --model myapp.models:User
+aurora db plan --model myapp.models:User
+aurora db plan --model myapp.models:User --format json --check
+aurora db migrate --model myapp.models:User --dry-run
+aurora db backup --to backup.sqlite3
+aurora db history
 ```
 
-## Check the installed version
+`--config` selects the database configuration (default `aurora_databases.json`); `--database` selects an alias (default `default`). Models may be supplied via repeatable `--model MODULE:CLASS` or an explicit `aurora_models.json` manifest. Missing model selection on SQLite falls back to **inspection only**, not schema verification; `plan --check` returns 3 for this unverified case. An invalid existing manifest is an error.
 
-Both CLI entry points support a version flag:
+`plan` never authorizes writes. Its warnings cover classified differences and limitations of selected-model inspection. For MySQL it includes policy and readiness assessments. JSON output includes structured status and safety data. `--check` returns 2 for detected drift and 3 for unverified MySQL or model-free SQLite state.
 
-```bash
-aurora --version
-aurora -v
-python -m aurora --version
-```
+For SQLite, `migrate --dry-run` previews the existing guarded migration workflow. Applying a migration requires the documented digest, review file, backup, and explicit approval. MySQL migration is restricted to one supported operation at a time, with schema/table/column targeting, exact review and SQL digests, `--apply`, and `--confirm APPLY`. MySQL DDL may commit before migration-history recording; never blindly retry an uncertain operation. See `aurora db migrate --help`.
 
-During alpha development these commands report `Aurora MVC 1.0.0a1` for the current checkout. The CLI reads installed distribution metadata when available and otherwise falls back to Aurora’s package version.
-
-## Commands at a glance
-
-| Group | Purpose |
-| --- | --- |
-| `new` | Create a minimal, MVC, or modular project |
-| `app` | Add, list, or inspect modular applications |
-| `controller` | Add, list, or inspect controllers |
-| `view` | Add, list, or inspect views |
-| `model` | Add, list, inspect, or register model references |
-| `db` | Inspect databases, preview schema changes, and manage reviewed SQLite migrations |
-| `run` | Start an ASGI application with Uvicorn |
-
-Use `aurora GROUP --help` and, where applicable, `aurora GROUP ACTION --help` for the full argument list.
-
-## Create projects
-
-```bash
-aurora new my_site
-aurora new my_mvc_site --mvc
-aurora new my_modular_site --modular
-```
-
-`new` takes the destination project name. It does not overwrite an existing project. The CLI does **not** provide a multilingual project-creation flag; see [Project templates and examples](project-templates.md) for the separate multilingual example.
-
-## Run the development server
-
-From a generated project's root:
-
-```bash
-aurora run --no-reload
-aurora run --host 127.0.0.1 --port 8080 --no-reload
-```
-
-The optional application import target defaults to `app:app`. The default host is `127.0.0.1`, the default port is `8000`, and reload is enabled unless `--no-reload` is supplied. Uvicorn must be installed.
-
-## Work with modular applications and components
-
-```bash
-aurora app add news
-aurora app list
-aurora app show news
-
-aurora controller add index --app news
-aurora controller list --app news
-aurora view list --app news
-aurora model list --app news
-```
-
-Component creation has project-layout requirements. A controller must target a modular app; shared views and models can also be managed without `--app`. Consult the corresponding subcommand help before modifying a project.
-
-Model registration is separate from creating a model file:
-
-```bash
-aurora model register myapp.models:Article
-aurora model registered
-```
-
-These commands manage explicit model references in the project manifest; they do not automatically apply database migrations.
-
-## Database commands and safety
-
-The `db` group includes `list`, `show`, `check`, `inspect`, `plan`, `validate`, `history`, `status`, `sync` (alias `s`), and `migration` subcommands. Some are read-only; others can write schema changes when explicitly approved.
-
-For example, with a configured project database:
-
-```bash
-aurora db list
-aurora db plan --model myapp.models:Article
-aurora db sync --dry-run --model myapp.models:Article
-```
-
-**Do not use database apply or sync-approval commands against valuable databases without reviewing the generated plan and backup requirements.** See the [database guide](database.md) for the safety model. CLI validation can refuse operations in production environments.
-
-## Check the actual syntax
-
-The CLI is under active alpha development. For exact arguments, especially for `db migration`, run:
-
-```bash
-aurora db --help
-aurora db migration --help
-aurora db sync --help
-```
+`restore` is especially sensitive: SQLite prompts before replacement, while MySQL supports only validated staging workflows, **not production restore**. See `aurora db restore --help` and the database guide.

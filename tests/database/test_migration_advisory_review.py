@@ -64,29 +64,29 @@ class AdvisoryReviewTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             show_review(self.root/'missing.json')
 
-    def test_cli_show_review(self):
-        path = create_review(self.root/'first.json',alias='analytics',models=[],plan=self.plan)
-        output = io.StringIO()
-        with contextlib.redirect_stdout(output):
-            self.assertEqual(main(['db','migration','show',str(path)]),0)
-        self.assertIn('Execution disabled.',output.getvalue())
-        self.assertIn('apply separately with explicit approval and backup', output.getvalue())
-        self.assertIn('analytics',output.getvalue())
+    def test_review_is_still_readable_without_removed_cli(self):
+        path = create_review(self.root / 'first.json', alias='analytics', models=[], plan=self.plan)
+        data, plan = show_review(path)
+        self.assertEqual(data['database_alias'], 'analytics')
+        self.assertEqual(plan, self.plan)
+        self.assertFalse(data['executable'])
 
-    def test_cli_create_requires_config(self):
-        with contextlib.redirect_stderr(io.StringIO()):
-            with self.assertRaises(SystemExit) as raised:
-                main(['db','migration','create','--name','sample','--model','example:Model',
-                      '--config',str(self.root/'missing.json')])
-        self.assertEqual(raised.exception.code,1)
+    def test_removed_migration_group_rejected(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
+            main(['db', 'migration', 'show', 'unused.json'])
+        self.assertEqual(raised.exception.code, 2)
 
-    def test_cli_validate_requires_models(self):
-        config = self.root/'aurora_databases.json'
-        config.write_text(json.dumps({'databases':{'default':{'url':'sqlite:///missing.sqlite3'}}}))
-        with contextlib.redirect_stderr(io.StringIO()):
-            with self.assertRaises(SystemExit) as raised:
-                main(['db','validate','--config',str(config)])
-        self.assertEqual(raised.exception.code,1)
+    def test_plan_invalid_config_rejected(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
+            main(['db', 'plan', '--config', str(self.root / 'missing.json')])
+        self.assertEqual(raised.exception.code, 1)
+
+    def test_plan_missing_database_rejected(self):
+        config = self.root / 'aurora_databases.json'
+        config.write_text(json.dumps({'databases': {'default': {'url': 'sqlite:///missing.sqlite3'}}}))
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
+            main(['db', 'plan', '--config', str(config)])
+        self.assertEqual(raised.exception.code, 1)
 
     def test_invalid_json_review_rejected(self):
         path = self.root/'invalid.json'
