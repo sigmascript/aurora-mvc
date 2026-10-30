@@ -2,7 +2,7 @@
 
 **Aurora MVC** is a lightweight, ASGI-first Python web framework built around a clear MVC structure, simple routing, and practical developer tooling.
 
-> **Release status:** `1.0.0a3` is published on PyPI. `1.0.0a4` is under development in this repository and has not yet been released. Development-checkout features may differ from the published Alpha 3 package.
+> **Release status:** This checkout is the **unreleased `1.0.0a5` release candidate**. `1.0.0a3` is the latest published version confirmed by this repository documentation; check PyPI for the current published release. Do not assume Alpha 5 is published until the release is approved and uploaded. AuroraSQL is experimental and opt-in; the existing SQLAlchemy-based database layer and six database CLI commands remain the defaults.
 
 ## Requirements
 
@@ -44,13 +44,19 @@ Using `python -m aurora` from the checkout helps distinguish local development c
 - Database configuration and model registration using SQLAlchemy
 - CLI commands for scaffolding, development, and guarded database workflows
 
-The precise availability and limitations of database operations depend on the backend and release version. The Alpha 4 development checkout exposes six guarded database commands: `init`, `plan`, `migrate`, `backup`, `restore`, and `history`. Backend support and approval requirements vary. See the [database safety guide](docs/database.md).
+The precise availability and limitations of database operations depend on the backend and release version. The current development checkout exposes six guarded database commands: `init`, `plan`, `migrate`, `backup`, `restore`, and `history`. Backend support and approval requirements vary. See the [database safety guide](docs/database.md).
+
+## Experimental AuroraSQL (Alpha 5)
+
+The `aurora.aurorasql` package is an **experimental, opt-in DB-API implementation** for SQLite, MySQL (PyMySQL), and PostgreSQL (psycopg 3). It is not the default database backend, does not replace `aurora.database`, and is not yet integrated into the existing `aurora db` CLI. Its API and migration behavior may change before a stable release.
+
+The standard installation retains SQLAlchemy for the existing database implementation. Optional database drivers can be installed with `.[mysql]` or `.[postgresql]` when working with AuroraSQL on those backends. Use disposable databases for integration tests; review migration plans and recovery procedures before applying schema changes. Do not assume cross-backend migrations are automatically reversible.
 
 ## MySQL migration safety
 
-The published Alpha 3 package provided separate `aurora db mysql-create-table` and `aurora db mysql-add-column` commands. Those are historical Alpha 3 interfaces and are **not available** in the Alpha 4 development CLI.
+The published Alpha 3 package provided separate `aurora db mysql-create-table` and `aurora db mysql-add-column` commands. Those are historical Alpha 3 interfaces and are **not available** in the current development CLI.
 
-Alpha 4 routes supported guarded operations through `aurora db plan` and `aurora db migrate`. MySQL support remains narrowly scoped to explicitly reviewed operations, including supported `CREATE TABLE` and nullable `ADD COLUMN` cases. Consult the [database safety guide](docs/database.md) for the applicable safety gates and limitations. MySQL DDL can commit even if later verification or history recording fails. **Never automatically retry a migration with an uncertain outcome.**
+The current legacy database CLI routes supported guarded operations through `aurora db plan` and `aurora db migrate`. MySQL support remains narrowly scoped to explicitly reviewed operations, including supported `CREATE TABLE` and nullable `ADD COLUMN` cases. Consult the [database safety guide](docs/database.md) for the applicable safety gates and limitations. MySQL DDL can commit even if later verification or history recording fails. **Never automatically retry a migration with an uncertain outcome.**
 
 ## Documentation
 
