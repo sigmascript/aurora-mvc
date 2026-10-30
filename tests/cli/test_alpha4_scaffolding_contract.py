@@ -22,10 +22,10 @@ class Alpha4ScaffoldingContractTests(unittest.TestCase):
         path = create_standalone_controller("AccountSettings", directory=root)
         self.assertEqual(path.name, "AccountSettings.py")
         self.assertIn('app.route("/account-settings/", AccountSettings)', (root / "app.py").read_text())
-        self.assertEqual(show_standalone_controller("AccountSettings", directory=root)["path"], str(path))
+        self.assertEqual(Path(show_standalone_controller("AccountSettings", directory=root)["path"]).resolve(), path.resolve())
         old = root / "controllers" / "legacy.py"
         old.write_text("# existing developer file\n")
-        self.assertEqual(show_standalone_controller("Legacy", directory=root)["path"], str(old))
+        self.assertEqual(Path(show_standalone_controller("Legacy", directory=root)["path"]).resolve(), old.resolve())
         before = (root / "app.py").read_bytes()
         with self.assertRaises(FileExistsError):
             create_standalone_controller("Legacy", directory=root)
@@ -36,25 +36,25 @@ class Alpha4ScaffoldingContractTests(unittest.TestCase):
         path = create_controller("blog", "AccountSettings", directory=root)
         self.assertEqual(path.name, "AccountSettings.py")
         self.assertIn('app.route("/blog/account-settings/", AccountSettings)', (root / "app.py").read_text())
-        self.assertEqual(show_component("controller", "blog", "AccountSettings", directory=root)["path"], str(path))
+        self.assertEqual(Path(show_component("controller", "blog", "AccountSettings", directory=root)["path"]).resolve(), path.resolve())
         old = root / "apps" / "blog" / "controllers" / "legacy.py"
         old.write_text("# legacy\n")
         with self.assertRaises(FileExistsError):
             create_controller("blog", "Legacy", directory=root)
-        self.assertEqual(show_component("controller", "blog", "Legacy", directory=root)["path"], str(old))
+        self.assertEqual(Path(show_component("controller", "blog", "Legacy", directory=root)["path"]).resolve(), old.resolve())
 
     def test_models_camelcase_and_legacy_snake_case_lookup(self):
         root = create_project("site", directory=self.base, modular=True)
         path = create_model("blog", "BlogPost", directory=root)
         self.assertEqual(path.name, "BlogPost.py")
-        self.assertEqual(show_component("model", "blog", "BlogPost", directory=root)["path"], str(path))
+        self.assertEqual(Path(show_component("model", "blog", "BlogPost", directory=root)["path"]).resolve(), path.resolve())
         old = root / "apps" / "blog" / "models" / "OldEntry.py"
         old.write_text("# original\n")
         shared = create_shared_component("model", "AccountSettings", directory=root)
         self.assertEqual(shared.name, "AccountSettings.py")
         legacy = root / "models" / "old_entry.py"
         legacy.write_text("# legacy\n")
-        self.assertEqual(show_shared_component("model", "OldEntry", directory=root)["path"], str(legacy))
+        self.assertEqual(Path(show_shared_component("model", "OldEntry", directory=root)["path"]).resolve(), legacy.resolve())
         with self.assertRaises(FileExistsError):
             create_shared_component("model", "OldEntry", directory=root)
 
