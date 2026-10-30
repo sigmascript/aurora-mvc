@@ -56,7 +56,9 @@ class Column:
 
     def validate(self, value):
         if value is None:
-            if not self.nullable and not self.primary_key:
+            if self.primary_key:
+                raise ValueError("Primary-key column cannot be None")
+            if not self.nullable:
                 raise ValueError("Non-nullable column cannot be None")
             return
         if self.python_type is int and type(value) is bool:
@@ -218,13 +220,114 @@ def _normalize_ordering(order_by, columns):
     return tuple(ordering)
 
 
+# Keep the useful Legacy suffixes without accepting arbitrary SQL expressions.
+_FILTER_OPERATORS = {
+    "gt": ">", "greater-than": ">", "ge": ">=", "greater-equal": ">=",
+    "lt": "<", "less-than": "<", "le": "<=", "less-equal": "<=",
+    "like": "LIKE", "l": "LIKE", "not-like": "NOT LIKE", "nl": "NOT LIKE",
+    "in": "IN", "i": "IN", "not-in": "NOT IN", "ni": "NOT IN",
+    "between": "BETWEEN", "b": "BETWEEN", "not-between": "NOT BETWEEN", "nb": "NOT BETWEEN",
+    "ne": "!=", "not-equal": "!=",
+}
+
+
+def _compile_filters(filters, columns, quote, *, prefix=""):
+    """Compile bounded AND/OR groups with validated fields and bound values.
+
+    Plain dictionary entries are implicitly ANDed. Explicit $and/$or groups
+    accept nonempty lists of nonempty dictionaries. A depth limit avoids
+    unbounded recursive filter structures.
+    """
+    if filters is None:
+        filters = {}
+    if not isinstance(filters, dict):
+        raise TypeError("where must be a dictionary")
+
+    parameters = {}
+    next_parameter = 0
+    max_depth = 8
+
+    def bind(value):
+        nonlocal next_parameter
+        key = f"w{next_parameter}"
+        next_parameter += 1
+        parameters[key] = value
+        return f":{key}"
+
+    def compile_group(group, depth):
+        if depth > max_depth:
+            raise ValueError("Filter nesting exceeds maximum depth")
+        if not isinstance(group, dict):
+            raise TypeError("Filter groups must be dictionaries")
+        if not group:
+            raise ValueError("Filter groups cannot be empty")
+
+        clauses = []
+        for raw_name, value in group.items():
+            if not isinstance(raw_name, str):
+                raise TypeError("Filter column must be a string")
+            if raw_name in ("$and", "$or"):
+                if not isinstance(value, list) or not value:
+                    raise ValueError(f"{raw_name} requires a nonempty list of dictionaries")
+                children = [compile_group(child, depth + 1) for child in value]
+                joiner = " AND " if raw_name == "$and" else " OR "
+                clauses.append("(" + joiner.join(children) + ")")
+                continue
+
+            name, separator, suffix = raw_name.partition("--")
+            operator = _FILTER_OPERATORS.get(suffix) if separator else "="
+            if name not in columns:
+                raise TypeError(f"Unknown column: {name}")
+            if operator is None:
+                raise ValueError(f"Unsupported filter operator: {suffix}")
+            field = columns[name]
+            identifier = prefix + quote(name)
+            if operator in ("IN", "NOT IN"):
+                if not isinstance(value, (list, tuple, set, frozenset)) or not value:
+                    raise ValueError("IN filters require a nonempty collection")
+                if isinstance(value, (set, frozenset)):
+                    raise TypeError("IN filters require an ordered list or tuple")
+                parts = []
+                for item in value:
+                    if item is None:
+                        raise ValueError("IN filters cannot contain None")
+                    field.validate(item)
+                    parts.append(bind(item))
+                clauses.append(f"{identifier} {operator} ({', '.join(parts)})")
+            elif operator in ("BETWEEN", "NOT BETWEEN"):
+                if not isinstance(value, (list, tuple)) or len(value) != 2:
+                    raise ValueError("BETWEEN filters require exactly two values")
+                bounds = []
+                for item in value:
+                    if item is None:
+                        raise ValueError("BETWEEN bounds cannot be None")
+                    field.validate(item)
+                    bounds.append(bind(item))
+                clauses.append(f"{identifier} {operator} {bounds[0]} AND {bounds[1]}")
+            elif value is None:
+                if operator not in ("=", "!="):
+                    raise ValueError("Only equality and inequality support None")
+                field.validate(value)
+                clauses.append(f"{identifier} IS {'NOT ' if operator == '!=' else ''}NULL")
+            else:
+                field.validate(value)
+                if operator in ("LIKE", "NOT LIKE") and field.python_type is not str:
+                    raise TypeError("LIKE requires a string column")
+                clauses.append(f"{identifier} {operator} {bind(value)}")
+        return " AND ".join(clauses)
+
+    if not filters:
+        return "", parameters
+    return " WHERE " + compile_group(filters, 0), parameters
+
+
 class Query:
-    """Lazy equality-filter query with safe ordering and bounded pagination."""
+    """Lazy validated-filter query with safe ordering and bounded pagination."""
 
     def __init__(self, operations, where=None, *, ordering=None, limit=None, offset=0, join=None):
         self._operations = operations
         self.where = dict(where or {})
-        operations.model._validate(self.where)
+        _compile_filters(self.where, operations.model.__columns__, operations._quote)
         self._ordering = ordering
         self._limit = limit
         self._offset = offset
@@ -297,18 +400,9 @@ class Query:
     def _where(self):
         if self._join is None:
             return self._operations._where(self.where)
-        clauses = []
-        parameters = {}
         quote = self._operations._quote
-        for index, (name, value) in enumerate(self.where.items()):
-            identifier = f"{quote('left_row')}.{quote(name)}"
-            if value is None:
-                clauses.append(f"{identifier} IS NULL")
-            else:
-                key = f"w{index}"
-                clauses.append(f"{identifier} = :{key}")
-                parameters[key] = value
-        return (" WHERE " + " AND ".join(clauses) if clauses else ""), parameters
+        return _compile_filters(self.where, self._operations.model.__columns__, quote,
+                                prefix=f"{quote('left_row')}.")
 
     def _select(self, *, first=False):
         if self._offset and self._limit is None and not first:
@@ -387,19 +481,7 @@ class ModelOperations:
         return _identifier(name)
 
     def _where(self, filters):
-        filters = dict(filters or {})
-        self.model._validate(filters)
-        clauses = []
-        parameters = {}
-        for index, (name, value) in enumerate(filters.items()):
-            quoted = self._quote(name)
-            if value is None:
-                clauses.append(f"{quoted} IS NULL")
-            else:
-                key = f"w{index}"
-                clauses.append(f"{quoted} = :{key}")
-                parameters[key] = value
-        return (" WHERE " + " AND ".join(clauses) if clauses else ""), parameters
+        return _compile_filters(filters, self.model.__columns__, self._quote)
 
     def read(self, where=None, *, order_by=None, limit=None, offset=0):
         """Return a lazy query with safe single- or multi-column ordering.
