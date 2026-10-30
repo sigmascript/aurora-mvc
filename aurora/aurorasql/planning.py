@@ -67,6 +67,12 @@ def plan_schema(connection, model):
     warnings = [
         "Database defaults, identity behavior, collation, and advanced type semantics are not verified."
     ]
+    for field_name, field in model.__columns__.items():
+        if field.server_default is not None:
+            warnings.append(
+                f"Model server_default for {field_name} is not emitted by create_table_sql; "
+                "database-side default requires explicit review."
+            )
     if not table.uniqueness_verified:
         warnings.append("Single-column uniqueness has not been verified for this backend.")
     if table.indexes:
@@ -101,6 +107,6 @@ def plan_schema(connection, model):
                 ))
         if observed.default_sql is not None:
             warnings.append(f"Database-side default on {name} requires manual review.")
-    for name in actual.keys() - model.__columns__.keys():
+    for name in sorted(actual.keys() - model.__columns__.keys()):
         changes.append(SchemaChange("extra_column", name, "Existing column is not declared by the model"))
     return SchemaPlan(table.name, True, tuple(changes), tuple(warnings))
