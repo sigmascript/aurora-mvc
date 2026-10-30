@@ -1,6 +1,6 @@
 # Getting started
 
-**Status:** Aurora MVC `1.0.0a1` is published on PyPI. These instructions target the current development checkout, which contains additional unreleased Alpha 2 functionality.
+**Status:** Aurora MVC `1.0.0a1` is being prepared for alpha release. These instructions use a local source checkout; they do not imply a published PyPI release.
 
 ## Requirements and installation
 
@@ -25,25 +25,6 @@ aurora run --no-reload
 Open <http://127.0.0.1:8000/>. The default server imports `app:app` from the current project directory. Stop it with Ctrl+C.
 
 For automatic development reloads, use `aurora run` without `--no-reload`.
-
-## Initialize an MVC project database (optional)
-
-The `--mvc` generator includes `aurora_databases.json` (a default SQLite configuration) and an initially empty `aurora_models.json` manifest. Database initialization requires at least one explicit model. After creating a model class `Users` in `models/users.py`, from the **project root** run:
-
-```bash
-aurora db init --model models.users:Users
-aurora db status --model models.users:Users
-```
-
-To avoid repeating `--model`, register its import reference in the manifest:
-
-```bash
-aurora model register models.users:Users
-aurora model registered
-aurora db init
-```
-
-`model register` only edits the manifest; it does not create or migrate database tables. Running `db init` again after all selected tables exist reports already initialized without changing the schema. Do not use `db init` for schema updates or existing partially initialized databases. See the [database guide](database.md).
 
 ## Create an application manually
 

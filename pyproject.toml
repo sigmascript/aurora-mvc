@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aurora-mvc"
-version = "1.0.0a4"
+version = "1.0.0a1"
 description = "A simple, fast, and modern Python web framework."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -22,9 +22,6 @@ Homepage = "https://auroramvc.com"
 Repository = "https://github.com/sigmascript/aurora-mvc"
 
 [project.optional-dependencies]
-mysql = [
-    "PyMySQL>=1.1,<2",
-]
 dev = [
     "uvicorn>=0.30",
     "pytest>=8.0",

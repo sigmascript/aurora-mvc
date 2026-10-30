@@ -2,7 +2,7 @@
 
 **Aurora MVC** is a lightweight, ASGI-first Python web framework built around a clear MVC structure, simple routing, and practical developer tooling.
 
-> **Release status:** `1.0.0a3` Is published on PyPI. `1.0.0a4` is under development in this repository and has not yet been released. Development-checkout features may differ from the published Alpha 3 package.
+> **Alpha preparation:** This repository is preparing version `1.0.0a1`. The package has not been published as part of this checkpoint. APIs may change during alpha development.
 
 ## Requirements
 
@@ -34,39 +34,16 @@ python -m pip install -e ".[dev]"
 python -m aurora --help
 ```
 
-Using `python -m aurora` from the checkout helps distinguish local development code from a separately installed global `aurora` command.
+## Examples
 
-## Features
+The repository includes four framework examples under `examples/`:
 
-- ASGI-first request handling and routing
-- MVC-friendly project structure and controllers
-- Templates, static files, and multilingual application support
-- Database configuration and model registration using SQLAlchemy
-- CLI commands for scaffolding, development, and guarded database workflows
+- `minimal` — a minimal application
+- `mvc` — a controller and Jinja view
+- `modular` — separate applications and namespaced views
+- `multilingual` — locale-aware routes
 
-The precise availability and limitations of database operations depend on the backend and release version. The Alpha 4 development checkout exposes six guarded database commands: `init`, `plan`, `migrate`, `backup`, `restore`, and `history`. Backend support and approval requirements vary. See the [database safety guide](docs/database.md).
-
-## MySQL migration safety
-
-The published Alpha 3 package provided separate `aurora db mysql-create-table` and `aurora db mysql-add-column` commands. Those are historical Alpha 3 interfaces and are **not available** in the Alpha 4 development CLI.
-
-Alpha 4 routes supported guarded operations through `aurora db plan` and `aurora db migrate`. MySQL support remains narrowly scoped to explicitly reviewed operations, including supported `CREATE TABLE` and nullable `ADD COLUMN` cases. Consult the [database safety guide](docs/database.md) for the applicable safety gates and limitations. MySQL DDL can commit even if later verification or history recording fails. **Never automatically retry a migration with an uncertain outcome.**
-
-## Documentation
-
-- [Documentation index](docs/index.md)
-- [Getting started](docs/getting-started.md)
-- [CLI reference](docs/cli.md)
-- [Project templates](docs/project-templates.md)
-- [Routing and controllers](docs/routing.md)
-- [Database operations and safety](docs/database.md)
-- [Multilingual applications](docs/multilingual.md)
-
-Examples are available in the [`examples/`](examples/) directory.
-
-## Development and tests
-
-Install development dependencies:
+Install Aurora MVC and the development dependencies from this checkout first. Then run an example from its own directory:
 
 ```bash
 python -m pip install -e ".[dev]"
