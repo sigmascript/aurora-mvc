@@ -1,73 +1,33 @@
 # Database operations and safety
 
-Aurora MVC provides SQLAlchemy-based database interfaces and CLI tools for configuring named databases, registering models, inspecting existing SQLite schemas, and reviewing limited schema migrations. Database operations require more care than the minimal web starter.
+Aurora MVC supports SQLite and guarded MySQL database workflows. This document describes the **six-command public CLI** in the unreleased `1.0.0a5` checkout. These commands still use the existing SQLAlchemy-backed database implementation; experimental `aurora.aurorasql` is separate and is not wired into this CLI. Use `aurora db COMMAND --help` for the complete supported flags.
 
-## Inspect commands first
+## Configuration
 
-Run these commands from the root of the **intended project**:
+Database aliases are configured in `aurora_databases.json`; explicit model references can be registered in `aurora_models.json` or passed with `--model MODULE:CLASS`. `url_env` reads a connection URL from an environment variable at configuration construction time and is mutually exclusive with `url`; do not commit credentials to source control.
 
-```bash
-aurora db --help
-aurora db migration --help
-aurora db sync --help
+## Six commands
+
+1. `aurora db init`: initialize an empty selected schema once; refuse partial or unrelated schemas. Never use it as a migration command.
+2. `aurora db plan`: read-only inspection and schema planning with safety warnings. SQLite without models is inspection-only (unverified). MySQL combines schema comparison, policy classification, and readiness assessment; neither mode authorizes execution.
+3. `aurora db migrate`: guarded SQLite migration preview/application or one explicitly scoped MySQL operation. All existing review, backup, approval, digest, confirmation, and history protections remain mandatory.
+4. `aurora db backup`: verified SQLite backup or MySQL SQL dump using the configured client/login profile.
+5. `aurora db restore`: guided SQLite recovery; MySQL restoration is restricted to checked staging targets. Production MySQL restore is not supported.
+6. `aurora db history`: inspect applied migrations and optional legacy history file.
+
+All other database CLI commands and aliases are removed, including `sync`, `check`, `inspect`, `status`, `validate`, `compat`, `policy`, `readiness`, `migration`, `mysql-create-table`, and `mysql-add-column`. Their meaningful read-only schema checks now belong to `plan`; guarded execution belongs to `migrate`.
+
+## Safe workflow
+
+```sh
+aurora db plan --model myapp.models:User --check
+aurora db migrate --model myapp.models:User --dry-run
+aurora db backup --to before.sqlite3
+aurora db history
 ```
 
-The `db` command groups are:
+A plan can be incomplete even when it reports no differences: unselected tables and unsupported database features are not verified. `plan --check` exits 2 on drift and 3 for unverified states where applicable. Never treat a dry run or a policy classification as permission to execute DDL.
 
-| Command | Purpose |
-| --- | --- |
-| `list`, `show` | Inspect configured database aliases and their details |
-| `check`, `inspect` | Check or inspect an existing SQLite database |
-| `plan` | Compare explicitly selected models with an existing schema without applying changes |
-| `validate` | Review migration readiness |
-| `history`, `status` | Read applied migration history or status |
-| `sync` (alias `s`) | Preview changes, or enter the separate approved apply workflow |
-| `migration create` | Save an advisory JSON review file; does not execute SQL |
-| `migration show` | Verify and display a saved review |
-| `migration apply` | **Write to the database** using an approved review and backup |
+SQLite application uses a reviewed digest, existing review directory, explicit backup path, and confirmation gates. MySQL application requires the exact schema and operation, review and SQL hashes, `--apply`, and `--confirm APPLY`; unsupported/destructive operations are not enabled. MySQL DDL may commit before recording history. If execution outcome is uncertain, inspect the live schema and history rather than retrying automatically.
 
-Read-only inspection commands are not a substitute for a backup before any subsequent write operation.
-
-## Configuration and explicit models
-
-The default configuration path is `aurora_databases.json`. Database commands generally accept `--config` to select a different configuration file and `--database` to select an alias (default: `default`). Configuration and model references must be valid for the project; Aurora does not silently invent missing database files or models.
-
-The model manifest defaults to `aurora_models.json`. Commands that compare models accept repeatable `--model MODULE:CLASS` references, or can use the project manifest. Model registration does **not** itself migrate the schema.
-
-For example, to register an explicit model reference:
-
-```bash
-aurora model register myapp.models:Article
-aurora model registered
-```
-
-Replace the illustrative module and class with a real importable Aurora model in your project.
-
-## Safe, read-only workflow
-
-After verifying the database configuration and model references, begin with inspection and planning:
-
-```bash
-aurora db list
-aurora db show default
-aurora db check
-aurora db inspect
-aurora db plan --model myapp.models:Article --explain
-aurora db sync --dry-run --model myapp.models:Article
-```
-
-These examples assume a **pre-existing, correctly configured database** and a valid project model. They are not an instruction to create or modify a real database. A missing database, invalid configuration, or incompatible migration history may cause Aurora to refuse the operation.
-
-For CI, `aurora db plan --check` checks for schema drift and may exit with code `2` when drift is detected. `aurora db sync --dry-run --check` provides a dry-run check; `--check` on `sync` requires `--dry-run`.
-
-## Applying migrations requires explicit approval
-
-Aurora's SQLite write workflow is deliberately constrained. It supports reviewed additive changes such as creating tables and adding nullable columns; it does not promise arbitrary destructive schema migrations. Do not assume that dropping tables, renaming columns, or complex data transformations are automatically supported.
-
-Before any write, verify the target alias and file, make an independent backup, review the exact proposed plan, and confirm the plan has not changed. The `sync` apply path requires a reviewed SHA-256 digest, a migration name, a new backup destination, and interactive `APPLY` confirmation. The `migration apply` path requires a saved review file, its exact approval digest, and a new backup path.
-
-**Do not copy an approval digest from this guide or run apply commands against valuable databases as an experiment.** Read the command-specific help and perform initial trials only against disposable test databases. Production-environment checks and incompatible history/schema checks can refuse unsafe operations.
-
-## Further reference
-
-See [CLI reference](cli.md) for the command overview. For precise alpha behavior, inspect `aurora/database/` and the corresponding tests before planning a migration. This page intentionally avoids presenting a universal one-command migration recipe.
+MySQL backups/restores may require local MySQL command-line clients and secure `mysql_config_editor` login paths. Staging restore must use a separate restricted target; never point it at the production schema.
