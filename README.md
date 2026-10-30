@@ -2,7 +2,7 @@
 
 **Aurora MVC** is a lightweight, ASGI-first Python web framework built around a clear MVC structure, simple routing, and practical developer tooling.
 
-> **Release status:** `1.0.0a3` is published on PyPI. `1.0.0a4` is under development in this repository and has not yet been released. Development-checkout features may differ from the published Alpha 3 package.
+> **Release status:** `1.0.0a3` Is published on PyPI. `1.0.0a4` is under development in this repository and has not yet been released. Development-checkout features may differ from the published Alpha 3 package.
 
 ## Requirements
 
