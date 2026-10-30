@@ -231,7 +231,7 @@ _FILTER_OPERATORS = {
 }
 
 
-def _compile_filters(filters, columns, quote, *, prefix=""):
+def _compile_filters(filters, columns, quote, *, prefix="", identifiers=None):
     """Compile bounded AND/OR groups with validated fields and bound values.
 
     Plain dictionary entries are implicitly ANDed. Explicit $and/$or groups
@@ -281,7 +281,7 @@ def _compile_filters(filters, columns, quote, *, prefix=""):
             if operator is None:
                 raise ValueError(f"Unsupported filter operator: {suffix}")
             field = columns[name]
-            identifier = prefix + quote(name)
+            identifier = identifiers[name] if identifiers is not None else prefix + quote(name)
             if operator in ("IN", "NOT IN"):
                 if not isinstance(value, (list, tuple, set, frozenset)) or not value:
                     raise ValueError("IN filters require a nonempty collection")
@@ -324,17 +324,21 @@ def _compile_filters(filters, columns, quote, *, prefix=""):
 class Query:
     """Lazy validated-filter query with safe ordering and bounded pagination."""
 
-    def __init__(self, operations, where=None, *, ordering=None, limit=None, offset=0, join=None):
+    def __init__(self, operations, where=None, *, ordering=None, limit=None, offset=0, join=None, selected=None):
         self._operations = operations
         self.where = dict(where or {})
-        _compile_filters(self.where, operations.model.__columns__, operations._quote)
+        if join is None:
+            _compile_filters(self.where, operations.model.__columns__, operations._quote)
+        self._selected = selected
         self._ordering = ordering
         self._limit = limit
         self._offset = offset
         self._join = join
+        if join is not None:
+            self._where()
         if ordering is not None:
             for name, descending in ordering:
-                if name not in operations.model.__columns__:
+                if name not in self._available_columns():
                     raise ValueError(f"Unknown ordering column: {name!r}")
                 if type(descending) is not bool:
                     raise TypeError("descending must be a boolean")
@@ -345,64 +349,110 @@ class Query:
 
     def order_by(self, name, *, descending=False):
         """Return a new query ordered by one declared model column."""
-        if name not in self._operations.model.__columns__:
+        if name not in self._available_columns():
             raise ValueError(f"Unknown ordering column: {name!r}")
         if type(descending) is not bool:
             raise TypeError("descending must be a boolean")
         return Query(self._operations, self.where,
-                     ordering=((name, descending),), limit=self._limit, offset=self._offset, join=self._join)
+                     ordering=((name, descending),), limit=self._limit, offset=self._offset, join=self._join, selected=self._selected)
 
     def limit(self, count):
         """Return a new query with a nonnegative maximum row count."""
         if type(count) is not int or count < 0:
             raise ValueError("limit must be a nonnegative integer")
         return Query(self._operations, self.where,
-                     ordering=self._ordering, limit=count, offset=self._offset, join=self._join)
+                     ordering=self._ordering, limit=count, offset=self._offset, join=self._join, selected=self._selected)
 
     def offset(self, count):
         """Return a new query that skips rows; requires an explicit limit."""
         if type(count) is not int or count < 0:
             raise ValueError("offset must be a nonnegative integer")
         return Query(self._operations, self.where,
-                     ordering=self._ordering, limit=self._limit, offset=count, join=self._join)
+                     ordering=self._ordering, limit=self._limit, offset=count, join=self._join, selected=self._selected)
+
+    def _models(self):
+        return (self._operations.model,) + tuple(step[0] for step in (self._join or ()))
+
+    def _available_columns(self):
+        models = self._models()
+        if self._join is None:
+            return models[0].__columns__
+        columns = {}
+        for model in models:
+            for name, field in model.__columns__.items():
+                columns[f"{model.__table_name__}.{name}"] = field
+        for name, field in models[0].__columns__.items():
+            columns[name] = field
+        return columns
+
+    def _qualified(self, name):
+        models = self._models()
+        if name in models[0].__columns__:
+            return f"{self._operations._quote('left_row')}.{self._operations._quote(name)}"
+        if not isinstance(name, str) or name.count('.') != 1:
+            raise ValueError(f"Unknown qualified column: {name!r}")
+        table, field = name.split('.')
+        for index, model in enumerate(models):
+            if model.__table_name__ == table and field in model.__columns__:
+                alias = 'left_row' if index == 0 else f'right_row_{index}'
+                return f"{self._operations._quote(alias)}.{self._operations._quote(field)}"
+        raise ValueError(f"Unknown qualified column: {name!r}")
 
     def join(self, other_model, *, on):
-        """Inner-join a declared model on two explicit columns.
-
-        Joined results are dictionaries with ``left__`` and ``right__`` keys,
-        rather than partially hydrated model objects. Only one join is supported.
-        """
-        if self._join is not None:
-            raise ValueError("Only one join is supported")
+        """Add an explicit inner join. Qualified left columns use table.column."""
         if not isinstance(other_model, type) or not issubclass(other_model, Model) or other_model is Model:
             raise TypeError("join requires a declared Model subclass")
-        if other_model.__table_name__ == self._operations.model.__table_name__:
-            raise ValueError("Joining a table to itself is not supported")
+        if other_model.__table_name__ in {model.__table_name__ for model in self._models()}:
+            raise ValueError("Only one join per table is supported; joining a table to itself is not supported")
         if not isinstance(on, tuple) or len(on) != 2:
             raise TypeError("on must be a (left_column, right_column) tuple")
         left, right = on
-        if left not in self._operations.model.__columns__ or right not in other_model.__columns__:
+        if left not in self._available_columns() or right not in other_model.__columns__:
             raise ValueError("Join columns must be declared on their respective models")
         return Query(self._operations, self.where, ordering=self._ordering,
                      limit=self._limit, offset=self._offset,
-                     join=(other_model, left, right))
+                     join=(self._join or ()) + ((other_model, left, right),),
+                     selected=self._selected)
+
+    def where_joined(self, where):
+        """Replace filters on a joined query using validated qualified fields."""
+        if self._join is None:
+            raise ValueError("where_joined requires a join")
+        return Query(self._operations, where, ordering=self._ordering,
+                     limit=self._limit, offset=self._offset,
+                     join=self._join, selected=self._selected)
+
+    def select(self, *columns):
+        """Select explicit validated columns from a joined query."""
+        if self._join is None:
+            raise ValueError("Projection currently requires a join")
+        if not columns or len(set(columns)) != len(columns):
+            raise ValueError("Selected columns must be nonempty and unique")
+        for name in columns:
+            if name not in self._available_columns():
+                raise ValueError(f"Unknown selected column: {name!r}")
+        return Query(self._operations, self.where, ordering=self._ordering,
+                     limit=self._limit, offset=self._offset,
+                     join=self._join, selected=tuple(columns))
 
     def _source(self):
         if self._join is None:
             return self._operations.table
-        other, left, right = self._join
         quote = self._operations._quote
-        return (f"{self._operations.table} AS {quote('left_row')} "
-                f"INNER JOIN {quote(other.__table_name__)} AS {quote('right_row')} "
-                f"ON {quote('left_row')}.{quote(left)} = "
-                f"{quote('right_row')}.{quote(right)}")
+        sql = f"{self._operations.table} AS {quote('left_row')}"
+        for index, (model, left, right) in enumerate(self._join, 1):
+            alias = f'right_row_{index}'
+            sql += (f" INNER JOIN {quote(model.__table_name__)} AS {quote(alias)}"
+                    f" ON {self._qualified(left)} = {quote(alias)}.{quote(right)}")
+        return sql
 
     def _where(self):
         if self._join is None:
             return self._operations._where(self.where)
-        quote = self._operations._quote
-        return _compile_filters(self.where, self._operations.model.__columns__, quote,
-                                prefix=f"{quote('left_row')}.")
+        columns = self._available_columns()
+        identifiers = {name: self._qualified(name) for name in columns}
+        return _compile_filters(self.where, columns, self._operations._quote,
+                                identifiers=identifiers)
 
     def _select(self, *, first=False):
         if self._offset and self._limit is None and not first:
@@ -412,19 +462,30 @@ class Query:
         if self._join is None:
             columns = "*"
         else:
-            other, _, _ = self._join
             selected = []
-            for prefix, model in (("left_row", self._operations.model), ("right_row", other)):
-                for name in model.__columns__:
-                    selected.append(
-                        f"{quote(prefix)}.{quote(name)} AS {quote(prefix.split('_')[0] + '__' + name)}"
-                    )
+            models = self._models()
+            if self._selected is None:
+                names = [f"{model.__table_name__}.{name}"
+                         for model in models for name in model.__columns__]
+            else:
+                names = self._selected
+            for name in names:
+                if '.' in name:
+                    table, field = name.split('.')
+                    index = next(i for i, model in enumerate(models)
+                                 if model.__table_name__ == table)
+                else:
+                    field = name
+                    index = 0
+                alias = ('left' if index == 0 else
+                         'right' if len(models) == 2 else f'right{index}')
+                selected.append(f"{self._qualified(name)} AS {quote(alias + '__' + field)}")
             columns = ", ".join(selected)
         sql = f"SELECT {columns} FROM {self._source()}{clause}"
         if self._ordering is not None:
             parts = []
             for name, descending in self._ordering:
-                qualified = (f"{quote('left_row')}." if self._join else "") + quote(name)
+                qualified = self._qualified(name) if self._join else quote(name)
                 parts.append(f"{qualified} {'DESC' if descending else 'ASC'}")
             sql += " ORDER BY " + ", ".join(parts)
         count = 1 if first and self._limit is None else self._limit
