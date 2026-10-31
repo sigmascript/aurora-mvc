@@ -8,6 +8,9 @@ import re
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import date, datetime
+from decimal import Decimal
+
+from .sql_types import parse_sql_type
 
 
 _TYPES = (str, int, float, bool, date, datetime)
@@ -27,8 +30,13 @@ class Column:
     def __init__(self, python_type, *, primary_key=False, nullable=False,
                  default=None, length=None, unique=False,
                  server_default=None, references=None):
-        if python_type not in _TYPES:
+        self.sql_type = None
+        if isinstance(python_type, str):
+            self.sql_type, python_type = parse_sql_type(python_type)
+        if python_type not in _TYPES and python_type is not Decimal:
             raise TypeError("Unsupported column type")
+        if self.sql_type is not None and length is not None:
+            raise ValueError("SQL type declarations already include their length")
         if length is not None and (python_type is not str or type(length) is not int or length <= 0):
             raise ValueError("length must be a positive integer for str fields")
         if type(primary_key) is not bool or type(nullable) is not bool or type(unique) is not bool:
@@ -56,7 +64,9 @@ class Column:
 
     def validate(self, value):
         if value is None:
-            if not self.nullable and not self.primary_key:
+            if self.primary_key:
+                raise ValueError("Primary-key column cannot be None")
+            if not self.nullable:
                 raise ValueError("Non-nullable column cannot be None")
             return
         if self.python_type is int and type(value) is bool:
@@ -65,8 +75,18 @@ class Column:
             return
         if not isinstance(value, self.python_type):
             raise TypeError(f"Expected {self.python_type.__name__} column value")
-        if self.length is not None and len(value) > self.length:
+        max_length = self.length
+        if self.sql_type and self.sql_type.startswith("VARCHAR("):
+            max_length = int(self.sql_type[8:-1])
+        if max_length is not None and len(value) > max_length:
             raise ValueError("String exceeds column length")
+        if self.sql_type and self.sql_type.startswith("DECIMAL("):
+            precision, scale = map(int, self.sql_type[8:-1].split(","))
+            if not value.is_finite():
+                raise ValueError("DECIMAL value must be finite")
+            exponent = value.as_tuple().exponent
+            if exponent < -scale or max(value.adjusted() + 1, 0) > precision - scale:
+                raise ValueError("DECIMAL value exceeds declared precision or scale")
 
 
 def column(python_type, **options):
@@ -111,7 +131,9 @@ class Model:
         values = dict(row)
         for name, field in cls.__columns__.items():
             value = values.get(name)
-            if field.python_type is bool and type(value) is int and value in (0, 1):
+            if field.python_type is Decimal and value is not None and not isinstance(value, Decimal):
+                values[name] = Decimal(str(value))
+            elif field.python_type is bool and type(value) is int and value in (0, 1):
                 values[name] = bool(value)
             elif field.python_type is datetime and isinstance(value, str):
                 values[name] = datetime.fromisoformat(value)
@@ -156,8 +178,28 @@ class Model:
 
     @classmethod
     def read(cls, where=None, *, order_by=None, limit=None, offset=0):
-        """Build a lazy query with optional ordering and pagination."""
-        return cls._operations().read(where, order_by=order_by, limit=limit, offset=offset)
+        """Read records directly as a list of plain dictionaries."""
+        return cls._operations().read(where, order_by=order_by, limit=limit,
+                                      offset=offset)
+
+    @classmethod
+    def query(cls, sql, parameters=None):
+        """Execute parameterized SQL directly; return rows or affected count."""
+        return cls._operations().query(sql, parameters)
+
+    @classmethod
+    def legacy_query(cls, where=None, *, order_by=None, limit=None, offset=0):
+        """Temporary Alpha 8 lazy-query compatibility; slated for retirement."""
+        return cls._operations().legacy_query(where, order_by=order_by,
+                                              limit=limit, offset=offset)
+
+    @classmethod
+    def join(cls, models, *, cols=None, where=None, order_by=None,
+             limit=None, offset=0, on=None):
+        """Read related models directly, using declared relationships or explicit on."""
+        return cls._operations().join(models, cols=cols, where=where,
+                                      order_by=order_by, limit=limit,
+                                      offset=offset, on=on)
 
     @classmethod
     def create(cls, **values):
@@ -218,20 +260,125 @@ def _normalize_ordering(order_by, columns):
     return tuple(ordering)
 
 
-class Query:
-    """Lazy equality-filter query with safe ordering and bounded pagination."""
+# Keep the useful Legacy suffixes without accepting arbitrary SQL expressions.
+_FILTER_OPERATORS = {
+    "gt": ">", "greater-than": ">", "ge": ">=", "greater-equal": ">=",
+    "lt": "<", "less-than": "<", "le": "<=", "less-equal": "<=",
+    "like": "LIKE", "l": "LIKE", "not-like": "NOT LIKE", "nl": "NOT LIKE",
+    "in": "IN", "i": "IN", "not-in": "NOT IN", "ni": "NOT IN",
+    "between": "BETWEEN", "b": "BETWEEN", "not-between": "NOT BETWEEN", "nb": "NOT BETWEEN",
+    "ne": "!=", "not-equal": "!=",
+}
 
-    def __init__(self, operations, where=None, *, ordering=None, limit=None, offset=0, join=None):
+
+def _compile_filters(filters, columns, quote, *, prefix="", identifiers=None):
+    """Compile bounded AND/OR groups with validated fields and bound values.
+
+    Plain dictionary entries are implicitly ANDed. Explicit $and/$or groups
+    accept nonempty lists of nonempty dictionaries. A depth limit avoids
+    unbounded recursive filter structures.
+    """
+    if filters is None:
+        filters = {}
+    if not isinstance(filters, dict):
+        raise TypeError("where must be a dictionary")
+
+    parameters = {}
+    next_parameter = 0
+    max_depth = 8
+
+    def bind(value):
+        nonlocal next_parameter
+        key = f"w{next_parameter}"
+        next_parameter += 1
+        parameters[key] = value
+        return f":{key}"
+
+    def compile_group(group, depth):
+        if depth > max_depth:
+            raise ValueError("Filter nesting exceeds maximum depth")
+        if not isinstance(group, dict):
+            raise TypeError("Filter groups must be dictionaries")
+        if not group:
+            raise ValueError("Filter groups cannot be empty")
+
+        clauses = []
+        for raw_name, value in group.items():
+            if not isinstance(raw_name, str):
+                raise TypeError("Filter column must be a string")
+            if raw_name in ("$and", "$or"):
+                if not isinstance(value, list) or not value:
+                    raise ValueError(f"{raw_name} requires a nonempty list of dictionaries")
+                children = [compile_group(child, depth + 1) for child in value]
+                joiner = " AND " if raw_name == "$and" else " OR "
+                clauses.append("(" + joiner.join(children) + ")")
+                continue
+
+            name, separator, suffix = raw_name.partition("--")
+            operator = _FILTER_OPERATORS.get(suffix) if separator else "="
+            if name not in columns:
+                raise TypeError(f"Unknown column: {name}")
+            if operator is None:
+                raise ValueError(f"Unsupported filter operator: {suffix}")
+            field = columns[name]
+            identifier = identifiers[name] if identifiers is not None else prefix + quote(name)
+            if operator in ("IN", "NOT IN"):
+                if not isinstance(value, (list, tuple, set, frozenset)) or not value:
+                    raise ValueError("IN filters require a nonempty collection")
+                if isinstance(value, (set, frozenset)):
+                    raise TypeError("IN filters require an ordered list or tuple")
+                parts = []
+                for item in value:
+                    if item is None:
+                        raise ValueError("IN filters cannot contain None")
+                    field.validate(item)
+                    parts.append(bind(item))
+                clauses.append(f"{identifier} {operator} ({', '.join(parts)})")
+            elif operator in ("BETWEEN", "NOT BETWEEN"):
+                if not isinstance(value, (list, tuple)) or len(value) != 2:
+                    raise ValueError("BETWEEN filters require exactly two values")
+                bounds = []
+                for item in value:
+                    if item is None:
+                        raise ValueError("BETWEEN bounds cannot be None")
+                    field.validate(item)
+                    bounds.append(bind(item))
+                clauses.append(f"{identifier} {operator} {bounds[0]} AND {bounds[1]}")
+            elif value is None:
+                if operator not in ("=", "!="):
+                    raise ValueError("Only equality and inequality support None")
+                field.validate(value)
+                clauses.append(f"{identifier} IS {'NOT ' if operator == '!=' else ''}NULL")
+            else:
+                field.validate(value)
+                if operator in ("LIKE", "NOT LIKE") and field.python_type is not str:
+                    raise TypeError("LIKE requires a string column")
+                clauses.append(f"{identifier} {operator} {bind(value)}")
+        return " AND ".join(clauses)
+
+    if not filters:
+        return "", parameters
+    return " WHERE " + compile_group(filters, 0), parameters
+
+
+class Query:
+    """Lazy validated-filter query with safe ordering and bounded pagination."""
+
+    def __init__(self, operations, where=None, *, ordering=None, limit=None, offset=0, join=None, selected=None):
         self._operations = operations
         self.where = dict(where or {})
-        operations.model._validate(self.where)
+        if join is None:
+            _compile_filters(self.where, operations.model.__columns__, operations._quote)
+        self._selected = selected
         self._ordering = ordering
         self._limit = limit
         self._offset = offset
         self._join = join
+        if join is not None:
+            self._where()
         if ordering is not None:
             for name, descending in ordering:
-                if name not in operations.model.__columns__:
+                if name not in self._available_columns():
                     raise ValueError(f"Unknown ordering column: {name!r}")
                 if type(descending) is not bool:
                     raise TypeError("descending must be a boolean")
@@ -242,73 +389,110 @@ class Query:
 
     def order_by(self, name, *, descending=False):
         """Return a new query ordered by one declared model column."""
-        if name not in self._operations.model.__columns__:
+        if name not in self._available_columns():
             raise ValueError(f"Unknown ordering column: {name!r}")
         if type(descending) is not bool:
             raise TypeError("descending must be a boolean")
         return Query(self._operations, self.where,
-                     ordering=((name, descending),), limit=self._limit, offset=self._offset, join=self._join)
+                     ordering=((name, descending),), limit=self._limit, offset=self._offset, join=self._join, selected=self._selected)
 
     def limit(self, count):
         """Return a new query with a nonnegative maximum row count."""
         if type(count) is not int or count < 0:
             raise ValueError("limit must be a nonnegative integer")
         return Query(self._operations, self.where,
-                     ordering=self._ordering, limit=count, offset=self._offset, join=self._join)
+                     ordering=self._ordering, limit=count, offset=self._offset, join=self._join, selected=self._selected)
 
     def offset(self, count):
         """Return a new query that skips rows; requires an explicit limit."""
         if type(count) is not int or count < 0:
             raise ValueError("offset must be a nonnegative integer")
         return Query(self._operations, self.where,
-                     ordering=self._ordering, limit=self._limit, offset=count, join=self._join)
+                     ordering=self._ordering, limit=self._limit, offset=count, join=self._join, selected=self._selected)
+
+    def _models(self):
+        return (self._operations.model,) + tuple(step[0] for step in (self._join or ()))
+
+    def _available_columns(self):
+        models = self._models()
+        if self._join is None:
+            return models[0].__columns__
+        columns = {}
+        for model in models:
+            for name, field in model.__columns__.items():
+                columns[f"{model.__table_name__}.{name}"] = field
+        for name, field in models[0].__columns__.items():
+            columns[name] = field
+        return columns
+
+    def _qualified(self, name):
+        models = self._models()
+        if name in models[0].__columns__:
+            return f"{self._operations._quote('left_row')}.{self._operations._quote(name)}"
+        if not isinstance(name, str) or name.count('.') != 1:
+            raise ValueError(f"Unknown qualified column: {name!r}")
+        table, field = name.split('.')
+        for index, model in enumerate(models):
+            if model.__table_name__ == table and field in model.__columns__:
+                alias = 'left_row' if index == 0 else f'right_row_{index}'
+                return f"{self._operations._quote(alias)}.{self._operations._quote(field)}"
+        raise ValueError(f"Unknown qualified column: {name!r}")
 
     def join(self, other_model, *, on):
-        """Inner-join a declared model on two explicit columns.
-
-        Joined results are dictionaries with ``left__`` and ``right__`` keys,
-        rather than partially hydrated model objects. Only one join is supported.
-        """
-        if self._join is not None:
-            raise ValueError("Only one join is supported")
+        """Add an explicit inner join. Qualified left columns use table.column."""
         if not isinstance(other_model, type) or not issubclass(other_model, Model) or other_model is Model:
             raise TypeError("join requires a declared Model subclass")
-        if other_model.__table_name__ == self._operations.model.__table_name__:
-            raise ValueError("Joining a table to itself is not supported")
+        if other_model.__table_name__ in {model.__table_name__ for model in self._models()}:
+            raise ValueError("Only one join per table is supported; joining a table to itself is not supported")
         if not isinstance(on, tuple) or len(on) != 2:
             raise TypeError("on must be a (left_column, right_column) tuple")
         left, right = on
-        if left not in self._operations.model.__columns__ or right not in other_model.__columns__:
+        if left not in self._available_columns() or right not in other_model.__columns__:
             raise ValueError("Join columns must be declared on their respective models")
         return Query(self._operations, self.where, ordering=self._ordering,
                      limit=self._limit, offset=self._offset,
-                     join=(other_model, left, right))
+                     join=(self._join or ()) + ((other_model, left, right),),
+                     selected=self._selected)
+
+    def where_joined(self, where):
+        """Replace filters on a joined query using validated qualified fields."""
+        if self._join is None:
+            raise ValueError("where_joined requires a join")
+        return Query(self._operations, where, ordering=self._ordering,
+                     limit=self._limit, offset=self._offset,
+                     join=self._join, selected=self._selected)
+
+    def select(self, *columns):
+        """Select explicit validated columns from a joined query."""
+        if self._join is None:
+            raise ValueError("Projection currently requires a join")
+        if not columns or len(set(columns)) != len(columns):
+            raise ValueError("Selected columns must be nonempty and unique")
+        for name in columns:
+            if name not in self._available_columns():
+                raise ValueError(f"Unknown selected column: {name!r}")
+        return Query(self._operations, self.where, ordering=self._ordering,
+                     limit=self._limit, offset=self._offset,
+                     join=self._join, selected=tuple(columns))
 
     def _source(self):
         if self._join is None:
             return self._operations.table
-        other, left, right = self._join
         quote = self._operations._quote
-        return (f"{self._operations.table} AS {quote('left_row')} "
-                f"INNER JOIN {quote(other.__table_name__)} AS {quote('right_row')} "
-                f"ON {quote('left_row')}.{quote(left)} = "
-                f"{quote('right_row')}.{quote(right)}")
+        sql = f"{self._operations.table} AS {quote('left_row')}"
+        for index, (model, left, right) in enumerate(self._join, 1):
+            alias = f'right_row_{index}'
+            sql += (f" INNER JOIN {quote(model.__table_name__)} AS {quote(alias)}"
+                    f" ON {self._qualified(left)} = {quote(alias)}.{quote(right)}")
+        return sql
 
     def _where(self):
         if self._join is None:
             return self._operations._where(self.where)
-        clauses = []
-        parameters = {}
-        quote = self._operations._quote
-        for index, (name, value) in enumerate(self.where.items()):
-            identifier = f"{quote('left_row')}.{quote(name)}"
-            if value is None:
-                clauses.append(f"{identifier} IS NULL")
-            else:
-                key = f"w{index}"
-                clauses.append(f"{identifier} = :{key}")
-                parameters[key] = value
-        return (" WHERE " + " AND ".join(clauses) if clauses else ""), parameters
+        columns = self._available_columns()
+        identifiers = {name: self._qualified(name) for name in columns}
+        return _compile_filters(self.where, columns, self._operations._quote,
+                                identifiers=identifiers)
 
     def _select(self, *, first=False):
         if self._offset and self._limit is None and not first:
@@ -318,19 +502,30 @@ class Query:
         if self._join is None:
             columns = "*"
         else:
-            other, _, _ = self._join
             selected = []
-            for prefix, model in (("left_row", self._operations.model), ("right_row", other)):
-                for name in model.__columns__:
-                    selected.append(
-                        f"{quote(prefix)}.{quote(name)} AS {quote(prefix.split('_')[0] + '__' + name)}"
-                    )
+            models = self._models()
+            if self._selected is None:
+                names = [f"{model.__table_name__}.{name}"
+                         for model in models for name in model.__columns__]
+            else:
+                names = self._selected
+            for name in names:
+                if '.' in name:
+                    table, field = name.split('.')
+                    index = next(i for i, model in enumerate(models)
+                                 if model.__table_name__ == table)
+                else:
+                    field = name
+                    index = 0
+                alias = ('left' if index == 0 else
+                         'right' if len(models) == 2 else f'right{index}')
+                selected.append(f"{self._qualified(name)} AS {quote(alias + '__' + field)}")
             columns = ", ".join(selected)
         sql = f"SELECT {columns} FROM {self._source()}{clause}"
         if self._ordering is not None:
             parts = []
             for name, descending in self._ordering:
-                qualified = (f"{quote('left_row')}." if self._join else "") + quote(name)
+                qualified = self._qualified(name) if self._join else quote(name)
                 parts.append(f"{qualified} {'DESC' if descending else 'ASC'}")
             sql += " ORDER BY " + ", ".join(parts)
         count = 1 if first and self._limit is None else self._limit
@@ -387,28 +582,140 @@ class ModelOperations:
         return _identifier(name)
 
     def _where(self, filters):
-        filters = dict(filters or {})
-        self.model._validate(filters)
-        clauses = []
-        parameters = {}
-        for index, (name, value) in enumerate(filters.items()):
-            quoted = self._quote(name)
-            if value is None:
-                clauses.append(f"{quoted} IS NULL")
-            else:
-                key = f"w{index}"
-                clauses.append(f"{quoted} = :{key}")
-                parameters[key] = value
-        return (" WHERE " + " AND ".join(clauses) if clauses else ""), parameters
+        return _compile_filters(filters, self.model.__columns__, self._quote)
 
-    def read(self, where=None, *, order_by=None, limit=None, offset=0):
-        """Return a lazy query with safe single- or multi-column ordering.
+    def query(self, sql, parameters=None):
+        """Run SQL on this model's bound connection with named value binding."""
+        return self.connection.execute(sql, parameters)
 
-        Accept a column string, ordered strings with '-' for DESC, or a
-        dictionary mapping column names to ASC/DESC. Fluent JOIN remains.
-        """
+    def legacy_query(self, where=None, *, order_by=None, limit=None, offset=0):
+        """Return the temporary validated lazy query for migration callers."""
         ordering = _normalize_ordering(order_by, self.model.__columns__)
         return Query(self, where, ordering=ordering, limit=limit, offset=offset)
+
+    def read(self, where=None, *, order_by=None, limit=None, offset=0):
+        """Execute a read and return plain dictionaries with normalized values."""
+        query = self.legacy_query(where, order_by=order_by, limit=limit, offset=offset)
+        return [vars(row).copy() for row in query.all()]
+
+    def join(self, models, *, cols=None, where=None, order_by=None,
+             limit=None, offset=0, on=None):
+        """Execute an INNER JOIN directly with Legacy-style query options.
+
+        Models can be classes or a list of classes. Model-qualified and
+        physical table-qualified columns are both accepted. Relationships
+        come from Column.references or an explicit `on` list of pairs.
+        """
+        if isinstance(models, type):
+            models = [models]
+        if not isinstance(models, (list, tuple)) or not models:
+            raise ValueError("models must be a nonempty list of Model classes")
+        if any(not isinstance(model, type) or not issubclass(model, Model)
+               or model is Model for model in models):
+            raise TypeError("models must contain declared Model classes")
+        all_models = [self.model, *models]
+        names = {}
+        for model in all_models:
+            for name in (model.__name__, model.__table_name__):
+                if name in names and names[name] is not model:
+                    raise ValueError(f"Ambiguous model/table identifier: {name}")
+                names[name] = model
+
+        def translate(name):
+            if not isinstance(name, str):
+                raise TypeError("Column references must be strings")
+            if '.' not in name:
+                return name
+            if name.count('.') != 1:
+                raise ValueError(f"Invalid qualified column: {name!r}")
+            prefix, field = name.split('.')
+            model = names.get(prefix)
+            if model is None or field not in model.__columns__:
+                raise ValueError(f"Unknown qualified column: {name!r}")
+            return f"{model.__table_name__}.{field}"
+
+        def translate_filters(group):
+            if group is None:
+                return None
+            if not isinstance(group, dict):
+                raise TypeError("where must be a dictionary")
+            result = {}
+            for key, value in group.items():
+                if key in ('$and', '$or'):
+                    if not isinstance(value, list):
+                        raise TypeError("Filter groups must contain lists")
+                    result[key] = [translate_filters(item) for item in value]
+                else:
+                    if not isinstance(key, str):
+                        raise TypeError("Filter columns must be strings")
+                    name, separator, suffix = key.partition('--')
+                    result[translate(name) + (separator + suffix if separator else '')] = value
+            return result
+
+        if on is None:
+            explicit = [None] * len(models)
+        elif len(models) == 1 and isinstance(on, tuple) and len(on) == 2 and all(
+                isinstance(value, str) for value in on):
+            explicit = [on]
+        elif isinstance(on, (list, tuple)) and len(on) == len(models):
+            explicit = list(on)
+        else:
+            raise ValueError("on must provide one (left, right) pair per joined model")
+
+        query = self.legacy_query()
+        available = [self.model]
+        for model, pair in zip(models, explicit):
+            if pair is None:
+                candidates = []
+                for previous in available:
+                    for field, column_def in previous.__columns__.items():
+                        if column_def.references:
+                            table, referenced = column_def.references.split('.')
+                            if table == model.__table_name__ and referenced in model.__columns__:
+                                candidates.append((f"{previous.__table_name__}.{field}", referenced))
+                    for field, column_def in model.__columns__.items():
+                        if column_def.references:
+                            table, referenced = column_def.references.split('.')
+                            if table == previous.__table_name__ and referenced in previous.__columns__:
+                                candidates.append((f"{previous.__table_name__}.{referenced}", field))
+                if len(candidates) != 1:
+                    raise ValueError(f"Join to {model.__name__} requires an explicit on pair: "
+                                     f"found {len(candidates)} declared relationships")
+                left, right = candidates[0]
+            else:
+                if not isinstance(pair, (tuple, list)) or len(pair) != 2:
+                    raise TypeError("Each on entry must be a pair of column names")
+                left, right = pair
+                left, right = translate(left), translate(right)
+                if '.' in right:
+                    table, right = right.split('.')
+                    if table != model.__table_name__:
+                        raise ValueError("Right join column must belong to the new model")
+            if '.' in left:
+                base_table, base_field = left.split('.')
+                if base_table == self.model.__table_name__:
+                    left = base_field
+            query = query.join(model, on=(left, right))
+            available.append(model)
+
+        if cols is not None:
+            if not isinstance(cols, (list, tuple)) or not cols:
+                raise ValueError("cols must be a nonempty list of column names")
+            query = query.select(*(translate(name) for name in cols))
+        if where is not None:
+            query = query.where_joined(translate_filters(where))
+        if order_by is not None:
+            ordering = _normalize_ordering(
+                {translate(name): direction for name, direction in order_by.items()}
+                if isinstance(order_by, dict) else order_by,
+                query._available_columns())
+            query = Query(self, query.where, ordering=ordering, limit=query._limit,
+                          offset=query._offset, join=query._join, selected=query._selected)
+        if limit is not None:
+            query = query.limit(limit)
+        if offset:
+            query = query.offset(offset)
+        return query.all()
 
     def all(self, *, where=None):
         clause, parameters = self._where(where)

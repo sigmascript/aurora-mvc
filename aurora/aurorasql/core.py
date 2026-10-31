@@ -6,6 +6,7 @@ Connections and transaction ownership must never be shared across them.
 
 from contextlib import contextmanager
 from datetime import date, datetime
+from decimal import Decimal
 import importlib
 import sqlite3
 from urllib.parse import unquote, urlsplit
@@ -118,6 +119,9 @@ def _compile_sql(sql, parameters, style):
     missing = used - parameters.keys()
     if missing:
         raise ValueError("Missing SQL parameter(s): " + ", ".join(sorted(missing)))
+    extra = parameters.keys() - used
+    if extra:
+        raise ValueError("Unused SQL parameter(s): " + ", ".join(sorted(extra)))
     return "".join(output), {name: parameters[name] for name in used}
 
 
@@ -130,9 +134,41 @@ def _sqlite_parameters(parameters):
     return {
         key: value.isoformat(sep=" ") if isinstance(value, datetime)
         else value.isoformat() if isinstance(value, date)
+        else str(value) if isinstance(value, Decimal)
         else value
         for key, value in parameters.items()
     }
+
+
+class QueryResult:
+    """Cursor-like result for Legacy SQL callers, without holding an open cursor.
+
+    Rows are materialized when the statement executes. Fetch methods consume
+    that in-memory result, matching the ordinary DB-API fetch pattern.
+    """
+
+    def __init__(self, result):
+        self._rows = result if isinstance(result, list) else None
+        self._position = 0
+        self.rowcount = len(result) if isinstance(result, list) else result
+
+    def _require_rows(self):
+        if self._rows is None:
+            raise ValueError("Statement did not return rows")
+
+    def fetchall(self):
+        self._require_rows()
+        rows = self._rows[self._position:]
+        self._position = len(self._rows)
+        return rows
+
+    def fetchone(self):
+        self._require_rows()
+        if self._position >= len(self._rows):
+            return None
+        row = self._rows[self._position]
+        self._position += 1
+        return row
 
 
 class Connection:
@@ -147,6 +183,14 @@ class Connection:
     def _ensure_open(self):
         if self._closed:
             raise RuntimeError("Database connection is closed")
+
+    def query(self, sql, parameters=None):
+        """Execute bound SQL; expose Legacy-style .fetchall()/.fetchone().
+
+        This compatibility result does not retain an open database cursor.
+        Use :name placeholders and a parameters dictionary for dynamic values.
+        """
+        return QueryResult(self.execute(sql, parameters))
 
     def fetch_all(self, sql, parameters=None):
         """Return rows as dictionaries; reject statements without a result set."""

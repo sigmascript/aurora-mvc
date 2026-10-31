@@ -36,7 +36,9 @@ def create_table_sql(model, dialect):
     foreign_keys = []
     for name, field in columns.items():
         kind = field.python_type
-        if kind is date:
+        if field.sql_type is not None:
+            sql_type = field.sql_type
+        elif kind is date:
             sql_type = "DATE"
         elif kind is datetime:
             sql_type = "DATETIME" if dialect == "mysql" else "TIMESTAMP"
@@ -44,7 +46,7 @@ def create_table_sql(model, dialect):
             sql_type = f"VARCHAR({field.length})"
         else:
             sql_type = _SQL_TYPES[dialect][kind]
-        if dialect == "mysql" and field.unique and kind is str and field.length is None:
+        if dialect == "mysql" and field.unique and kind is str and field.length is None and (field.sql_type is None or field.sql_type == "TEXT"):
             raise ValueError("Unique MySQL string columns require an explicit length")
         parts = [_quote(name, dialect), sql_type]
         if field.primary_key:

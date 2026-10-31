@@ -13,7 +13,7 @@ def test_read_is_lazy_and_supports_alpha4_query_shape():
     with connect("sqlite:///:memory:") as db:
         create_table(db, Entry)
         operations = Entry.using(db)
-        query = operations.read({"title": "one"})
+        query = operations.legacy_query({"title": "one"})
         assert isinstance(query, Query)
         assert query.all() == []
         assert query.first() is None
@@ -21,16 +21,16 @@ def test_read_is_lazy_and_supports_alpha4_query_shape():
         operations.create(title="two")
         assert [row.title for row in query.all()] == ["one"]
         assert query.first().title == "one"
-        assert len(operations.read().all()) == 2
+        assert len(operations.legacy_query().all()) == 2
 
 
 def test_read_rejects_unknown_fields_and_copies_filters():
     with connect("sqlite:///:memory:") as db:
         operations = Entry.using(db)
         with pytest.raises((ValueError, KeyError, TypeError)):
-            operations.read({"not_a_column": "value"})
+            operations.legacy_query({"not_a_column": "value"})
         where = {"title": "one"}
-        query = operations.read(where)
+        query = operations.legacy_query(where)
         where["title"] = "two"
         assert query.where == {"title": "one"}
 

@@ -26,9 +26,9 @@ def test_legacy_dictionary_and_compact_list_have_identical_order():
 
         expected = [1, 3, 4, 2]
         for order in ({"category": "ASC", "priority": "DESC"}, ["category", "-priority"]):
-            assert [item.id for item in entries.read(order_by=order).all()] == expected
-            assert entries.read(order_by=order, limit=2, offset=1).first().id == 3
-        assert [item.id for item in entries.read(order_by="-id").all()] == [4, 3, 2, 1]
+            assert [item.id for item in entries.legacy_query(order_by=order).all()] == expected
+            assert entries.legacy_query(order_by=order, limit=2, offset=1).first().id == 3
+        assert [item.id for item in entries.legacy_query(order_by="-id").all()] == [4, 3, 2, 1]
 
 
 def test_ordering_rejects_unknown_columns_directions_and_duplicates():
@@ -36,4 +36,4 @@ def test_ordering_rejects_unknown_columns_directions_and_duplicates():
         entries = Entry.using(db)
         for order in ({"id": "DROP"}, ["id", "-id"], ["id; DROP TABLE ordering_entries"], [], {"id": 1}):
             with pytest.raises(ValueError):
-                entries.read(order_by=order)
+                entries.legacy_query(order_by=order)

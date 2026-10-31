@@ -36,7 +36,7 @@ class RecoveryTests(unittest.TestCase):
             conn.execute("UPDATE items SET value='after'")
             conn.commit()
         target, recovery = restore_database(str(self.config), 'default', str(self.backup), lambda: True)
-        self.assertEqual(target, self.db)
+        self.assertEqual(target.resolve(), self.db.resolve())
         self.assertEqual(self.value(), 'before')
         with closing(sqlite3.connect(recovery)) as conn:
             self.assertEqual(conn.execute('SELECT value FROM items').fetchone()[0], 'after')
