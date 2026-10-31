@@ -45,17 +45,17 @@ def test_crud_result_shapes_and_generated_keys(dialect, environment):
             assert type(first.id) is int and first.id > 0
             assert type(second.id) is int and second.id > first.id
 
-            rows = ops.read(order_by={"id": "ASC"}, as_dicts=True)
+            rows = ops.read(order_by={"id": "ASC"})
             assert rows == [
                 {"id": first.id, "title": "First", "active": True},
                 {"id": second.id, "title": "Second", "active": False},
             ]
             assert all(type(row["active"]) is bool for row in rows)
-            assert ops.read({"id": -1}, as_dicts=True) == []
+            assert ops.read({"id": -1}) == []
 
             assert ops.update(values={"title": "Changed"}, where={"id": first.id}) == 1
             assert ops.update(values={"title": "Missing"}, where={"id": -1}) == 0
-            assert ops.read({"id": first.id}, as_dicts=True)[0]["title"] == "Changed"
+            assert ops.read({"id": first.id})[0]["title"] == "Changed"
 
             with pytest.raises(RuntimeError, match="confirm=True"):
                 ops.update(values={"title": "Unsafe"})
@@ -65,7 +65,7 @@ def test_crud_result_shapes_and_generated_keys(dialect, environment):
             assert ops.delete(where={"id": second.id}) == 1
             assert ops.delete(where={"id": second.id}) == 0
             assert ops.delete(where={"id": first.id}) == 1
-            assert ops.read(as_dicts=True) == []
+            assert ops.read() == []
         finally:
             if created_table:
                 quoted = f"`{table}`" if dialect == "mysql" else f'"{table}"'

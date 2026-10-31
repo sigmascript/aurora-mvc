@@ -27,30 +27,30 @@ def test_simple_read_parameters_and_join():
                 for index in range(1, 5):
                     Entry.create(id=index, category="work")
                 Category.create(id=1, name="one")
-            query = Entry.read({"category": "work"}, order_by="-id", limit=2, offset=1)
+            query = Entry.legacy_query({"category": "work"}, order_by="-id", limit=2, offset=1)
             assert [row.id for row in query.all()] == [3, 2]
             assert query.count() == 4
-            assert Entry.read(order_by="id").first().id == 1
-            assert Entry.read().join(Category, on=("id", "id")).all()[0]["right__name"] == "one"
-            assert [row.id for row in Entry.using(db).read(order_by="-id", limit=1).all()] == [4]
+            assert Entry.legacy_query(order_by="id").first().id == 1
+            assert Entry.legacy_query().join(Category, on=("id", "id")).all()[0]["right__name"] == "one"
+            assert [row.id for row in Entry.using(db).legacy_query(order_by="-id", limit=1).all()] == [4]
         finally:
             Model.bind(None)
 
 
 def test_simple_query_rejects_invalid_options_and_requires_binding():
     with pytest.raises(RuntimeError, match="No database"):
-        Entry.read()
+        Entry.legacy_query()
     with connect("sqlite:///:memory:") as db:
         Model.bind(db)
         try:
             with pytest.raises(ValueError, match="Unknown ordering column"):
-                Entry.read(order_by="id; DROP TABLE entries")
+                Entry.legacy_query(order_by="id; DROP TABLE entries")
             for invalid in (-1, True, 1.2):
                 with pytest.raises(ValueError, match="limit"):
-                    Entry.read(limit=invalid)
+                    Entry.legacy_query(limit=invalid)
                 with pytest.raises(ValueError, match="offset"):
-                    Entry.read(offset=invalid)
+                    Entry.legacy_query(offset=invalid)
             with pytest.raises(ValueError, match="offset requires limit"):
-                Entry.read(offset=1).all()
+                Entry.legacy_query(offset=1).all()
         finally:
             Model.bind(None)

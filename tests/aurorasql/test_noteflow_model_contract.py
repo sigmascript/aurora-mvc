@@ -28,8 +28,8 @@ def test_noteflow_foreign_key_and_owner_scoped_crud():
         create_tables(db, User, Note)
         user = User.using(db).create(username="one", email="one@example.com", password_hash="hash")
         note = Note.using(db).create(user_id=user.id, title="Private", content="Secret")
-        assert Note.using(db).read({"id": note.id, "user_id": user.id}).first().title == "Private"
-        assert Note.using(db).read({"id": note.id, "user_id": user.id + 1}).first() is None
+        assert Note.using(db).legacy_query({"id": note.id, "user_id": user.id}).first().title == "Private"
+        assert Note.using(db).legacy_query({"id": note.id, "user_id": user.id + 1}).first() is None
         assert Note.using(db).update(values={"title": "Changed"}, where={"id": note.id, "user_id": user.id + 1}) == 0
         assert Note.using(db).delete(where={"id": note.id, "user_id": user.id + 1}) == 0
         with pytest.raises(Exception):

@@ -56,7 +56,7 @@ def test_explicit_null_primary_key_is_rejected_before_insert():
         create_tables(db, Account)
         with pytest.raises(ValueError, match="Primary-key"):
             Account.using(db).create(id=None, username="invalid")
-        assert Account.using(db).read().count() == 0
+        assert Account.using(db).legacy_query().count() == 0
 
 
 def test_python_defaults_uniqueness_nullability_and_foreign_keys():

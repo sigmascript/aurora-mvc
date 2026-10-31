@@ -8,6 +8,9 @@ import re
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import date, datetime
+from decimal import Decimal
+
+from .sql_types import parse_sql_type
 
 
 _TYPES = (str, int, float, bool, date, datetime)
@@ -27,8 +30,13 @@ class Column:
     def __init__(self, python_type, *, primary_key=False, nullable=False,
                  default=None, length=None, unique=False,
                  server_default=None, references=None):
-        if python_type not in _TYPES:
+        self.sql_type = None
+        if isinstance(python_type, str):
+            self.sql_type, python_type = parse_sql_type(python_type)
+        if python_type not in _TYPES and python_type is not Decimal:
             raise TypeError("Unsupported column type")
+        if self.sql_type is not None and length is not None:
+            raise ValueError("SQL type declarations already include their length")
         if length is not None and (python_type is not str or type(length) is not int or length <= 0):
             raise ValueError("length must be a positive integer for str fields")
         if type(primary_key) is not bool or type(nullable) is not bool or type(unique) is not bool:
@@ -67,8 +75,18 @@ class Column:
             return
         if not isinstance(value, self.python_type):
             raise TypeError(f"Expected {self.python_type.__name__} column value")
-        if self.length is not None and len(value) > self.length:
+        max_length = self.length
+        if self.sql_type and self.sql_type.startswith("VARCHAR("):
+            max_length = int(self.sql_type[8:-1])
+        if max_length is not None and len(value) > max_length:
             raise ValueError("String exceeds column length")
+        if self.sql_type and self.sql_type.startswith("DECIMAL("):
+            precision, scale = map(int, self.sql_type[8:-1].split(","))
+            if not value.is_finite():
+                raise ValueError("DECIMAL value must be finite")
+            exponent = value.as_tuple().exponent
+            if exponent < -scale or max(value.adjusted() + 1, 0) > precision - scale:
+                raise ValueError("DECIMAL value exceeds declared precision or scale")
 
 
 def column(python_type, **options):
@@ -113,7 +131,9 @@ class Model:
         values = dict(row)
         for name, field in cls.__columns__.items():
             value = values.get(name)
-            if field.python_type is bool and type(value) is int and value in (0, 1):
+            if field.python_type is Decimal and value is not None and not isinstance(value, Decimal):
+                values[name] = Decimal(str(value))
+            elif field.python_type is bool and type(value) is int and value in (0, 1):
                 values[name] = bool(value)
             elif field.python_type is datetime and isinstance(value, str):
                 values[name] = datetime.fromisoformat(value)
@@ -157,14 +177,21 @@ class Model:
         return cls.using(connection)
 
     @classmethod
-    def read(cls, where=None, *, order_by=None, limit=None, offset=0,
-             as_dicts=False):
-        """Read rows directly as dictionaries when ``as_dicts=True``.
-
-        The default lazy Query remains available during Alpha 8 compatibility.
-        """
+    def read(cls, where=None, *, order_by=None, limit=None, offset=0):
+        """Read records directly as a list of plain dictionaries."""
         return cls._operations().read(where, order_by=order_by, limit=limit,
-                                      offset=offset, as_dicts=as_dicts)
+                                      offset=offset)
+
+    @classmethod
+    def query(cls, sql, parameters=None):
+        """Execute parameterized SQL directly; return rows or affected count."""
+        return cls._operations().query(sql, parameters)
+
+    @classmethod
+    def legacy_query(cls, where=None, *, order_by=None, limit=None, offset=0):
+        """Temporary Alpha 8 lazy-query compatibility; slated for retirement."""
+        return cls._operations().legacy_query(where, order_by=order_by,
+                                              limit=limit, offset=offset)
 
     @classmethod
     def join(cls, models, *, cols=None, where=None, order_by=None,
@@ -557,21 +584,19 @@ class ModelOperations:
     def _where(self, filters):
         return _compile_filters(filters, self.model.__columns__, self._quote)
 
-    def read(self, where=None, *, order_by=None, limit=None, offset=0,
-             as_dicts=False):
-        """Read declared rows, optionally returning plain dictionaries directly.
+    def query(self, sql, parameters=None):
+        """Run SQL on this model's bound connection with named value binding."""
+        return self.connection.execute(sql, parameters)
 
-        ``as_dicts=True`` is the Legacy-style transition path. The default
-        remains a lazy Query for existing Alpha 8 callers. Both paths share
-        the same validated SQL, filtering, ordering, and pagination.
-        """
-        if type(as_dicts) is not bool:
-            raise TypeError("as_dicts must be a boolean")
+    def legacy_query(self, where=None, *, order_by=None, limit=None, offset=0):
+        """Return the temporary validated lazy query for migration callers."""
         ordering = _normalize_ordering(order_by, self.model.__columns__)
-        query = Query(self, where, ordering=ordering, limit=limit, offset=offset)
-        if as_dicts:
-            return [vars(row).copy() for row in query.all()]
-        return query
+        return Query(self, where, ordering=ordering, limit=limit, offset=offset)
+
+    def read(self, where=None, *, order_by=None, limit=None, offset=0):
+        """Execute a read and return plain dictionaries with normalized values."""
+        query = self.legacy_query(where, order_by=order_by, limit=limit, offset=offset)
+        return [vars(row).copy() for row in query.all()]
 
     def join(self, models, *, cols=None, where=None, order_by=None,
              limit=None, offset=0, on=None):
@@ -637,7 +662,7 @@ class ModelOperations:
         else:
             raise ValueError("on must provide one (left, right) pair per joined model")
 
-        query = self.read()
+        query = self.legacy_query()
         available = [self.model]
         for model, pair in zip(models, explicit):
             if pair is None:

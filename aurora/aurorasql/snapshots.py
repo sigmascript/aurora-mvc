@@ -7,6 +7,7 @@ No live database is inspected and Python defaults are never invoked.
 from datetime import date, datetime
 
 from .schema import create_table_sql
+from .sql_types import parse_sql_type
 
 
 _FORMAT = "aurorasql.schema.v1"
@@ -43,7 +44,7 @@ def schema_snapshot(*models, dialect):
         for field_name, field in sorted(model.__columns__.items()):
             columns.append({
                 "name": field_name,
-                "type": field.python_type.__name__,
+                "type": "sql:" + field.sql_type if field.sql_type else field.python_type.__name__,
                 "length": field.length,
                 "primary_key": field.primary_key,
                 "nullable": field.nullable,
@@ -83,7 +84,11 @@ def _snapshot_tables(snapshot):
             if name in columns:
                 raise ValueError("Duplicate snapshot column")
             if field["type"] not in ("str", "int", "float", "bool", "date", "datetime"):
-                raise ValueError("Invalid snapshot column type")
+                if not isinstance(field["type"], str) or not field["type"].startswith("sql:"):
+                    raise ValueError("Invalid snapshot column type")
+                canonical, _ = parse_sql_type(field["type"][4:])
+                if field["type"] != "sql:" + canonical:
+                    raise ValueError("Noncanonical snapshot SQL type")
             if field["length"] is not None and (type(field["length"]) is not int or field["length"] <= 0):
                 raise ValueError("Invalid snapshot column length")
             if any(type(field[key]) is not bool for key in ("primary_key", "nullable", "unique")):

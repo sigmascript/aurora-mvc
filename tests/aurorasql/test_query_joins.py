@@ -28,7 +28,7 @@ def test_join_filters_pagination_and_aggregates():
             Article.using(db).create(id=10, author_id=1, title="First")
             Article.using(db).create(id=11, author_id=1, title="Second")
             Article.using(db).create(id=12, author_id=99, title="Orphan")
-        joined = Article.using(db).read().join(Author, on=("author_id", "id"))
+        joined = Article.using(db).legacy_query().join(Author, on=("author_id", "id"))
         assert joined.count() == 2
         assert joined.exists()
         assert [row["right__name"] for row in joined.order_by("id").all()] == ["Ada", "Ada"]
@@ -37,13 +37,13 @@ def test_join_filters_pagination_and_aggregates():
             "right__id": 1, "right__name": "Ada",
         }
         assert joined.order_by("id").limit(1).offset(1).all()[0]["left__id"] == 11
-        assert Article.using(db).read({"title": "Orphan"}).join(
+        assert Article.using(db).legacy_query({"title": "Orphan"}).join(
             Author, on=("author_id", "id")).exists() is False
 
 
 def test_join_rejects_unsafe_models_and_columns():
     with connect("sqlite:///:memory:") as db:
-        query = Article.using(db).read()
+        query = Article.using(db).legacy_query()
         with pytest.raises(ValueError, match="Join columns"):
             query.join(Author, on=("author_id", "id; DROP TABLE authors"))
         with pytest.raises(ValueError, match="itself"):

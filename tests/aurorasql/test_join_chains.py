@@ -42,7 +42,7 @@ def database():
 
 
 def test_three_table_chain_projection_and_order(database):
-    query = (Story.using(database).read()
+    query = (Story.using(database).legacy_query()
              .join(Writer, on=("writer_id", "id"))
              .join(Review, on=("stories.id", "story_id"))
              .select("stories.title", "writers.name", "reviews.score"))
@@ -56,18 +56,18 @@ def test_three_table_chain_projection_and_order(database):
 
 
 def test_joined_where_and_bound_values(database):
-    query = (Story.using(database).read()
+    query = (Story.using(database).legacy_query()
              .join(Writer, on=("writer_id", "id"))
              .where_joined({"writers.name": "Mira"}))
     assert query.count() == 1
     assert query.first()["left__title"] == "One"
-    assert (Story.using(database).read()
+    assert (Story.using(database).legacy_query()
             .join(Writer, on=("writer_id", "id"))
             .where_joined({"writers.name": "Mira' OR 1=1 --"}).count()) == 0
 
 
 def test_reject_unknown_and_duplicate_columns(database):
-    query = Story.using(database).read().join(Writer, on=("writer_id", "id"))
+    query = Story.using(database).legacy_query().join(Writer, on=("writer_id", "id"))
     with pytest.raises(ValueError):
         query.select("writers.nonexistent")
     with pytest.raises(ValueError):

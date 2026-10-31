@@ -24,7 +24,7 @@ def entries():
 
 
 def ids(entries, where):
-    return [row.id for row in entries.read(where, order_by="id").all()]
+    return [row.id for row in entries.legacy_query(where, order_by="id").all()]
 
 
 def test_implicit_and_and_explicit_or(entries):
@@ -40,8 +40,8 @@ def test_explicit_and_and_nested_groups(entries):
         {"id--in": [1, 4]},
     ]}
     assert ids(entries, where) == [1, 3, 4]
-    assert entries.read(where).count() == 3
-    assert entries.read(where).exists()
+    assert entries.legacy_query(where).count() == 3
+    assert entries.legacy_query(where).exists()
     assert entries.first(where=where).id == 1
 
 
@@ -67,7 +67,7 @@ def test_grouped_write_filters_are_restricted(entries):
 ])
 def test_invalid_groups_rejected_for_reads_and_writes(entries, where, error):
     with pytest.raises(error):
-        entries.read(where)
+        entries.legacy_query(where)
     with pytest.raises(error):
         entries.update(values={"status": "unsafe"}, where=where)
     with pytest.raises(error):
@@ -80,9 +80,9 @@ def test_depth_limit_and_parameter_safety(entries):
     for _ in range(9):
         where = {"$or": [where]}
     with pytest.raises(ValueError, match="depth"):
-        entries.read(where)
+        entries.legacy_query(where)
     assert ids(entries, {"$or": [{"role": "admin' OR 1=1 --"}, {"id": 2}]}) == [2]
-    assert entries.read({"$or": [{"id": 1}, {"id": 2}]}).count() == 2
+    assert entries.legacy_query({"$or": [{"id": 1}, {"id": 2}]}).count() == 2
 
 
 def test_empty_top_level_preserves_explicit_whole_table_confirmation(entries):

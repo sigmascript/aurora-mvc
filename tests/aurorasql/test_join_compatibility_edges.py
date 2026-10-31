@@ -42,7 +42,7 @@ def database():
 
 
 def test_two_table_result_keys_remain_compatible(database):
-    rows = (Task.using(database).read()
+    rows = (Task.using(database).legacy_query()
             .join(Member, on=("member_id", "id"))
             .order_by("id").all())
     assert rows == [
@@ -52,7 +52,7 @@ def test_two_table_result_keys_remain_compatible(database):
 
 
 def test_three_table_join_qualified_filters_and_projection(database):
-    query = (Task.using(database).read()
+    query = (Task.using(database).legacy_query()
              .join(Member, on=("member_id", "id"))
              .join(Label, on=("tasks.id", "task_id"))
              .where_joined({"members.name": "A", "labels.value--like": "urg%"})
@@ -63,7 +63,7 @@ def test_three_table_join_qualified_filters_and_projection(database):
 
 
 def test_invalid_join_fields_fail_closed(database):
-    query = Task.using(database).read().join(Member, on=("member_id", "id"))
+    query = Task.using(database).legacy_query().join(Member, on=("member_id", "id"))
     with pytest.raises((ValueError, TypeError)):
         query.where_joined({"members.name; DROP TABLE members": "A"})
     with pytest.raises((ValueError, TypeError)):

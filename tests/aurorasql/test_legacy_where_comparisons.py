@@ -32,18 +32,18 @@ def database():
 
 def test_legacy_flags_and_join(database):
     items = Item.using(database)
-    assert [x.id for x in items.read({"score--gt": 10}).all()] == [2, 3]
-    assert [x.id for x in items.read({"score--ge": 20}).all()] == [2, 3]
-    assert [x.id for x in items.read({"score--lt": 20}).all()] == [1]
-    assert [x.id for x in items.read({"score--le": 20}).all()] == [1, 2]
-    assert [x.id for x in items.read({"title--like": "alpha%"}).all()] == [1, 3]
-    assert [x.id for x in items.read({"title--not-like": "alpha%"}).all()] == [2]
-    assert [x.id for x in items.read({"id--in": [1, 3]}).all()] == [1, 3]
-    assert [x.id for x in items.read({"id--not-in": [1, 3]}).all()] == [2]
-    assert [x.id for x in items.read({"score--between": [10, 20]}).all()] == [1, 2]
-    assert [x.id for x in items.read({"score--not-between": [10, 20]}).all()] == [3]
-    assert [x.id for x in items.read({"group_name--ne": None}).all()] == [2, 3]
-    assert items.read({"score--gt": 10}).join(Group, on=("id", "id")).count() == 0
+    assert [x.id for x in items.legacy_query({"score--gt": 10}).all()] == [2, 3]
+    assert [x.id for x in items.legacy_query({"score--ge": 20}).all()] == [2, 3]
+    assert [x.id for x in items.legacy_query({"score--lt": 20}).all()] == [1]
+    assert [x.id for x in items.legacy_query({"score--le": 20}).all()] == [1, 2]
+    assert [x.id for x in items.legacy_query({"title--like": "alpha%"}).all()] == [1, 3]
+    assert [x.id for x in items.legacy_query({"title--not-like": "alpha%"}).all()] == [2]
+    assert [x.id for x in items.legacy_query({"id--in": [1, 3]}).all()] == [1, 3]
+    assert [x.id for x in items.legacy_query({"id--not-in": [1, 3]}).all()] == [2]
+    assert [x.id for x in items.legacy_query({"score--between": [10, 20]}).all()] == [1, 2]
+    assert [x.id for x in items.legacy_query({"score--not-between": [10, 20]}).all()] == [3]
+    assert [x.id for x in items.legacy_query({"group_name--ne": None}).all()] == [2, 3]
+    assert items.legacy_query({"score--gt": 10}).join(Group, on=("id", "id")).count() == 0
 
 
 def test_write_filters_and_safe_parameters(database):
@@ -51,8 +51,8 @@ def test_write_filters_and_safe_parameters(database):
     assert items.update(values={"title": "changed"}, where={"score--gt": 20}) == 1
     assert items.delete(where={"score--lt": 15}) == 1
     assert [x.id for x in items.all()] == [2, 3]
-    assert items.read({"title--like": "%\' OR 1=1 --"}).all() == []
-    assert items.read({"id--in": [2, 3]}).count() == 2
+    assert items.legacy_query({"title--like": "%\' OR 1=1 --"}).all() == []
+    assert items.legacy_query({"id--in": [2, 3]}).count() == 2
 
 
 @pytest.mark.parametrize("where,error", [
@@ -68,4 +68,4 @@ def test_write_filters_and_safe_parameters(database):
 ])
 def test_reject_invalid_filters(database, where, error):
     with pytest.raises(error):
-        Item.using(database).read(where)
+        Item.using(database).legacy_query(where)

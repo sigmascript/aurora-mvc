@@ -58,7 +58,7 @@ def test_live_chained_joins_projection_filters_and_legacy_shape(dialect, environ
                 Rating.using(db).create(id=100, book_id=10, score=4)
                 Rating.using(db).create(id=101, book_id=11, score=5)
 
-            two = Book.using(db).read().join(Author, on=("author_id", "id"))
+            two = Book.using(db).legacy_query().join(Author, on=("author_id", "id"))
             legacy_rows = two.order_by("id").all()
             assert legacy_rows == [
                 {
@@ -74,7 +74,7 @@ def test_live_chained_joins_projection_filters_and_legacy_shape(dialect, environ
             ]
 
             chained = (
-                Book.using(db).read()
+                Book.using(db).legacy_query()
                 .join(Author, on=("author_id", "id"))
                 .join(Rating, on=(f"{books_table}.id", "book_id"))
                 .select(

@@ -84,6 +84,12 @@ def plan_schema(connection, model):
             changes.append(SchemaChange("missing_column", name, "Column is absent"))
             continue
         expected_type = {int: "int", float: "float", bool: "bool", str: "str"}.get(field.python_type)
+        if field.sql_type is not None:
+            # A type-family match does not establish SQL-specific precision or
+            # length equivalence. Fail closed until dialect-specific review.
+            changes.append(SchemaChange("sql_type_review", name,
+                                        f"Explicit SQL type {field.sql_type} requires manual verification"))
+            continue
         if expected_type is None:
             expected_type = "date" if field.python_type.__name__ == "date" else "datetime"
         actual_type = _type_family(observed.sql_type)

@@ -42,7 +42,7 @@ def test_live_batch_c_filter_transaction_and_schema(dialect, env):
                 b = ops.create(name="beta", score=20)
                 c = ops.create(name="gamma", score=30)
             query = {"score--ge": 10, "$or": [{"id": a.id}, {"name": "beta"}]}
-            assert {item.name for item in ops.read(query).all()} == {"alpha", "beta"}
+            assert {item.name for item in ops.legacy_query(query).all()} == {"alpha", "beta"}
             assert ops.update(values={"score": 25}, where={"id": b.id}) == 1
             assert ops.first(where={"id": b.id}).score == 25
             with pytest.raises(RuntimeError, match="intentional rollback"):
@@ -50,7 +50,7 @@ def test_live_batch_c_filter_transaction_and_schema(dialect, env):
                     ops.delete(where={"id": c.id})
                     raise RuntimeError("intentional rollback")
             assert ops.first(where={"id": c.id}) is not None
-            assert len(ops.read({"score--between": [10, 30]}).all()) == 3
+            assert len(ops.legacy_query({"score--between": [10, 30]}).all()) == 3
             snapshot = schema_snapshot(Probe, dialect=dialect)
             assert snapshot is not None
             with pytest.raises((TypeError, ValueError)):
