@@ -157,9 +157,14 @@ class Model:
         return cls.using(connection)
 
     @classmethod
-    def read(cls, where=None, *, order_by=None, limit=None, offset=0):
-        """Build a lazy query with optional ordering and pagination."""
-        return cls._operations().read(where, order_by=order_by, limit=limit, offset=offset)
+    def read(cls, where=None, *, order_by=None, limit=None, offset=0,
+             as_dicts=False):
+        """Read rows directly as dictionaries when ``as_dicts=True``.
+
+        The default lazy Query remains available during Alpha 8 compatibility.
+        """
+        return cls._operations().read(where, order_by=order_by, limit=limit,
+                                      offset=offset, as_dicts=as_dicts)
 
     @classmethod
     def join(cls, models, *, cols=None, where=None, order_by=None,
@@ -552,14 +557,21 @@ class ModelOperations:
     def _where(self, filters):
         return _compile_filters(filters, self.model.__columns__, self._quote)
 
-    def read(self, where=None, *, order_by=None, limit=None, offset=0):
-        """Return a lazy query with safe single- or multi-column ordering.
+    def read(self, where=None, *, order_by=None, limit=None, offset=0,
+             as_dicts=False):
+        """Read declared rows, optionally returning plain dictionaries directly.
 
-        Accept a column string, ordered strings with '-' for DESC, or a
-        dictionary mapping column names to ASC/DESC. Fluent JOIN remains.
+        ``as_dicts=True`` is the Legacy-style transition path. The default
+        remains a lazy Query for existing Alpha 8 callers. Both paths share
+        the same validated SQL, filtering, ordering, and pagination.
         """
+        if type(as_dicts) is not bool:
+            raise TypeError("as_dicts must be a boolean")
         ordering = _normalize_ordering(order_by, self.model.__columns__)
-        return Query(self, where, ordering=ordering, limit=limit, offset=offset)
+        query = Query(self, where, ordering=ordering, limit=limit, offset=offset)
+        if as_dicts:
+            return [vars(row).copy() for row in query.all()]
+        return query
 
     def join(self, models, *, cols=None, where=None, order_by=None,
              limit=None, offset=0, on=None):
