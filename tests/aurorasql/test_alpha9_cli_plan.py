@@ -60,3 +60,28 @@ def test_sqlite_read_only_plan_does_not_change_database(tmp_path):
     assert report["backend"] == "aurorasql"
     assert report["advisory_only"] is True
     assert database.read_bytes() == before
+
+
+def test_manifest_and_model_import_use_selected_config_directory(tmp_path):
+    import sqlite3
+
+    project = tmp_path / 'selected_project'
+    project.mkdir()
+    elsewhere = tmp_path / 'elsewhere'
+    elsewhere.mkdir()
+    with sqlite3.connect(project / 'data.sqlite3') as connection:
+        connection.execute('CREATE TABLE item (id INTEGER PRIMARY KEY)')
+    (project / 'aurora_databases.json').write_text(json.dumps({
+        'databases': {'default': {'url': 'sqlite:///data.sqlite3'}}
+    }), encoding='utf-8')
+    (project / 'aurora_models.json').write_text(json.dumps({
+        'databases': {'default': ['project_models:Item']}
+    }), encoding='utf-8')
+    (project / 'project_models.py').write_text(
+        'from aurora.aurorasql import Model, column\n'
+        'class Item(Model):\n'
+        '    id = column(int, primary_key=True)\n', encoding='utf-8')
+    result = _cli(elsewhere, 'db', 'plan', '--config', str(project / 'aurora_databases.json'),
+                  '--format', 'json')
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)['models'][0]['reference'] == 'project_models:Item'

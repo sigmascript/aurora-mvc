@@ -27,7 +27,7 @@ def _setup(monkeypatch, *, status="EMPTY"):
         connect=lambda alias: nullcontext(connection),
     )
     monkeypatch.setattr(cli_init, "_load_config", lambda path: (config, None))
-    monkeypatch.setattr(cli_init, "_select_models", lambda args: (["unused:Entry"], [Entry]))
+    monkeypatch.setattr(cli_init, "_select_models", lambda args, base_dir: (["unused:Entry"], [Entry]))
     monkeypatch.setattr(cli_init, "_postgres_read_only_preflight", lambda *args: {
         "status": status, "review_warnings": [], "read_only": True,
     })

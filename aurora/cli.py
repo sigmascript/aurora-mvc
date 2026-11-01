@@ -297,7 +297,7 @@ def create_project(name: str, *, directory: Path | None = None, mvc: bool = Fals
             "model-aware migration commands.\n"
             "- No SQLite file or tables are created by scaffolding. Initialize "
             "your database explicitly before inspection or migrations.\n"
-            "- `aurora db list` shows configured aliases; "
+            "- `aurora db plan --database default` inspects the configured schema; "
             "`aurora db migrate --dry-run` previews changes after setup.\n"
             "- `migrations/` and `backups/` are prepared for reviewed operations.\n",
             encoding="utf-8",
@@ -922,7 +922,7 @@ def main(argv: list[str] | None = None) -> int:
             registered.add_argument("--database", default="default", help="Database alias (default: default)")
             registered.add_argument("--models-config", default="aurora_models.json", help="Model manifest JSON path")
     # Read-only named database commands; no model imports or schema writes.
-    db_group = sub.add_parser("db", help="Inspect databases and safely migrate SQLite schemas; guarded MySQL migrations")
+    db_group = sub.add_parser("db", help="Inspect databases and run guarded AuroraSQL operations")
     db_group.description = "Database commands: init, plan, migrate, backup, restore, history."
     db_group.epilog = "First setup: aurora db init --config aurora_databases.json --models-config aurora_models.json"
     db_actions = db_group.add_subparsers(dest="action", required=True)
@@ -948,19 +948,19 @@ def main(argv: list[str] | None = None) -> int:
             command.add_argument("--intents", action="store_true", help="Read guarded SQLite intent journal v2 instead of earlier history")
             command.add_argument("--format", choices=("text", "json"), default="text")
     for verb in ("backup", "restore"):
-        command = db_actions.add_parser(verb, help=("Create a verified SQLite or MySQL backup" if verb == "backup" else "Guided SQLite recovery or guarded MySQL staging restore"))
+        command = db_actions.add_parser(verb, help=("Create a verified supported database backup" if verb == "backup" else "Inspect recovery options (restore execution unavailable)"))
         command.add_argument("--config", default="aurora_databases.json")
         command.add_argument("--database", default="default")
         if verb == "backup":
-            command.add_argument("--to", help="New backup path; SQLite uses .sqlite3, MySQL uses .sql")
-            command.add_argument("--login-path", help="MySQL login profile configured with mysql_config_editor")
+            command.add_argument("--to", help="New SQLite backup path ending in .sqlite3; never overwrites")
+            command.add_argument("--login-path", help="Reserved for legacy compatibility; unsupported for AuroraSQL")
         else:
-            command.add_argument("--from", dest="source", required=True, help="Existing SQLite backup or MySQL .sql dump")
-            command.add_argument("--check-only", action="store_true", help="Read-only MySQL restore preflight; never executes SQL")
-            command.add_argument("--login-path", help="MySQL client login profile (preflight only)")
-            command.add_argument("--staging-database", help="Proposed distinct MySQL staging database name")
-            command.add_argument("--staging-login-path", help="Separate restricted MySQL staging login profile")
-            command.add_argument("--staging-only", action="store_true", help="Import validated SQL only into empty staging database")
+            command.add_argument("--from", dest="source", required=True, help="Backup source path (restore execution currently unavailable)")
+            command.add_argument("--check-only", action="store_true", help="Reserved for future guarded recovery; restore currently unavailable")
+            command.add_argument("--login-path", help="Reserved legacy option; restore currently unavailable")
+            command.add_argument("--staging-database", help="Reserved for future recovery; restore currently unavailable")
+            command.add_argument("--staging-login-path", help="Reserved for future recovery; restore currently unavailable")
+            command.add_argument("--staging-only", action="store_true", help="Reserved for future recovery; restore currently unavailable")
     init = db_actions.add_parser(
         "init",
         help="Create selected tables in an empty SQLite or MySQL database (writes once)",
@@ -985,7 +985,7 @@ def main(argv: list[str] | None = None) -> int:
     init.add_argument("--database", default="default", help="Configured database alias")
     init.add_argument("--model", action="append", default=[], metavar="MODULE:CLASS", help="Explicit Aurora model; repeat as needed")
     init.add_argument("--models-config", default="aurora_models.json", help="Explicit model manifest JSON path")
-    sync = db_actions.add_parser('migrate', help='Preview/apply SQLite migrations or one guarded MySQL operation')
+    sync = db_actions.add_parser('migrate', help='Review and safely apply supported database schema changes')
     sync.add_argument('--config', default='aurora_databases.json', help='Database configuration JSON path')
     sync.add_argument('--database', default='default', help='Configured database alias (default: default)')
     sync.add_argument('--model', action='append', metavar='MODULE:CLASS', help='Explicit trusted Aurora model; repeat for multiple models')
@@ -1006,6 +1006,13 @@ def main(argv: list[str] | None = None) -> int:
     sync.add_argument('--approve-review', help='Exact MySQL review SHA-256')
     sync.add_argument('--approve-sql', help='Exact MySQL SQL SHA-256')
     sync.add_argument('--confirm', help='Must be APPLY for MySQL execution')
+    # Keep backend-specific limitations visible without implying universal support.
+    sync.description = (
+        "Preview AuroraSQL schema changes or apply an explicitly reviewed, "
+        "supported migration. SQLite reviewed additive migrations and the "
+        "separately guarded MySQL operation have distinct approval requirements. "
+        "Unsupported and destructive changes are refused."
+    )
     # Destructive operations remain deliberately unavailable.
     run = sub.add_parser("run", help="Run an ASGI application with Uvicorn")
     run.add_argument("application", nargs="?", default="app:app", help="ASGI import path (default: app:app); run from the project directory")

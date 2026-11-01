@@ -52,7 +52,7 @@ class DefaultColumnMigrationTests(unittest.TestCase):
         with redirect_stdout(stream), self.assertRaises(SystemExit) as cm:
             main(['-h'])
         self.assertEqual(cm.exception.code, 0)
-        self.assertIn('safely migrate', stream.getvalue())
+        self.assertIn('Inspect databases and run guarded AuroraSQL operations', stream.getvalue())
 
     def test_sync_help_describes_confirmation(self):
         import io

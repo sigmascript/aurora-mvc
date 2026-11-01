@@ -120,8 +120,7 @@ def run_plan(args):
             for warning in report["warnings"]:
                 print(f"  {warning}")
         return 3 if args.check else 0
-    refs, models = (_select_models(args) if base_dir is None or Path(base_dir).resolve() == Path.cwd().resolve()
-                    else _select_models(args, base_dir))
+    refs, models = _select_models(args, base_dir)
     url = config.resolve(args.database)
     parsed = urlsplit(url)
     if parsed.scheme in ("sqlite", "sqlite+pysqlite"):

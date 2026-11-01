@@ -77,8 +77,7 @@ def _dialect_for_init_scheme(scheme):
 
 def run_init_check(args):
     config, base_dir = _load_config(args.config)
-    refs, models = (_select_models(args) if base_dir is None or Path(base_dir).resolve() == Path.cwd().resolve()
-                    else _select_models(args, base_dir))
+    refs, models = _select_models(args, base_dir)
     from .init_validation import validate_init_models
     url = config.resolve(args.database)
     parsed = urlsplit(url)
@@ -310,8 +309,7 @@ def _unsafe_warnings(report):
 def run_init_apply(args):
     """Explicitly approved, recorded, multi-model SQLite initialization pilot."""
     config, base_dir = _load_config(args.config)
-    refs, models = (_select_models(args) if base_dir is None or Path(base_dir).resolve() == Path.cwd().resolve()
-                    else _select_models(args, base_dir))
+    refs, models = _select_models(args, base_dir)
     from .init_validation import validate_init_models
     url = config.resolve(args.database)
     parsed = urlsplit(url)

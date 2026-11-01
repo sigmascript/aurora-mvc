@@ -28,7 +28,7 @@ def test_postgres_validation_occurs_before_connection(monkeypatch):
     config = Mock()
     config.resolve.return_value = "postgresql+psycopg://localhost/unused"
     monkeypatch.setattr(cli_init, "_load_config", lambda path: (config, None))
-    monkeypatch.setattr(cli_init, "_select_models", lambda args: (["a:Model"], [object()]))
+    monkeypatch.setattr(cli_init, "_select_models", lambda args, project_root=None: (["a:Model"], [object()]))
     seen = []
 
     def validate(models, dialect="sqlite"):

@@ -18,7 +18,7 @@ class DatabaseInitHelpTests(unittest.TestCase):
 
     def test_top_level_help_mentions_database_commands(self):
         output = self.help_output()
-        self.assertIn("Inspect databases and safely migrate SQLite schemas", output)
+        self.assertIn("Inspect databases and run guarded AuroraSQL operations", output)
 
     def test_db_help_lists_init_and_explains_first_setup(self):
         output = self.help_output("db")
