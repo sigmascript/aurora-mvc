@@ -39,21 +39,13 @@ def validate_runtime_settings(
     if (database_work is None) != (database_registry is None):
         raise ValueError("database_work and database_registry must be supplied together")
     if database_work is not None:
-        # Accept either complete integration pair during the pre-retirement
-        # transition. Never mix legacy and AuroraSQL lifecycle objects.
-        from aurora.database.async_routed import RoutedWorkManager as LegacyWorkManager
-        from aurora.database.database_registry import DatabaseRegistry as LegacyRegistry
-        from aurora.aurorasql.async_routed import RoutedWorkManager as AuroraSQLWorkManager
-        from aurora.aurorasql.database_registry import DatabaseRegistry as AuroraSQLRegistry
+        from aurora.database.async_routed import RoutedWorkManager
+        from aurora.database.database_registry import DatabaseRegistry
 
-        if not isinstance(database_work, (LegacyWorkManager, AuroraSQLWorkManager)):
+        if not isinstance(database_work, RoutedWorkManager):
             raise TypeError("database_work must be a RoutedWorkManager")
-        if not isinstance(database_registry, (LegacyRegistry, AuroraSQLRegistry)):
+        if not isinstance(database_registry, DatabaseRegistry):
             raise TypeError("database_registry must be a DatabaseRegistry")
-        if isinstance(database_work, LegacyWorkManager) != isinstance(database_registry, LegacyRegistry):
-            raise TypeError("database_work and database_registry must use the same database backend")
-        if isinstance(database_work, AuroraSQLWorkManager) != isinstance(database_registry, AuroraSQLRegistry):
-            raise TypeError("database_work and database_registry must use the same database backend")
     if max_request_body_bytes is not None and (
         isinstance(max_request_body_bytes, bool)
         or not isinstance(max_request_body_bytes, int)

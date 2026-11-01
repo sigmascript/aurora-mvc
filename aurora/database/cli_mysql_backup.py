@@ -9,7 +9,9 @@ from secrets import token_hex
 import subprocess
 import tempfile
 
-from aurora.database.cli_inspection import load_cli_database_config
+from urllib.parse import unquote, urlsplit
+
+from .cli_plan import _load_config
 
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_]+$")
@@ -30,25 +32,25 @@ def backup_mysql_database(config_path: str, alias: str, destination: str | None,
                           login_path: str | None) -> Path:
     if not login_path or not _IDENTIFIER.fullmatch(login_path):
         raise ValueError("MySQL backup requires --login-path NAME (configured with mysql_config_editor)")
-    config, _ = load_cli_database_config(config_path)
-    url = config.resolve(alias)
-    if url.drivername != "mysql+pymysql":
+    config, _ = _load_config(config_path)
+    url = urlsplit(config.resolve(alias))
+    if url.scheme != "mysql+pymysql":
         raise ValueError("MySQL backup requires a MySQL database alias")
-    database = url.database
+    database = unquote(url.path.lstrip("/"))
     if not database or not _IDENTIFIER.fullmatch(database):
         raise ValueError("MySQL backup requires a simple database identifier")
-    if not url.username or not url.host:
+    if not url.username or not url.hostname:
         raise ValueError("MySQL backup requires configured username and host")
-    host = url.host
+    host = url.hostname
     port = url.port or 3306
     # Explicit host/user/port ensure a login profile cannot silently redirect
     # a backup to a different account or server. Password remains in the profile.
     connection = [f"--login-path={login_path}", "--protocol=TCP",
-                  f"--host={host}", f"--port={port}", f"--user={url.username}"]
+                  f"--host={host}", f"--port={port}", f"--user={unquote(url.username) if url.username else None}"]
     probe = _run(["mysql", *connection, "--batch", "--skip-column-names", database,
                   "--execute=SELECT DATABASE(), CURRENT_USER()"], label="connection check")
     fields = probe.stdout.strip().split("\t")
-    if len(fields) != 2 or fields[0] != database or fields[1].split("@")[0] != url.username:
+    if len(fields) != 2 or fields[0] != database or fields[1].split("@")[0] != unquote(url.username):
         raise ValueError("MySQL connection does not match configured database and account")
     engines = _run(["mysql", *connection, "--batch", "--skip-column-names", database,
                     "--execute=SELECT DISTINCT ENGINE FROM information_schema.TABLES "

@@ -32,16 +32,16 @@ class DatabaseSixCommandContractTests(unittest.TestCase):
                 self.assertEqual(result.exception.code, 0)
                 self.assertIn('--database', output.getvalue())
 
-    def test_mysql_guarded_executor_is_still_used_by_migrate(self):
-        # Alpha 9 must never fall back to the retired SQLAlchemy/MySQL executor.
-        with patch('aurora.database.cli_unified_mysql_migrate.run_unified_mysql_migrate') as legacy, \
-             contextlib.redirect_stderr(io.StringIO()) as error, \
+    def test_unreviewed_migration_write_fails_closed(self):
+        # A write request must be refused before loading configuration or models.
+        with contextlib.redirect_stderr(io.StringIO()) as error, \
              self.assertRaises(SystemExit) as result:
             main(['db', 'migrate', '--model', 'models:User', '--schema', 'staging',
                   '--table', 'users', '--approve', '0' * 64])
         self.assertEqual(result.exception.code, 1)
         self.assertIn('migration writes are not yet integrated', error.getvalue())
-        legacy.assert_not_called()
+        self.assertIn('refusing legacy fallback', error.getvalue())
+
 
 
 if __name__ == '__main__':

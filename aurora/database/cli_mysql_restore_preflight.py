@@ -4,9 +4,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import re
+from urllib.parse import unquote, urlsplit
 
-from aurora.database.cli_inspection import load_cli_database_config
-from aurora.database.cli_mysql_backup import _run
+from aurora.database.cli_plan import _load_config
+from .cli_mysql_backup import _run
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_]+$")
 
@@ -61,23 +62,23 @@ def check_mysql_restore(config_path: str, alias: str, source: str,
                         login_path: str | None, staging_database: str | None = None) -> MySQLRestoreReport:
     if not login_path or not _IDENTIFIER.fullmatch(login_path):
         raise ValueError("MySQL restore preflight requires --login-path NAME")
-    config, _ = load_cli_database_config(config_path)
-    url = config.resolve(alias)
-    if url.drivername != "mysql+pymysql":
+    config, _ = _load_config(config_path)
+    url = urlsplit(config.resolve(alias))
+    if url.scheme != "mysql+pymysql":
         raise ValueError("MySQL restore preflight requires a MySQL database alias")
-    target = url.database
-    if not target or not _IDENTIFIER.fullmatch(target) or not url.username or not url.host:
+    target = unquote(url.path.lstrip("/"))
+    if not target or not _IDENTIFIER.fullmatch(target) or not url.username or not url.hostname:
         raise ValueError("MySQL restore preflight requires a simple database name, username, and host")
     stage = staging_database or f"{target}_aurora_stage"
     if not _IDENTIFIER.fullmatch(stage) or len(stage) > 64 or stage == target:
         raise ValueError("Invalid staging database name; use a distinct identifier of at most 64 characters")
     backup, size = _backup_file(source)
-    connection = [f"--login-path={login_path}", "--protocol=TCP", f"--host={url.host}",
-                  f"--port={url.port or 3306}", f"--user={url.username}"]
+    connection = [f"--login-path={login_path}", "--protocol=TCP", f"--host={url.hostname}",
+                  f"--port={url.port or 3306}", f"--user={unquote(url.username)}"]
     probe = _run(["mysql", *connection, "--batch", "--skip-column-names", target,
                   "--execute=SELECT DATABASE(), CURRENT_USER()"], label="restore connection check")
     fields = probe.stdout.strip().split("\t")
-    if len(fields) != 2 or fields[0] != target or fields[1].split("@")[0] != url.username:
+    if len(fields) != 2 or fields[0] != target or fields[1].split("@")[0] != unquote(url.username):
         raise ValueError("MySQL restore connection does not match configured database and account")
     metadata = _run(["mysql", *connection, "--batch", "--skip-column-names", target,
                      "--execute=SELECT COUNT(*) FROM information_schema.TABLES "

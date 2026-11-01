@@ -23,7 +23,7 @@ class DatabaseProjectImportTests(unittest.TestCase):
         models = self.root / "models"
         models.mkdir()
         (models / "users.py").write_text(
-            "from aurora.aurorasql import Model, column\n"
+            "from aurora.database import Model, column\n"
             f"class {self.model_name}(Model):\n"
             f"    __table__ = '{self.table_name}'\n"
             "    id = column(int, primary_key=True)\n", encoding="utf-8"

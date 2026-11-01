@@ -8,11 +8,12 @@ from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 import re
+from urllib.parse import unquote, urlsplit
 import subprocess
 
-from aurora.database.cli_inspection import load_cli_database_config
-from aurora.database.cli_mysql_backup import _run
-from aurora.database.cli_mysql_restore_preflight import _backup_file, _IDENTIFIER
+from aurora.database.cli_plan import _load_config
+from .cli_mysql_backup import _run
+from .cli_mysql_restore_preflight import _backup_file, _IDENTIFIER
 
 
 @dataclass(frozen=True)
@@ -158,6 +159,7 @@ def _validate_dump(data: bytes) -> tuple[int, int]:
     if not sql.startswith('-- MySQL dump') or '-- Dump completed on' not in sql.splitlines()[-1]:
         raise ValueError('MySQL dump header/footer missing')
     tables: set[str] = set()
+    dropped_tables: set[str] = set()
     inserts = 0
     statements = 0
     in_create = False
@@ -194,6 +196,7 @@ def _validate_dump(data: bytes) -> tuple[int, int]:
             continue
         match = re.fullmatch(r'DROP TABLE IF EXISTS `([A-Za-z0-9_]+)`;', line)
         if match:
+            dropped_tables.add(match.group(1))
             statements += 1
             continue
         match = re.fullmatch(r'INSERT INTO `([A-Za-z0-9_]+)` VALUES (.+);', line)
@@ -204,6 +207,8 @@ def _validate_dump(data: bytes) -> tuple[int, int]:
             statements += 1
             continue
         raise ValueError('Unsupported SQL statement in staging dump')
+    if dropped_tables - tables:
+        raise ValueError("Dump attempts to drop a table not defined in the backup")
     if in_create or not tables or not inserts:
         raise ValueError('Dump requires completed InnoDB tables and data inserts')
     return len(tables), statements
@@ -258,10 +263,10 @@ def staging_restore(config_path: str, alias: str, source: str, login_path: str |
         raise ValueError('Source --login-path is required')
     if not staging_login_path or not _IDENTIFIER.fullmatch(staging_login_path) or staging_login_path == login_path:
         raise ValueError('A separate --staging-login-path is required')
-    config, _ = load_cli_database_config(config_path)
-    url = config.resolve(alias)
-    target = url.database
-    if url.drivername != 'mysql+pymysql' or not target or not _IDENTIFIER.fullmatch(target) or not url.username or not url.host:
+    config, _ = _load_config(config_path)
+    url = urlsplit(config.resolve(alias))
+    target = unquote(url.path.lstrip("/"))
+    if url.scheme != 'mysql+pymysql' or not target or not _IDENTIFIER.fullmatch(target) or not unquote(url.username) or not url.hostname:
         raise ValueError('Staging restore requires a configured MySQL source')
     stage = staging_database
     if not stage or not _IDENTIFIER.fullmatch(stage) or len(stage) > 64 or stage.lower() == target.lower():
@@ -271,9 +276,9 @@ def staging_restore(config_path: str, alias: str, source: str, login_path: str |
     tables, statements = _validate_dump(data)
     digest = sha256(data).hexdigest()
     plan = StagingPlan(target, stage, backup, digest, tables, statements)
-    server = ['--protocol=TCP', f'--host={url.host}', f'--port={url.port or 3306}']
-    source_conn = [f'--login-path={login_path}', *server, f'--user={url.username}']
-    source_identity = _identity(source_conn, target, url.username, 'source identity inspection')
+    server = ['--protocol=TCP', f'--host={url.hostname}', f'--port={url.port or 3306}']
+    source_conn = [f'--login-path={login_path}', *server, f'--user={unquote(url.username)}']
+    source_identity = _identity(source_conn, target, unquote(url.username), 'source identity inspection')
     # Staging profile supplies its own username; do not force source username.
     stage_conn = [f'--login-path={staging_login_path}', *server]
     stage_probe = _run(['mysql', *stage_conn, '--batch', '--skip-column-names', stage,

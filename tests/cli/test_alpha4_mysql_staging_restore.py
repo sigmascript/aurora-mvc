@@ -261,3 +261,15 @@ class StagingRestoreTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def test_staging_dump_rejects_drop_of_unrelated_table():
+    """A staging import must not drop tables outside its declared backup schema."""
+    import pytest
+
+    dump = _realistic_dump().replace(
+        b"DROP TABLE IF EXISTS `recovery_items`;",
+        b"DROP TABLE IF EXISTS `unrelated_table`;",
+    )
+    with pytest.raises(ValueError, match="drop a table not defined"):
+        _validate_dump(dump)

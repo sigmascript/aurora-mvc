@@ -91,3 +91,21 @@ class MySQLBackupTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "marker"):
                 backup_mysql_database(str(self.config), "default", str(self.destination), "aurora_recovery")
         self.assertFalse(self.destination.exists())
+
+
+class MySQLBackupCLIRoutingTests(unittest.TestCase):
+    """The public six-command CLI routes MySQL backup to AuroraSQL."""
+
+    def test_mysql_backup_uses_guarded_client_without_legacy_fallback(self):
+        from aurora.cli import main
+
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "aurora_databases.json"
+            config.write_text(json.dumps({"databases": {"default": {
+                "url": "mysql+pymysql://aurora_test:secret@localhost:3306/aurora_recovery_test"
+            }}}))
+            destination = Path(directory) / "backup.sql"
+            with patch("aurora.database.cli_mysql_backup.backup_mysql_database", return_value=destination) as backup:
+                self.assertEqual(main(["db", "backup", "--config", str(config),
+                                       "--to", str(destination), "--login-path", "aurora_recovery"]), 0)
+            backup.assert_called_once_with(str(config), "default", str(destination), "aurora_recovery")

@@ -5,7 +5,7 @@ import unittest
 
 from aurora.core.application import Application
 from aurora.database.async_routed import RoutedWorkManager
-from aurora.database.database_config import DatabaseConfiguration
+from aurora.database.configuration import DatabaseConfiguration
 from aurora.database.database_registry import DatabaseRegistry
 
 
@@ -57,7 +57,7 @@ class ASGILifecycleBoundaryTests(unittest.TestCase):
             registry = DatabaseRegistry(
                 DatabaseConfiguration({"default": {"url": "sqlite:///:memory:"}})
             )
-            manager = RoutedWorkManager(None)
+            manager = RoutedWorkManager(DatabaseConfiguration({"default": {"url": "sqlite:///:memory:"}}))
             app = Application(database_work=manager, database_registry=registry)
             sent = []
 
@@ -69,7 +69,7 @@ class ASGILifecycleBoundaryTests(unittest.TestCase):
 
             await app({"type": "lifespan"}, receive, send)
             with self.assertRaises(RuntimeError):
-                await manager.run(str, lambda transaction: None)
+                await manager.run("default", lambda connection: None)
             with self.assertRaises(RuntimeError):
                 registry.get()
             return sent

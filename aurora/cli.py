@@ -718,7 +718,7 @@ def create_model(app_name: str, name: str, *, directory: Path | None = None, bac
     """
     if not re.fullmatch(r"[A-Z][A-Za-z0-9]*", name) or keyword.iskeyword(name):
         raise ValueError(f"Invalid model name {name!r}. Use CamelCase (e.g. BlogPost).")
-    if backend not in ("legacy", "aurorasql"):
+    if backend != "aurorasql":
         raise ValueError("Unsupported model backend")
     root = _scaffold_app_root(app_name, directory)
     folder = root / "models"
@@ -732,7 +732,7 @@ def create_model(app_name: str, name: str, *, directory: Path | None = None, bac
         raise ValueError("models path must be a directory.")
     module = name
     source = (f'"""{name} model for the {app_name} application."""\n'
-              f'from aurora.{"aurorasql" if backend == "aurorasql" else "database"} import Model, column\n\n\n'
+              'from aurora.database import Model, column\n\n\n'
               f'class {name}(Model):\n'
               '    id = column(int, primary_key=True)\n'
               '    # Add your model columns here.\n')
@@ -806,7 +806,7 @@ def _shared_component_root(resource: str, directory: Path | None = None) -> Path
 
 def create_shared_component(resource: str, name: str, *, directory: Path | None = None, backend: str = "aurorasql") -> Path:
     """Scaffold a shared model or view, without registration or DB mutations."""
-    if backend not in ("legacy", "aurorasql"):
+    if backend != "aurorasql":
         raise ValueError("Unsupported model backend")
     folder = _shared_component_root(resource, directory)
     if resource == "model":
@@ -814,7 +814,7 @@ def create_shared_component(resource: str, name: str, *, directory: Path | None 
             raise ValueError(f"Invalid model name {name!r}. Use CamelCase (e.g. BlogPost).")
         module = name
         filename = module + ".py"
-        content = (f'"""Shared {name} model."""\nfrom aurora.{"aurorasql" if backend == "aurorasql" else "database"} import Model, column\n\n\n'
+        content = (f'"""Shared {name} model."""\nfrom aurora.database import Model, column\n\n\n'
                    f'class {name}(Model):\n    id = column(int, primary_key=True)\n'
                    '    # Add your model columns here.\n')
     elif resource == "view":
@@ -952,8 +952,8 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--config", default="aurora_databases.json")
         command.add_argument("--database", default="default")
         if verb == "backup":
-            command.add_argument("--to", help="New SQLite backup path ending in .sqlite3; never overwrites")
-            command.add_argument("--login-path", help="Reserved for legacy compatibility; unsupported for AuroraSQL")
+            command.add_argument("--to", help="New backup destination; never overwrites")
+            command.add_argument("--login-path", help="MySQL client login-path profile (required for MySQL backup)")
         else:
             command.add_argument("--from", dest="source", required=True, help="Backup source path (restore execution currently unavailable)")
             command.add_argument("--check-only", action="store_true", help="Reserved for future guarded recovery; restore currently unavailable")
@@ -1038,10 +1038,20 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "db" and args.action in ("backup", "restore") and args.backend == "aurorasql":
         if args.action == "restore":
             parser.exit(1, "aurora: AuroraSQL restore remains disabled pending recovery acceptance; refusing legacy fallback.\n")
-        if args.login_path:
-            parser.exit(1, "aurora: --login-path is not supported for AuroraSQL SQLite backup.\n")
-        from aurora.aurorasql.cli_backup import run_backup
+        from aurora.database.cli_plan import _load_config
+        from urllib.parse import urlsplit
         try:
+            config, _ = _load_config(args.config)
+            scheme = urlsplit(config.resolve(args.database)).scheme
+            if scheme == "mysql+pymysql":
+                if os.environ.get("AURORA_ENV", "development").lower() == "production":
+                    raise ValueError("Production backup requires separate approval")
+                from aurora.database.cli_mysql_backup import backup_mysql_database
+                backup_mysql_database(args.config, args.database, args.to, args.login_path)
+                return 0
+            if args.login_path:
+                raise ValueError("--login-path is supported only for MySQL")
+            from aurora.database.cli_backup import run_backup
             return run_backup(args)
         except Exception:
             parser.exit(1, "aurora: AuroraSQL backup refused; refusing legacy fallback; inspect source and destination manually.\n")
@@ -1055,7 +1065,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.format == "json" and not args.dry_run:
             parser.exit(1, "aurora: --format json requires --dry-run.\n")
         if args.review_file:
-            from aurora.aurorasql.cli_migrate_reviewed import run_reviewed_migration
+            from aurora.database.cli_migrate_reviewed import run_reviewed_migration
             try:
                 return run_reviewed_migration(args)
             except Exception:
@@ -1063,7 +1073,7 @@ def main(argv: list[str] | None = None) -> int:
         if not args.dry_run or args.apply or args.approve or args.approve_review or args.approve_sql or args.confirm:
             parser.exit(1, "aurora: AuroraSQL migration writes are not yet integrated; refusing legacy fallback.\n")
         from types import SimpleNamespace
-        from aurora.aurorasql.cli_plan import run_plan
+        from aurora.database.cli_plan import run_plan
         plan_args = SimpleNamespace(config=args.config, database=args.database,
                                     model=args.model or [], models_config=args.models_config,
                                     format=args.format, check=args.check)
@@ -1076,12 +1086,12 @@ def main(argv: list[str] | None = None) -> int:
         if any(value is not None for value in review_values) or args.review_ack is not None:
             if args.check or args.explain or args.model or args.format != "text":
                 parser.exit(1, "aurora: Review export cannot be combined with schema planning flags.\n")
-            from aurora.aurorasql.cli_review_workflow import run_review_export
+            from aurora.database.cli_review_workflow import run_review_export
             try:
                 return run_review_export(args)
             except Exception:
                 parser.exit(1, "aurora: Read-only migration review refused; inspect snapshots, journal and destination.\n")
-        from aurora.aurorasql.cli_plan import run_plan
+        from aurora.database.cli_plan import run_plan
         try:
             return run_plan(args)
         except (ValueError, TypeError, OSError, ImportError, AttributeError) as exc:
@@ -1093,19 +1103,19 @@ def main(argv: list[str] | None = None) -> int:
         if args.history_file:
             parser.exit(1, "aurora: --history-file is for legacy history only.\n")
         if args.intents:
-            from aurora.aurorasql.cli_intent_history import run_intent_history
+            from aurora.database.cli_intent_history import run_intent_history
             try:
                 return run_intent_history(args)
             except Exception:
                 parser.exit(1, "aurora: SQLite intent history refused; no legacy fallback.\n")
-        from aurora.aurorasql.cli_history import run_history
+        from aurora.database.cli_history import run_history
         try:
             return run_history(args)
         except Exception:
             # Never print URLs, driver errors, or connection credentials.
             parser.exit(1, "aurora: AuroraSQL history refused; inspect database configuration and journal manually.\n")
     if args.command == "db" and args.action == "init" and args.backend == "aurorasql":
-        from aurora.aurorasql.cli_init import run_init_check, run_init_apply
+        from aurora.database.cli_init import run_init_check, run_init_apply
         try:
             if args.check:
                 if args.approve or args.confirm:
@@ -1117,7 +1127,7 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             parser.exit(1, "aurora: AuroraSQL initialization preflight refused; inspect configuration and schema manually.\n")
     if args.command == "model" and args.action in ("register", "registered"):
-        from aurora.aurorasql.cli_registration import register_model, registered_models
+        from aurora.database.cli_registration import register_model, registered_models
         try:
             if args.action == "register":
                 if os.environ.get("AURORA_ENV", "development").lower() == "production":
@@ -1163,7 +1173,7 @@ def main(argv: list[str] | None = None) -> int:
                 note = {"controller": " (route registered)", "view": " (routes unchanged)",
                         "model": " (database unchanged; import model explicitly)"}[resource]
                 if resource == "model" and backend == "aurorasql":
-                    from aurora.aurorasql.cli_registration import register_generated_model
+                    from aurora.database.cli_registration import register_generated_model
                     reference, _ = register_generated_model(destination, name)
                     note = f" (registered {reference}; database unchanged)"
                 print(f"Created {destination}" + note)

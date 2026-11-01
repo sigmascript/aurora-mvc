@@ -1,92 +1,84 @@
-"""Alpha 4 guarded SQLite backup and offline restore integration tests."""
-from contextlib import closing
-import json
+"""AuroraSQL public recovery boundary: backups work, restores fail closed.
+
+The former Alpha 4 offline restore executor was retired. These checks must not
+silently re-enable destructive restore while its safety contract is unapproved.
+"""
+
+from contextlib import closing, redirect_stderr, redirect_stdout
 import io
-from contextlib import redirect_stdout, redirect_stderr
-from unittest.mock import patch
+import json
 from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 
-from aurora.database.cli_recovery import backup_database, restore_database
+from aurora.cli import main
+from aurora.database.cli_restore_preflight import check_sqlite_restore
 
 
-class RecoveryTests(unittest.TestCase):
+class RecoveryBoundaryTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
-        self.db = self.root / 'live.sqlite3'
-        self.backup = self.root / 'backup.sqlite3'
-        self.config = self.root / 'aurora_databases.json'
-        self.config.write_text(json.dumps({'databases': {'default': {'url': f'sqlite:///{self.db.as_posix()}'}}}))
-        with closing(sqlite3.connect(self.db)) as conn:
-            conn.execute('CREATE TABLE items (value TEXT)')
-            conn.execute("INSERT INTO items VALUES ('before')")
-            conn.commit()
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.database = self.root / "live.sqlite3"
+        self.backup = self.root / "backup.sqlite3"
+        self.config = self.root / "aurora_databases.json"
+        self.config.write_text(json.dumps({"databases": {"default": {
+            "url": f"sqlite:///{self.database.as_posix()}"}}}))
+        with closing(sqlite3.connect(self.database)) as connection:
+            connection.execute("CREATE TABLE items (value TEXT)")
+            connection.execute("INSERT INTO items VALUES ('before')")
+            connection.commit()
 
-    def value(self):
-        with closing(sqlite3.connect(self.db)) as conn:
-            return conn.execute('SELECT value FROM items').fetchone()[0]
+    def _main(self, *args):
+        return main(["db", *args, "--config", str(self.config)])
 
-    def test_backup_and_guided_restore_preserves_recovery_snapshot(self):
-        backup_database(str(self.config), 'default', str(self.backup))
-        with closing(sqlite3.connect(self.db)) as conn:
-            conn.execute("UPDATE items SET value='after'")
-            conn.commit()
-        target, recovery = restore_database(str(self.config), 'default', str(self.backup), lambda: True)
-        self.assertEqual(target.resolve(), self.db.resolve())
-        self.assertEqual(self.value(), 'before')
-        with closing(sqlite3.connect(recovery)) as conn:
-            self.assertEqual(conn.execute('SELECT value FROM items').fetchone()[0], 'after')
+    def _value(self):
+        with closing(sqlite3.connect(self.database)) as connection:
+            return connection.execute("SELECT value FROM items").fetchone()[0]
 
-    def test_decline_preserves_target_and_does_not_create_recovery(self):
-        backup_database(str(self.config), 'default', str(self.backup))
-        self.assertIsNone(restore_database(str(self.config), 'default', str(self.backup), lambda: False))
-        self.assertEqual(self.value(), 'before')
-        self.assertFalse((self.root / 'live.sqlite3.pre-restore.sqlite3').exists())
-
-    def test_corrupt_backup_rejected_before_confirmation(self):
-        self.backup.write_bytes(b'not a sqlite database')
-        with self.assertRaises(sqlite3.DatabaseError):
-            restore_database(str(self.config), 'default', str(self.backup), lambda: self.fail('should not ask'))
-        self.assertEqual(self.value(), 'before')
-
-    def test_existing_recovery_snapshot_refuses_overwrite(self):
-        backup_database(str(self.config), 'default', str(self.backup))
-        recovery = self.root / 'live.sqlite3.pre-restore.sqlite3'
-        recovery.write_bytes(b'keep')
-        with self.assertRaises(FileExistsError):
-            restore_database(str(self.config), 'default', str(self.backup), lambda: True)
-        self.assertEqual(recovery.read_bytes(), b'keep')
-        self.assertEqual(self.value(), 'before')
-
-    def test_wal_target_rejected(self):
-        backup_database(str(self.config), 'default', str(self.backup))
-        with closing(sqlite3.connect(self.db)) as conn:
-            conn.execute('PRAGMA journal_mode=WAL')
-        with self.assertRaises(ValueError):
-            restore_database(str(self.config), 'default', str(self.backup), lambda: self.fail('should not ask'))
-        self.assertEqual(self.value(), 'before')
-
-    def test_cli_backup_succeeds_but_restore_is_disabled(self):
-        from aurora.cli import main
-
+    def test_public_backup_creates_verified_snapshot_without_overwrite(self):
         with redirect_stdout(io.StringIO()):
-            self.assertEqual(main(['db', 'backup', '--config', str(self.config), '--to', str(self.backup)]), 0)
-
-        self.assertTrue(self.backup.is_file())
-        stderr = io.StringIO()
-        with patch('sys.stdin', io.StringIO('YES\n')), redirect_stderr(stderr):
+            self.assertEqual(self._main("backup", "--to", str(self.backup)), 0)
+        with closing(sqlite3.connect(self.backup)) as connection:
+            self.assertEqual(connection.execute("SELECT value FROM items").fetchone()[0], "before")
+        original = self.backup.read_bytes()
+        with redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit) as raised:
-                main(['db', 'restore', '--config', str(self.config), '--from', str(self.backup)])
+                self._main("backup", "--to", str(self.backup))
         self.assertEqual(raised.exception.code, 1)
-        self.assertIn('restore remains disabled', stderr.getvalue())
-        self.assertEqual(self.value(), 'before')
-        self.assertFalse((self.root / 'live.sqlite3.pre-restore.sqlite3').exists())
+        self.assertEqual(self.backup.read_bytes(), original)
 
-    def test_backup_does_not_overwrite(self):
-        backup_database(str(self.config), 'default', str(self.backup))
-        with self.assertRaises(FileExistsError):
-            backup_database(str(self.config), 'default', str(self.backup))
+    def test_restore_remains_disabled_even_with_confirmation_input(self):
+        with redirect_stdout(io.StringIO()):
+            self._main("backup", "--to", str(self.backup))
+        with closing(sqlite3.connect(self.database)) as connection:
+            connection.execute("UPDATE items SET value='after'")
+            connection.commit()
+        stderr = io.StringIO()
+        with patch("sys.stdin", io.StringIO("YES\n")), redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as raised:
+                self._main("restore", "--from", str(self.backup))
+        self.assertEqual(raised.exception.code, 1)
+        self.assertIn("restore remains disabled", stderr.getvalue())
+        self.assertEqual(self._value(), "after")
+        self.assertFalse((self.root / "live.sqlite3.pre-restore.sqlite3").exists())
+
+    def test_preflight_does_not_restore_or_authorize(self):
+        with redirect_stdout(io.StringIO()):
+            self._main("backup", "--to", str(self.backup))
+        with closing(sqlite3.connect(self.database)) as connection:
+            connection.execute("UPDATE items SET value='after'")
+            connection.commit()
+        report = check_sqlite_restore(str(self.config), "default", str(self.backup))
+        self.assertEqual(report["status"], "PREFLIGHT_ONLY")
+        self.assertFalse(report["restore_authorized"])
+        self.assertEqual(self._value(), "after")
+
+    def test_corrupt_backup_rejected_before_any_write(self):
+        self.backup.write_bytes(b"not a database")
+        with self.assertRaises(sqlite3.DatabaseError):
+            check_sqlite_restore(str(self.config), "default", str(self.backup))
+        self.assertEqual(self._value(), "before")

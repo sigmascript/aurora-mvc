@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 from aurora.cli import create_project, main
-from aurora.database.cli_inspection import load_cli_database_config
-from aurora.database.cli_model_manifest import select_model_refs
+from aurora.database.cli_plan import _load_config as load_cli_database_config
+from aurora.database.model_manifest import select_model_refs
 
 
 class ProjectScaffoldingTests(unittest.TestCase):
