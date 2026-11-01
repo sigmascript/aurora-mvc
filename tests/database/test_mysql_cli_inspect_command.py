@@ -1,38 +1,33 @@
-"""CLI wiring for MySQL metadata inspection and repeat-init guidance."""
+"""AuroraSQL MySQL plan: fail closed without model metadata or a server."""
 import contextlib
 import io
 import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
 
 from aurora.cli import main
 
 
 class MySQLCLIInspectCommandTests(unittest.TestCase):
-    def setUp(self):
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        self.config = Path(directory.name) / 'databases.json'
-        self.config.write_text(json.dumps({'databases': {
-            'default': {'url': 'sqlite:///app.sqlite3'},
-            'analytics': {'url': 'mysql+pymysql://user:private_password@localhost/demo'},
-        }}), encoding='utf-8')
-
-    def test_plan_reports_metadata_limitations_without_compatibility_claim(self):
-        report = {'database_alias': 'analytics', 'schema_status': 'UNVERIFIED',
-                  'scope': 'selected models only', 'read_only': True,
-                  'executable': False, 'items': []}
-        output = io.StringIO()
-        with patch('aurora.database.cli_mysql_plan.plan_mysql_schema', return_value=report), \
-             contextlib.redirect_stdout(output):
-            result = main(['db', 'plan', '--config', str(self.config),
-                           '--database', 'analytics'])
-        self.assertEqual(result, 0)
-        self.assertIn('Unselected tables and some MySQL features are not verified.', output.getvalue())
-        self.assertIn('Advisory only', output.getvalue())
+    def test_model_free_mysql_plan_refuses_without_connecting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "databases.json"
+            config.write_text(json.dumps({"databases": {
+                "default": {"url": "sqlite:///app.sqlite3"},
+                "analytics": {"url": "mysql+pymysql://user:secret@localhost/demo"},
+            }}), encoding="utf-8")
+            output = io.StringIO()
+            errors = io.StringIO()
+            with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+                with self.assertRaises(SystemExit) as caught:
+                    main(["db", "plan", "--config", str(config), "--database", "analytics"])
+            self.assertEqual(caught.exception.code, 1)
+            self.assertEqual(output.getvalue(), "")
+            self.assertIn("AuroraSQL plan refused", errors.getvalue())
+            self.assertNotIn("secret", errors.getvalue())
+            self.assertFalse((Path(directory) / "app.sqlite3").exists())
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

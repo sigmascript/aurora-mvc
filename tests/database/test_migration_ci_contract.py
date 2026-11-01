@@ -1,60 +1,62 @@
+"""CI contract for the AuroraSQL-only, read-only database CLI."""
 import contextlib
 import io
 import unittest
 from unittest.mock import patch
+
 from aurora.cli import main
-from aurora.database.cli_reports import report_for_plan, validate_report_contract
-from aurora.database.plan import MigrationPlan, MigrationStep
-from tests.fixtures.migration_models import MigrationExample
 
 
 class MigrationCIContractTests(unittest.TestCase):
-    def test_contract_match(self):
-        report = report_for_plan('default', ['fixture:Model'], MigrationPlan(()), [MigrationExample])
-        self.assertIs(validate_report_contract(report), report)
+    def invoke(self, args):
+        with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()) as err:
+            try:
+                code = main(args)
+            except SystemExit as exc:
+                code = exc.code
+        return code, out.getvalue(), err.getvalue()
 
-    def test_contract_drift(self):
-        plan = MigrationPlan((MigrationStep('missing_column', 'migration_example', 'title', None, None, 'review', 'Check'),))
-        report = report_for_plan('default', [], plan, [MigrationExample])
-        self.assertEqual(report['schema_status'], 'DRIFT')
-        self.assertIs(validate_report_contract(report), report)
+    def test_check_requires_dry_run(self):
+        code, output, error = self.invoke(['db', 'migrate', '--check'])
+        self.assertEqual(code, 1)
+        self.assertEqual(output, '')
+        self.assertIn('--check requires --dry-run', error)
 
-    def test_contract_rejects_inconsistent_status(self):
-        report = report_for_plan('default', [], MigrationPlan(()), [MigrationExample])
-        report['schema_status'] = 'DRIFT'
-        with self.assertRaises(ValueError):
-            validate_report_contract(report)
+    def test_json_requires_dry_run(self):
+        code, output, error = self.invoke(['db', 'migrate', '--format', 'json'])
+        self.assertEqual(code, 1)
+        self.assertEqual(output, '')
+        self.assertIn('--format json requires --dry-run', error)
 
-    def test_contract_rejects_unknown_version(self):
-        report = report_for_plan('default', [], MigrationPlan(()), [MigrationExample])
-        report['format_version'] = 2
-        with self.assertRaises(ValueError):
-            validate_report_contract(report)
+    def test_explain_requires_dry_run(self):
+        code, output, error = self.invoke(['db', 'migrate', '--explain'])
+        self.assertEqual(code, 1)
+        self.assertEqual(output, '')
+        self.assertIn('--explain requires --dry-run', error)
 
-    def test_sync_check_requires_dry_run(self):
-        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
-            main(['db', 'migrate', '--check'])
-        self.assertEqual(raised.exception.code, 1)
+    def test_help_exposes_ci_options(self):
+        for action in ('plan', 'migrate'):
+            with self.subTest(action=action):
+                code, output, _ = self.invoke(['db', action, '--help'])
+                self.assertEqual(code, 0)
+                self.assertIn('--check', output)
 
-    def test_check_help(self):
-        for args in (['db','plan','-h'], ['db','migrate','-h']):
-            with contextlib.redirect_stdout(io.StringIO()) as output, self.assertRaises(SystemExit):
-                main(args)
-            self.assertIn('--check', output.getvalue())
-
-    def test_sync_json_check_drift_exit(self):
-        report = report_for_plan('default', [], MigrationPlan((MigrationStep('missing_column', 'migration_example', 'title', None, None, 'review', 'Check'),)), [MigrationExample])
-        with patch('aurora.database.cli_inspection.load_cli_database_config') as config_loader, patch('aurora.database.cli_model_manifest.select_model_refs', return_value=['fixture:Model']), patch('aurora.database.cli_reports.report_for_refs', return_value=report), contextlib.redirect_stdout(io.StringIO()) as output:
-            config_loader.return_value = (__import__('unittest').mock.MagicMock(), None)
-            config_loader.return_value[0].resolve.return_value.get_backend_name.return_value = 'sqlite'
-            code = main(['db','migrate','--dry-run','--format','json','--check'])
+    def test_preview_delegates_to_aurorasql_plan(self):
+        with patch('aurora.aurorasql.cli_plan.run_plan', return_value=2) as plan:
+            code, _, _ = self.invoke(['db', 'migrate', '--dry-run', '--format', 'json', '--check'])
         self.assertEqual(code, 2)
-        self.assertIn('"schema_status": "DRIFT"', output.getvalue())
+        self.assertTrue(plan.called)
+        self.assertTrue(plan.call_args.args[0].check)
 
-    def test_sync_json_check_match_exit(self):
-        report = report_for_plan('default', [], MigrationPlan(()), [MigrationExample])
-        with patch('aurora.database.cli_inspection.load_cli_database_config') as config_loader, patch('aurora.database.cli_model_manifest.select_model_refs', return_value=['fixture:Model']), patch('aurora.database.cli_reports.report_for_refs', return_value=report), contextlib.redirect_stdout(io.StringIO()):
-            config_loader.return_value = (__import__('unittest').mock.MagicMock(), None)
-            config_loader.return_value[0].resolve.return_value.get_backend_name.return_value = 'sqlite'
-            code = main(['db','migrate','--dry-run','--format','json','--check'])
+    def test_preview_match_exit_zero(self):
+        with patch('aurora.aurorasql.cli_plan.run_plan', return_value=0):
+            code, _, _ = self.invoke(['db', 'migrate', '--dry-run', '--format', 'json', '--check'])
         self.assertEqual(code, 0)
+
+    def test_write_flags_cannot_trigger_preview(self):
+        with patch('aurora.aurorasql.cli_plan.run_plan') as plan:
+            code, output, error = self.invoke(['db', 'migrate', '--dry-run', '--approve', 'not-an-approval'])
+        self.assertEqual(code, 1)
+        self.assertEqual(output, '')
+        self.assertIn('writes are not yet integrated', error)
+        plan.assert_not_called()

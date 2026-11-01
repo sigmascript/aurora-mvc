@@ -8,7 +8,6 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from aurora.cli import main
-from aurora.database.migration_history_store import initialize_history
 
 class DatabaseCLIWorkflowTests(unittest.TestCase):
     def setUp(self):
@@ -40,17 +39,32 @@ class DatabaseCLIWorkflowTests(unittest.TestCase):
     def test_plan_invalid_model_reference(self):
         with self.assertRaises(SystemExit): self.call('plan', '--model', 'broken')
     def test_plan_explicit_model(self):
-        # Existing project model is intentionally imported only when --model is provided.
-        output = self.call('plan', '--model', 'tests.fixtures.database_probe:DatabaseProbe')
-        self.assertIn('READ-ONLY', output)
-        self.assertIn('missing_table', output)
+        # Explicit models must use the independent AuroraSQL Model base.
+        import sys
+        module = self.root / 'batch1d_probe.py'
+        module.write_text('from aurora.aurorasql import Model, column\n'
+                          'class Probe(Model):\n'
+                          '    id = column(int, primary_key=True)\n', encoding='utf-8')
+        sys.path.insert(0, str(self.root))
+        try:
+            output = self.call('plan', '--model', 'batch1d_probe:Probe')
+        finally:
+            sys.path.remove(str(self.root))
+            sys.modules.pop('batch1d_probe', None)
+        self.assertIn('AuroraSQL', output)
+        self.assertIn('probe', output.lower())
+        self.assertIn('No migration has been approved or executed.', output)
     def test_history_missing_does_not_create(self):
         with self.assertRaises(SystemExit): self.call('history', '--history-file', 'absent.sqlite3')
         self.assertFalse((self.root/'absent.sqlite3').exists())
     def test_history_empty(self):
-        initialize_history(self.root/'audit.sqlite3')
-        self.assertIn('History records: 0', self.call('history', '--history-file', 'audit.sqlite3'))
-        (self.root/'audit.sqlite3').unlink()
+        # The AuroraSQL journal is stored in the target database, not a legacy
+        # --history-file. Missing journal tables must not be created by reads.
+        before = (self.root/'main.sqlite3').read_bytes()
+        with self.assertRaises(SystemExit):
+            self.call('history')
+        self.assertEqual((self.root/'main.sqlite3').read_bytes(), before)
+        self.assertFalse((self.root/'audit.sqlite3').exists())
     def test_history_unknown_alias(self):
         with self.assertRaises(SystemExit): self.call('history', '--database', 'unknown', '--history-file', 'audit.sqlite3')
     def test_inspect_closes_file(self):

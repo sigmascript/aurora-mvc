@@ -37,32 +37,44 @@ class MySQLPolicyTests(unittest.TestCase):
                                     'executable': False, 'items': []})
         self.assertTrue(result['requires_review'])
 
-    def test_consolidated_plan_is_read_only(self):
+    def test_aurorasql_mysql_plan_is_advisory(self):
+        from aurora.aurorasql.planning import SchemaPlan
         config = MagicMock()
-        config.resolve.return_value.get_backend_name.return_value = 'mysql'
-        plan = {'database_alias': 'analytics', 'schema_status': 'MATCH',
-                'scope': 'selected models only', 'read_only': True,
-                'executable': False, 'items': []}
+        config.resolve.return_value = "mysql+pymysql://user:secret@localhost/demo"
+        plan = SchemaPlan("article", True, (), ("MySQL constraints require review",))
         output = io.StringIO()
-        with patch('aurora.database.cli_inspection.load_cli_database_config', return_value=(config, object())), \
-             patch('aurora.database.cli_mysql_plan.plan_mysql_schema', return_value=plan), \
+        with patch("aurora.aurorasql.cli_plan._load_config", return_value=(config, ".")), \
+             patch("aurora.aurorasql.cli_plan._select_models", return_value=(["probe:Article"], [object()])), \
+             patch("aurora.aurorasql.cli_plan.plan_schema", return_value=plan), \
              contextlib.redirect_stdout(output):
-            code = main(['db', 'plan', '--database', 'analytics', '--format', 'json'])
+            code = main(["db", "plan", "--database", "analytics", "--model", "probe:Article", "--format", "json"])
         self.assertEqual(code, 0)
         report = json.loads(output.getvalue())
-        self.assertFalse(report['readiness']['ready_to_execute'])
-        self.assertFalse(report['safety_policy']['execution_available'])
-        self.assertFalse(report['executable'])
+        self.assertEqual(report["backend"], "aurorasql")
+        self.assertTrue(report["advisory_only"])
+        self.assertEqual(report["status"], "UNVERIFIED")
+        self.assertTrue(report["models"][0]["warnings"])
+        config.connect.assert_called_once_with("analytics")
 
-    def test_sqlite_plan_does_not_invoke_mysql_planner(self):
-        config = MagicMock()
-        config.resolve.return_value.get_backend_name.return_value = 'sqlite'
-        with patch('aurora.database.cli_inspection.load_cli_database_config', return_value=(config, Path('.'))), \
-             patch('aurora.database.cli_mysql_plan.plan_mysql_schema', side_effect=AssertionError('MySQL planner invoked')), \
-             patch('aurora.database.cli_inspection.inspect_database', return_value=0), \
-             contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(main(['db', 'plan']), 0)
+    def test_sqlite_planning_does_not_use_mysql_connection(self):
+        from pathlib import Path
+        import sqlite3
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / "app.sqlite3"
+            with contextlib.closing(sqlite3.connect(database)) as conn:
+                conn.execute("CREATE TABLE example (id INTEGER PRIMARY KEY)")
+                conn.commit()
+            config = root / "databases.json"
+            config.write_text(json.dumps({"databases": {"default": {"url": "sqlite:///app.sqlite3"}}}), encoding="utf-8")
+            output = io.StringIO()
+            with patch("aurora.aurorasql.configuration.DatabaseConfiguration.connect", side_effect=AssertionError("Unexpected connection")), \
+                 contextlib.redirect_stdout(output):
+                code = main(["db", "plan", "--config", str(config)])
+            self.assertEqual(code, 0)
+            self.assertIn("Schema readable", output.getvalue())
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

@@ -1,4 +1,4 @@
-"""The database CLI intentionally exposes six verbs, without compatibility aliases."""
+"""Public database CLI contract: six verbs, AuroraSQL-only safe routing."""
 import contextlib
 import io
 import unittest
@@ -33,11 +33,16 @@ class DatabaseSixCommandContractTests(unittest.TestCase):
                 self.assertIn('--database', output.getvalue())
 
     def test_mysql_guarded_executor_is_still_used_by_migrate(self):
-        with patch('aurora.database.cli_inspection.load_cli_database_config') as load, \
-             patch('aurora.database.cli_unified_mysql_migrate.run_unified_mysql_migrate', return_value={'status': 'REVIEW_ONLY'}) as run, \
-             contextlib.redirect_stdout(io.StringIO()) as output:
-            load.return_value = (type('Config', (), {'resolve': lambda self, alias: type('URL', (), {'get_backend_name': lambda self: 'mysql'})()})(), None)
-            result = main(['db', 'migrate', '--model', 'models:User', '--schema', 'staging', '--table', 'users', '--dry-run'])
-        self.assertEqual(result, 0)
-        self.assertEqual(run.call_count, 1)
-        self.assertIn('REVIEW_ONLY', output.getvalue())
+        # Alpha 9 must never fall back to the retired SQLAlchemy/MySQL executor.
+        with patch('aurora.database.cli_unified_mysql_migrate.run_unified_mysql_migrate') as legacy, \
+             contextlib.redirect_stderr(io.StringIO()) as error, \
+             self.assertRaises(SystemExit) as result:
+            main(['db', 'migrate', '--model', 'models:User', '--schema', 'staging',
+                  '--table', 'users', '--approve', '0' * 64])
+        self.assertEqual(result.exception.code, 1)
+        self.assertIn('migration writes are not yet integrated', error.getvalue())
+        legacy.assert_not_called()
+
+
+if __name__ == '__main__':
+    unittest.main()

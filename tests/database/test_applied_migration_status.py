@@ -1,68 +1,108 @@
-"""Batch 12: read-only target migration history and status."""
-import contextlib
-from contextlib import closing
-import io
+"""AuroraSQL read-only migration journal contract and Windows cleanup."""
+
 import json
-from pathlib import Path
 import sqlite3
-import tempfile
-import unittest
+from pathlib import Path
+
+import pytest
+
 from aurora.cli import main
 
-class AppliedMigrationStatusTests(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
-        self.db = self.root / 'main.sqlite3'
-        self.config = self.root / 'aurora_databases.json'
-        self.config.write_text(json.dumps({'databases': {'default': {'url': 'sqlite:///main.sqlite3'}, 'analytics': {'url': 'sqlite:///missing.sqlite3'}}}))
-        with closing(sqlite3.connect(self.db)) as conn:
-            with conn:
-                conn.execute('CREATE TABLE items (id INTEGER PRIMARY KEY)')
 
-    def call(self, action, *args):
-        output = io.StringIO()
-        with contextlib.redirect_stdout(output):
-            main(['db', action, '--config', str(self.config), *args])
-        return output.getvalue()
+JOURNAL_DDL = (
+    "CREATE TABLE aurorasql_schema_history ("
+    "operation_id VARCHAR(36) PRIMARY KEY, "
+    "table_name VARCHAR(128) NOT NULL, "
+    "dialect VARCHAR(16) NOT NULL, "
+    "fingerprint VARCHAR(64) NOT NULL, "
+    "status VARCHAR(16) NOT NULL)"
+)
 
-    def add_history(self, alias='default'):
-        with closing(sqlite3.connect(self.db)) as conn:
-            with conn:
-                conn.execute('CREATE TABLE _aurora_migration_history (plan_sha256 TEXT PRIMARY KEY, database_alias TEXT NOT NULL, applied_at_utc TEXT NOT NULL, backup_filename TEXT NOT NULL, backup_sha256 TEXT NOT NULL)')
-                conn.execute('INSERT INTO _aurora_migration_history VALUES (?,?,?,?,?)', ('abc123', alias, '2026-10-12T12:00:00Z', 'before.sqlite3', 'def456'))
 
-    def test_status_before_first_migration(self):
-        self.assertIn('Migration history: not initialized', self.call('history'))
-    def test_history_defaults_to_target_database(self):
-        self.assertIn('Applied migrations: 0', self.call('history'))
-    def test_status_applied_migration(self):
-        self.add_history()
-        output = self.call('history')
-        self.assertIn('abc123', output)
-        self.assertIn('before.sqlite3', output)
-    def test_history_applied_migration(self):
-        self.add_history()
-        self.assertIn('Applied migrations: 1', self.call('history'))
-    def test_missing_database_does_not_create_file(self):
-        with self.assertRaises(SystemExit):
-            self.call('history', '--database', 'analytics')
-        self.assertFalse((self.root/'missing.sqlite3').exists())
-    def test_rejects_wrong_alias_history(self):
-        self.add_history('analytics')
-        with self.assertRaises(SystemExit):
-            self.call('history')
-    def test_rejects_incompatible_history_table(self):
-        with closing(sqlite3.connect(self.db)) as conn:
-            with conn:
-                conn.execute('CREATE TABLE _aurora_migration_history (id INTEGER)')
-        with self.assertRaises(SystemExit):
-            self.call('history')
-    def test_connection_closed_on_windows(self):
-        self.call('history')
-        self.db.unlink()
-        self.assertFalse(self.db.exists())
+def _setup(tmp_path, *, journal=False, entry=None):
+    db = tmp_path / "main.sqlite3"
+    with sqlite3.connect(db) as connection:
+        connection.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+        if journal:
+            connection.execute(JOURNAL_DDL)
+            if entry is not None:
+                connection.execute(
+                    "INSERT INTO aurorasql_schema_history VALUES (?, ?, ?, ?, ?)",
+                    ("op1", "items", "sqlite", "abc", entry),
+                )
+    config = tmp_path / "aurora_databases.json"
+    config.write_text(json.dumps({"databases": {
+        "default": {"url": "sqlite:///main.sqlite3"},
+        "analytics": {"url": "sqlite:///missing.sqlite3"},
+    }}), encoding="utf-8")
+    return db, config
 
-if __name__ == '__main__':
-    unittest.main()
+
+def _history(config, *extra):
+    return main(["db", "history", "--config", str(config), "--format", "json", *extra])
+
+
+def test_missing_journal_fails_without_creating_it(tmp_path, capsys):
+    db, config = _setup(tmp_path)
+    before = db.read_bytes()
+    with pytest.raises(SystemExit):
+        _history(config)
+    assert db.read_bytes() == before
+    with sqlite3.connect(db) as connection:
+        assert not connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='aurorasql_schema_history'"
+        ).fetchone()
+
+
+def test_empty_journal_is_read_only(tmp_path, capsys):
+    db, config = _setup(tmp_path, journal=True)
+    before = db.read_bytes()
+    assert _history(config) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["database_alias"] == "default"
+    assert report["read_only"] is True
+    assert report["entries"] == []
+    assert db.read_bytes() == before
+
+
+def test_applied_entry_is_visible_without_writes(tmp_path, capsys):
+    db, config = _setup(tmp_path, journal=True, entry="applied")
+    before = db.read_bytes()
+    assert _history(config) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["entries"][0]["operation_id"] == "op1"
+    assert report["entries"][0]["status"] == "applied"
+    assert db.read_bytes() == before
+
+
+def test_unresolved_entry_requires_review(tmp_path, capsys):
+    db, config = _setup(tmp_path, journal=True, entry="uncertain")
+    before = db.read_bytes()
+    assert _history(config) == 3
+    report = json.loads(capsys.readouterr().out)
+    assert any(f["kind"] == "unresolved" for f in report["findings"])
+    assert db.read_bytes() == before
+
+
+def test_missing_alias_database_is_not_created(tmp_path):
+    _, config = _setup(tmp_path, journal=True)
+    with pytest.raises(SystemExit):
+        _history(config, "--database", "analytics")
+    assert not (tmp_path / "missing.sqlite3").exists()
+
+
+def test_incompatible_journal_fails_closed(tmp_path):
+    db, config = _setup(tmp_path)
+    with sqlite3.connect(db) as connection:
+        connection.execute("CREATE TABLE aurorasql_schema_history (id INTEGER)")
+    before = db.read_bytes()
+    with pytest.raises(SystemExit):
+        _history(config)
+    assert db.read_bytes() == before
+
+
+def test_connection_closed_on_windows(tmp_path, capsys):
+    db, config = _setup(tmp_path, journal=True)
+    assert _history(config) == 0
+    db.unlink()
+    assert not db.exists()

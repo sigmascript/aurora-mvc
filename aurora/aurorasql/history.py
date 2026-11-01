@@ -143,14 +143,15 @@ class HistoryFinding:
     detail: str
 
 
-def review_history(connection):
+def review_history(connection, *, entries=None):
     """Inspect journal consistency and current table existence without mutations.
 
     An existing table does not prove that its columns match the recorded SQL.
     Likewise, a missing table does not establish that a failed DDL was rolled back.
     Findings must be investigated manually before further migrations.
     """
-    entries = list_history(connection)
+    if entries is None:
+        entries = list_history(connection)
     findings = []
     by_table = {}
     for entry in entries:

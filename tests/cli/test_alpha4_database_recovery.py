@@ -2,7 +2,7 @@
 from contextlib import closing
 import json
 import io
-from contextlib import redirect_stdout
+from contextlib import redirect_stdout, redirect_stderr
 from unittest.mock import patch
 from pathlib import Path
 import sqlite3
@@ -70,13 +70,21 @@ class RecoveryTests(unittest.TestCase):
             restore_database(str(self.config), 'default', str(self.backup), lambda: self.fail('should not ask'))
         self.assertEqual(self.value(), 'before')
 
-    def test_cli_one_command_backup_and_declined_restore(self):
+    def test_cli_backup_succeeds_but_restore_is_disabled(self):
         from aurora.cli import main
-        with patch('sys.stdin', io.StringIO('NO\n')):
-            with redirect_stdout(io.StringIO()):
-                self.assertEqual(main(['db', 'backup', '--config', str(self.config), '--to', str(self.backup)]), 0)
-                self.assertEqual(main(['db', 'restore', '--config', str(self.config), '--from', str(self.backup)]), 0)
+
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(main(['db', 'backup', '--config', str(self.config), '--to', str(self.backup)]), 0)
+
+        self.assertTrue(self.backup.is_file())
+        stderr = io.StringIO()
+        with patch('sys.stdin', io.StringIO('YES\n')), redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as raised:
+                main(['db', 'restore', '--config', str(self.config), '--from', str(self.backup)])
+        self.assertEqual(raised.exception.code, 1)
+        self.assertIn('restore remains disabled', stderr.getvalue())
         self.assertEqual(self.value(), 'before')
+        self.assertFalse((self.root / 'live.sqlite3.pre-restore.sqlite3').exists())
 
     def test_backup_does_not_overwrite(self):
         backup_database(str(self.config), 'default', str(self.backup))

@@ -1,5 +1,6 @@
 """Experimental AuroraSQL package, independent of the released database layer."""
 
+from .configuration import DatabaseConfiguration, configure_databases
 from .core import Connection, connect
 from .async_work import run_database_work
 from .models import Column, Model, Query, column
@@ -15,7 +16,7 @@ from .execution import CreateApproval, prepare_create, execute_create
 from .history import HistoryEntry, initialize_history, list_history, execute_create_recorded, unresolved_history, HistoryFinding, review_history, RecoveryAssessment, assess_recovery, RecoverySchemaFinding, review_recovery_schema, RecoveryPreflight, preflight_recovery, MigrationStatus, migration_status
 
 __all__ = [
-    "Connection", "connect", "run_database_work", "Column", "Model", "Query", "column",
+    "Connection", "connect", "DatabaseConfiguration", "configure_databases", "run_database_work", "Column", "Model", "Query", "column",
     "create_table", "create_table_sql", "create_tables", "schema_snapshot", "compare_snapshots",
     "migration_plan", "validate_migration_plan", "migration_plan_json", "snapshot_fingerprint",
     "MigrationPreflight", "preflight_migration", "AddColumnReview", "review_add_column",

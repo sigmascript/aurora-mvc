@@ -710,7 +710,7 @@ def create_view(app_name: str, name: str, *,
 
 
 
-def create_model(app_name: str, name: str, *, directory: Path | None = None) -> Path:
+def create_model(app_name: str, name: str, *, directory: Path | None = None, backend: str = "aurorasql") -> Path:
     """Scaffold an app-local model, without importing it or changing a database.
 
     The developer explicitly imports/registers the model when needed. Model
@@ -718,6 +718,8 @@ def create_model(app_name: str, name: str, *, directory: Path | None = None) -> 
     """
     if not re.fullmatch(r"[A-Z][A-Za-z0-9]*", name) or keyword.iskeyword(name):
         raise ValueError(f"Invalid model name {name!r}. Use CamelCase (e.g. BlogPost).")
+    if backend not in ("legacy", "aurorasql"):
+        raise ValueError("Unsupported model backend")
     root = _scaffold_app_root(app_name, directory)
     folder = root / "models"
     if folder.is_symlink():
@@ -730,7 +732,7 @@ def create_model(app_name: str, name: str, *, directory: Path | None = None) -> 
         raise ValueError("models path must be a directory.")
     module = name
     source = (f'"""{name} model for the {app_name} application."""\n'
-              'from aurora.database import Model, column\n\n\n'
+              f'from aurora.{"aurorasql" if backend == "aurorasql" else "database"} import Model, column\n\n\n'
               f'class {name}(Model):\n'
               '    id = column(int, primary_key=True)\n'
               '    # Add your model columns here.\n')
@@ -802,15 +804,17 @@ def _shared_component_root(resource: str, directory: Path | None = None) -> Path
     return folder
 
 
-def create_shared_component(resource: str, name: str, *, directory: Path | None = None) -> Path:
+def create_shared_component(resource: str, name: str, *, directory: Path | None = None, backend: str = "aurorasql") -> Path:
     """Scaffold a shared model or view, without registration or DB mutations."""
+    if backend not in ("legacy", "aurorasql"):
+        raise ValueError("Unsupported model backend")
     folder = _shared_component_root(resource, directory)
     if resource == "model":
         if not re.fullmatch(r"[A-Z][A-Za-z0-9]*", name):
             raise ValueError(f"Invalid model name {name!r}. Use CamelCase (e.g. BlogPost).")
         module = name
         filename = module + ".py"
-        content = (f'"""Shared {name} model."""\nfrom aurora.database import Model, column\n\n\n'
+        content = (f'"""Shared {name} model."""\nfrom aurora.{"aurorasql" if backend == "aurorasql" else "database"} import Model, column\n\n\n'
                    f'class {name}(Model):\n    id = column(int, primary_key=True)\n'
                    '    # Add your model columns here.\n')
     elif resource == "view":
@@ -936,6 +940,7 @@ def main(argv: list[str] | None = None) -> int:
             command.add_argument("--check", action="store_true")
         else:
             command.add_argument("--history-file", help="Optional legacy history SQLite file")
+            command.add_argument("--format", choices=("text", "json"), default="text")
     for verb in ("backup", "restore"):
         command = db_actions.add_parser(verb, help=("Create a verified SQLite or MySQL backup" if verb == "backup" else "Guided SQLite recovery or guarded MySQL staging restore"))
         command.add_argument("--config", default="aurora_databases.json")
@@ -966,6 +971,10 @@ def main(argv: list[str] | None = None) -> int:
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    init.add_argument("--approve", help="Exact reviewed AuroraSQL create approval digest")
+    init.add_argument("--confirm", help="Must be APPLY for guarded AuroraSQL initialization")
+    init.add_argument("--check", action="store_true",
+                      help="AuroraSQL read-only initialization preflight; no database writes")
     init.add_argument("--config", default="aurora_databases.json", help="Database configuration JSON path")
     init.add_argument("--database", default="default", help="Configured database alias")
     init.add_argument("--model", action="append", default=[], metavar="MODULE:CLASS", help="Explicit Aurora model; repeat as needed")
@@ -997,6 +1006,11 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--port", type=int, default=8000)
     run.add_argument("--no-reload", action="store_true", help="Disable automatic reload (enabled by default)")
     args = parser.parse_args(argv)
+    # AuroraSQL is the only public CLI database engine. Legacy internals remain
+    # installed until the retirement acceptance gate, but cannot be selected
+    # through a public engine flag or silently receive database operations.
+    if args.command == "db" or (args.command == "model" and args.action == "add"):
+        args.backend = "aurorasql"
     # Installed console scripts may omit the project directory from sys.path.
     # Explicit database model references must resolve like `python -m aurora`.
     # Restrict this to commands that load project models; help and read-only
@@ -1007,269 +1021,68 @@ def main(argv: list[str] | None = None) -> int:
         project_dir = str(Path.cwd().resolve())
         if project_dir not in sys.path:
             sys.path.insert(0, project_dir)
-    if args.command == "db" and args.action == "init":
-        if os.environ.get("AURORA_ENV", "development").lower() == "production":
-            parser.exit(1, "aurora: Refusing to initialize a database in production environment.\n")
-        from aurora.database.cli_init import initialize_database
+    if args.command == "db" and args.action in ("backup", "restore") and args.backend == "aurorasql":
+        if args.action == "restore":
+            parser.exit(1, "aurora: AuroraSQL restore remains disabled pending recovery acceptance; refusing legacy fallback.\n")
+        if args.login_path:
+            parser.exit(1, "aurora: --login-path is not supported for AuroraSQL SQLite backup.\n")
+        from aurora.aurorasql.cli_backup import run_backup
         try:
-            status = initialize_database(
-                config_path=args.config, alias=args.database,
-                model_refs=args.model, models_config=args.models_config,
-            )
-        except (ValueError, OSError, ImportError, AttributeError, __import__("sqlite3").Error) as exc:
-            parser.exit(1, f"aurora: {exc}\n")
-        if status == "already initialized":
-            print(f"Database: {args.database}\nAlready initialized; no changes made. Table presence alone does not prove schema compatibility.")
-        else:
-            print(f"Database: {args.database}\nDatabase initialized successfully.")
-        return 0
-    if args.command == 'db' and args.action == 'migrate':
-        from aurora.database.cli_inspection import load_cli_database_config
+            return run_backup(args)
+        except Exception:
+            parser.exit(1, "aurora: AuroraSQL backup refused; refusing legacy fallback; inspect source and destination manually.\n")
+    if args.command == "db" and args.action == "migrate" and args.backend == "aurorasql":
+        # Validate read-only CLI contracts before attempting configuration or
+        # model imports. Never interpret a write flag as preview permission.
+        if args.check and not args.dry_run:
+            parser.exit(1, "aurora: --check requires --dry-run.\n")
+        if args.explain and not args.dry_run:
+            parser.exit(1, "aurora: --explain requires --dry-run.\n")
+        if args.format == "json" and not args.dry_run:
+            parser.exit(1, "aurora: --format json requires --dry-run.\n")
+        if not args.dry_run or args.apply or args.approve or args.approve_review or args.approve_sql or args.confirm:
+            parser.exit(1, "aurora: AuroraSQL migration writes are not yet integrated; refusing legacy fallback.\n")
+        from types import SimpleNamespace
+        from aurora.aurorasql.cli_plan import run_plan
+        plan_args = SimpleNamespace(config=args.config, database=args.database,
+                                    model=args.model or [], models_config=args.models_config,
+                                    format=args.format, check=args.check)
         try:
-            config, _ = load_cli_database_config(args.config)
-            backend = config.resolve(args.database).get_backend_name()
-        except (ValueError, OSError, KeyError) as exc:
-            parser.exit(1, f'aurora: {exc}\n')
-        if backend == 'mysql':
-            try:
-                from aurora.database.cli_unified_mysql_migrate import run_unified_mysql_migrate
-                report = run_unified_mysql_migrate(args)
-            except (ValueError, PermissionError, FileNotFoundError) as exc:
-                parser.exit(1, f'aurora: {exc}\n')
-            except Exception:
-                parser.exit(1, 'aurora: MySQL migration refused or outcome uncertain; inspect schema and history manually before retrying.\n')
-            print(json.dumps(report, indent=2, sort_keys=True))
-            return 0
-        if any((args.schema, args.table, args.column, args.apply, args.approve_review, args.approve_sql, args.confirm)):
-            parser.exit(1, 'aurora: MySQL-specific migration arguments cannot be used for SQLite.\n')
-        from aurora.database.cli_sync import sync_database
-        def confirm(text):
-            print(f"Proposed changes:\n{text}\nPlan SHA-256: {args.approve}")
-            try:
-                return input('Apply this migration? Type APPLY: ').strip() == 'APPLY'
-            except EOFError:
-                return False
+            return run_plan(plan_args)
+        except Exception:
+            parser.exit(1, "aurora: AuroraSQL migration preview refused; inspect configuration and schema manually.\n")
+    if args.command == "db" and args.action == "plan" and args.backend == "aurorasql":
+        from aurora.aurorasql.cli_plan import run_plan
         try:
-            if args.explain and not args.dry_run:
-                raise ValueError('--explain requires --dry-run')
-            if args.check and not args.dry_run:
-                raise ValueError('--check requires --dry-run')
-            if args.format == 'json' and not args.dry_run:
-                raise ValueError('--format json requires --dry-run')
-            from aurora.database.cli_model_manifest import select_model_refs
-            model_refs = select_model_refs(explicit=args.model, database=args.database, manifest=args.models_config)
-            if args.format == 'json':
-                from aurora.database.cli_reports import report_for_refs
-                report = report_for_refs(config_path=args.config, alias=args.database, model_refs=model_refs)
-                print(__import__("json").dumps(report, indent=2, sort_keys=True))
-                return 2 if args.check and report['schema_status'] == 'DRIFT' else 0
+            return run_plan(args)
+        except (ValueError, TypeError, OSError, ImportError, AttributeError) as exc:
+            # Do not expose database URLs, passwords, or driver error details.
+            parser.exit(1, f"aurora: AuroraSQL plan refused: {type(exc).__name__}; check configuration, model references, and database access.\n")
+        except Exception:
+            parser.exit(1, "aurora: AuroraSQL plan failed; inspect database access and schema manually.\n")
+    if args.command == "db" and args.action == "history" and args.backend == "aurorasql":
+        if args.history_file:
+            parser.exit(1, "aurora: --history-file is for legacy history only.\n")
+        from aurora.aurorasql.cli_history import run_history
+        try:
+            return run_history(args)
+        except Exception:
+            # Never print URLs, driver errors, or connection credentials.
+            parser.exit(1, "aurora: AuroraSQL history refused; inspect database configuration and journal manually.\n")
+    if args.command == "db" and args.action == "init" and args.backend == "aurorasql":
+        from aurora.aurorasql.cli_init import run_init_check, run_init_apply
+        try:
             if args.check:
-                from aurora.database.cli_reports import report_for_refs
-                report = report_for_refs(config_path=args.config, alias=args.database, model_refs=model_refs)
-                print(f"Schema status: {report['schema_status']} ({len(report['changes'])} difference(s))")
-                return 2 if report['schema_status'] == 'DRIFT' else 0
-            status, digest, tables = sync_database(
-                config_path=args.config, alias=args.database, model_refs=model_refs,
-                dry_run=args.dry_run, approve=args.approve, name=args.name,
-                output_dir=args.output_dir, backup_path=args.backup,
-                confirm=None if args.dry_run else confirm)
-            print(f"Database: {args.database}\nStatus: {status}\nPlan SHA-256: {digest}")
-            for table in tables:
-                print(f"  ADD COLUMN {table}" if "." in table else f"  CREATE TABLE {table}")
-            if args.explain:
-                from aurora.database.cli_inspection import load_cli_database_config, plan_database
-                from aurora.database.cli_diagnostics import explain_plan
-                from aurora.database.model import Model
-                import importlib
-                models = []
-                for ref in model_refs:
-                    module, _, class_name = ref.partition(':')
-                    cls = getattr(importlib.import_module(module), class_name)
-                    if not isinstance(cls, type) or not issubclass(cls, Model) or cls is Model:
-                        raise ValueError(f'Not an Aurora model: {ref}')
-                    models.append(cls)
-                config, base_dir = load_cli_database_config(args.config)
-                plan = plan_database(config, args.database, models, base_dir=base_dir)
-                print(explain_plan(plan, models))
-        except (ValueError, OSError, ImportError, AttributeError, __import__('sqlite3').Error) as exc:
-            parser.exit(1, f"aurora: {exc}\n")
-        return 0
-    if args.command == "db" and args.action in ("backup", "restore"):
-        from aurora.database.cli_recovery import backup_database, restore_database
-        try:
-            if args.action == "backup":
-                output = backup_database(args.config, args.database, args.to, login_path=args.login_path)
-                print(f"Verified database backup: {output}")
-            else:
-                from aurora.database.cli_inspection import load_cli_database_config
-                selected_config, _ = load_cli_database_config(args.config)
-                if selected_config.resolve(args.database).get_backend_name() == "mysql":
-                    if args.staging_only or args.staging_login_path:
-                        if not args.staging_only:
-                            raise ValueError("--staging-login-path requires --staging-only")
-                        from aurora.database.cli_mysql_staging_restore import staging_restore
-                        def confirm_stage(plan):
-                            print(f"STAGING-ONLY MySQL import\nSource: {plan.source_database}\n"
-                                  f"Staging: {plan.staging_database}\nBackup: {plan.backup}\n"
-                                  f"SHA-256: {plan.digest}\nTables: {plan.tables}")
-                            print("WARNING: MySQL imports are not atomic. A failed import may leave partial staging objects.")
-                            try:
-                                return input(f"Type RESTORE {plan.staging_database} to confirm: ").strip() == f"RESTORE {plan.staging_database}"
-                            except (EOFError, KeyboardInterrupt):
-                                return False
-                        plan = staging_restore(args.config, args.database, args.source,
-                                               args.login_path, args.staging_database,
-                                               args.staging_login_path, check_only=args.check_only,
-                                               confirm=confirm_stage)
-                        print(f"{'Staging readiness verified (READ ONLY)' if args.check_only else 'Staging import completed'}: "
-                              f"{plan.staging_database} (SHA-256: {plan.digest})")
-                        return 0
-                    if not args.check_only:
-                        raise ValueError("MySQL restore is disabled; use --check-only for read-only preflight")
-                    from aurora.database.cli_mysql_restore_preflight import check_mysql_restore
-                    report = check_mysql_restore(args.config, args.database, args.source,
-                                                 args.login_path, args.staging_database)
-                    print(report.format_text())
-                    if not report.staging_available:
-                        parser.exit(2, "aurora: staging database collision; no changes made\n")
-                    return 0
-                if args.check_only or args.login_path or args.staging_database or args.staging_login_path or args.staging_only:
-                    raise ValueError("--check-only, --login-path and --staging-database are MySQL-only restore options")
-                def confirm_restore():
-                    try:
-                        return input("Type RESTORE to confirm: ").strip() == "RESTORE"
-                    except (EOFError, KeyboardInterrupt):
-                        return False
-                result = restore_database(args.config, args.database, args.source, confirm_restore)
-                if result:
-                    print(f"Restore verified: {result[0]}\nPrevious database preserved: {result[1]}")
-        except (ValueError, OSError, RuntimeError, __import__("sqlite3").Error) as exc:
-            parser.exit(1, f"aurora: {exc}\n")
-        return 0
-    if args.command == "db":
-        from aurora.database.cli_inspection import (
-            load_cli_database_config, describe_database, inspect_database,
-            inspect_database_details, inspect_mysql_details, plan_database, inspect_history_file,
-        )
-        try:
-            config, base_dir = load_cli_database_config(args.config)
-            if (args.action == "plan" and not args.model
-                  and config.resolve(args.database).get_backend_name() == "sqlite"
-                  and not Path(args.models_config).expanduser().is_file()):
-                # Preserve model-free schema inspection when no manifest exists.
-                # An existing but invalid manifest must not silently fall back.
-                count = inspect_database(config, args.database, base_dir=base_dir)
-                if args.format == "json":
-                    print(__import__("json").dumps({
-                        "database_alias": args.database,
-                        "mode": "inspection_only",
-                        "read_only": True,
-                        "table_count": count,
-                        "schema_status": "UNVERIFIED",
-                        "warnings": ["No models supplied or registered; schema differences cannot be evaluated."],
-                    }, indent=2, sort_keys=True))
-                else:
-                    print(f"Database: {args.database}\nSchema readable; {count} user table(s).")
-                    print("Safety warnings:")
-                    print("  No models supplied or registered; schema differences cannot be evaluated.")
-                    print("  Inspection only; no database changes applied.")
-                return 3 if args.check else 0
-            elif args.action == "plan" and config.resolve(args.database).get_backend_name() == "mysql":
-                from aurora.database.cli_mysql_plan import plan_mysql_schema
-                report = plan_mysql_schema(
-                    config, args.database, model_refs=args.model,
-                    models_config=args.models_config,
-                )
-                from aurora.database.cli_mysql_policy import review_mysql_plan
-                from aurora.database.cli_mysql_readiness import assess_mysql_policy
-                policy = review_mysql_plan(report)
-                readiness = assess_mysql_policy(policy)
-                report = dict(report)
-                report['safety_policy'] = policy
-                report['readiness'] = readiness
-                if args.format == 'json':
-                    print(__import__('json').dumps(report, indent=2, sort_keys=True))
-                else:
-                    print(f"Database: {args.database}\nSchema plan: {report['schema_status']} (selected models only)")
-                    for item in report['items']:
-                        print(f"  {item['category']} [{item['policy']}]: {item['detail']}")
-                    if not report['items']:
-                        print("  No differences in supported comparisons.")
-                    print("Safety warnings:")
-                    for item in report['items']:
-                        print(f"  [{item['policy']}] {item['detail']}")
-                    if not report['items']:
-                        print("  No classified differences among selected models.")
-                    for decision in policy['decisions']:
-                        print(f"  [{decision['decision']}] {decision['detail']}: {decision['reason']}")
-                    for reason in readiness['blocking_reasons']:
-                        print(f"  [READINESS] {reason}")
-                    print("Advisory only; no executable SQL or approvals.")
-                    print("Unselected tables and some MySQL features are not verified.")
-                if args.check:
-                    return 2 if report['schema_status'] == 'DRIFT' else 3 if report['schema_status'] == 'UNVERIFIED' else 0
-                return 0
-            elif args.action == "plan":
-                from aurora.database.cli_model_manifest import select_model_refs
-                selected_refs = select_model_refs(explicit=args.model, database=args.database, manifest=args.models_config)
-                import importlib
-                from aurora.database.model import Model
-                models = []
-                for reference in selected_refs:
-                    module_name, separator, class_name = reference.partition(":")
-                    if not separator or not module_name or not class_name or not class_name.isidentifier():
-                        raise ValueError("--model must be MODULE:CLASS")
-                    cls = getattr(importlib.import_module(module_name), class_name, None)
-                    if not isinstance(cls, type) or not issubclass(cls, Model) or cls is Model:
-                        raise ValueError(f"Not an Aurora model: {reference}")
-                    models.append(cls)
-                plan = plan_database(config, args.database, models, base_dir=base_dir)
-                if args.action == "plan":
-                    if args.format == 'json':
-                        from aurora.database.cli_reports import report_for_plan
-                        report = report_for_plan(args.database, selected_refs, plan, models)
-                        print(__import__("json").dumps(report, indent=2, sort_keys=True))
-                        return 2 if args.check and report['schema_status'] == 'DRIFT' else 0
-                    print(f"Database: {args.database}\n{plan.format_text()}")
-                    from aurora.database.cli_reports import report_for_plan
-                    safety_report = report_for_plan(args.database, selected_refs, plan, models)
-                    print("\nSafety warnings:")
-                    if not safety_report['changes']:
-                        print("  None for the selected models; unselected schema is not verified.")
-                    else:
-                        for change in safety_report['changes']:
-                            label = change['table'] + ('.' + change['column'] if change['column'] else '')
-                            print(f"  [{change['classification']}] {label}: {change['reason']}")
-                        print("  Candidate changes are not execution approval; revalidation, backup, and explicit consent remain mandatory.")
-                    if args.check:
-                        from aurora.database.cli_reports import report_for_plan
-                        report = report_for_plan(args.database, selected_refs, plan, models)
-                        return 2 if report['schema_status'] == 'DRIFT' else 0
-                    if args.explain:
-                        from aurora.database.cli_diagnostics import explain_plan
-                        print(explain_plan(plan, models))
-            elif args.action == "history" and not args.history_file:
-                from aurora.database.cli_migration_status import read_applied_migrations
-                present, records = read_applied_migrations(config, args.database, base_dir=base_dir)
-                print(f"Database: {args.database}\nApplied migrations: {len(records)}")
-                if not present:
-                    print("Migration history: not initialized")
-                for digest, record_alias, applied_at, backup_name, backup_digest in records:
-                    print(f"  {digest}: applied {applied_at}; backup {backup_name} (SHA-256: {backup_digest})")
-            elif args.action == "history":
-                config.resolve(args.database)  # Legacy separate history store, explicit opt-in.
-                history_path = Path(args.history_file).expanduser()
-                if not history_path.is_absolute():
-                    history_path = base_dir / history_path
-                records = inspect_history_file(history_path)
-                print(f"Database: {args.database}\nHistory records: {len(records)}")
-                for migration_id, state, recorded_at in records:
-                    print(f"  {migration_id}: {state} ({recorded_at})")
-        except (ValueError, OSError, ImportError, AttributeError, __import__("sqlite3").Error) as exc:
-            parser.exit(1, f"aurora: {exc}\n")
-        return 0
+                if args.approve or args.confirm:
+                    parser.exit(1, "aurora: --check cannot approve or execute initialization.\n")
+                return run_init_check(args)
+            if os.environ.get("AURORA_ENV", "development").lower() == "production":
+                parser.exit(1, "aurora: Refusing AuroraSQL initialization in production.\n")
+            return run_init_apply(args)
+        except Exception:
+            parser.exit(1, "aurora: AuroraSQL initialization preflight refused; inspect configuration and schema manually.\n")
     if args.command == "model" and args.action in ("register", "registered"):
-        from aurora.database.cli_model_registration import register_model, registered_models
+        from aurora.aurorasql.cli_registration import register_model, registered_models
         try:
             if args.action == "register":
                 if os.environ.get("AURORA_ENV", "development").lower() == "production":
@@ -1303,14 +1116,21 @@ def main(argv: list[str] | None = None) -> int:
             parser.exit(1, "aurora: Refusing to modify project in production environment.\n")
         try:
             if args.action == "add":
-                if app_name is None:
+                if resource == "model":
+                    backend = args.backend
+                    destination = (create_shared_component("model", name, backend=backend)
+                                   if app_name is None else create_model(app_name, name, backend=backend))
+                elif app_name is None:
                     destination = (create_standalone_controller(name) if resource == "controller"
                                    else create_shared_component(resource, name))
                 else:
-                    destination = {"controller": create_controller, "view": create_view,
-                                   "model": create_model}[resource](app_name, name)
+                    destination = {"controller": create_controller, "view": create_view}[resource](app_name, name)
                 note = {"controller": " (route registered)", "view": " (routes unchanged)",
                         "model": " (database unchanged; import model explicitly)"}[resource]
+                if resource == "model" and backend == "aurorasql":
+                    from aurora.aurorasql.cli_registration import register_generated_model
+                    reference, _ = register_generated_model(destination, name)
+                    note = f" (registered {reference}; database unchanged)"
                 print(f"Created {destination}" + note)
             elif args.action == "list":
                 entries = (list_components(resource, app_name) if app_name is not None
