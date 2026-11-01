@@ -25,6 +25,30 @@ def _objects(conn):
         "SELECT type,name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'")}
 
 
+def _verify_result_catalog(connection, expected, table_names):
+    """Compare resulting catalog structures without relying on ALTER SQL text."""
+    actual_objects = _objects(connection)
+    expected_objects = _objects(expected)
+    actual_objects.pop(('table', _TABLE), None)
+    if set(actual_objects) != set(expected_objects):
+        raise RuntimeError('Unexpected SQLite catalog objects after migration')
+    for key, sql in expected_objects.items():
+        if key[0] != 'table' and actual_objects[key] != sql:
+            raise RuntimeError('Resulting SQLite catalog definition differs from models')
+    for name in sorted(table_names):
+        quoted = '"' + name.replace('"', '""') + '"'
+        for pragma in ('table_info', 'foreign_key_list', 'index_list'):
+            statement = f'PRAGMA {pragma}({quoted})'
+            if connection.execute(statement).fetchall() != expected.execute(statement).fetchall():
+                raise RuntimeError(f'Resulting SQLite {pragma} differs from models')
+        indexes = expected.execute(f'PRAGMA index_list({quoted})').fetchall()
+        for index in indexes:
+            index_name = '"' + index[1].replace('"', '""') + '"'
+            statement = f'PRAGMA index_xinfo({index_name})'
+            if connection.execute(statement).fetchall() != expected.execute(statement).fetchall():
+                raise RuntimeError('Resulting SQLite index definition differs from models')
+
+
 def _expected_before(snapshot):
     """Build an independent SQLite catalog from reviewed baseline DDL."""
     db = sqlite3.connect(':memory:')
@@ -140,14 +164,7 @@ def execute_sqlite_additive_migration(connection, review, models, *,
         try:
             for model in models:
                 expected.execute(create_table_sql(model, 'sqlite'))
-            actual = _objects(connection)
-            if set(actual) != set(_objects(expected)) | {('table', _TABLE)}:
-                raise RuntimeError('Unexpected SQLite catalog objects after migration')
-            for name in model_by_name:
-                got = connection.execute(f'PRAGMA table_info("{name}")').fetchall()
-                want = expected.execute(f'PRAGMA table_info("{name}")').fetchall()
-                if got != want:
-                    raise RuntimeError('Resulting SQLite column metadata differs from models')
+            _verify_result_catalog(connection, expected, model_by_name)
         finally:
             expected.close()
         changed = connection.execute(

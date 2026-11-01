@@ -96,3 +96,35 @@ def test_active_transaction_rejected(state):
     with pytest.raises(RuntimeError,match='active transaction'):
         apply(c,r)
     c.rollback()
+
+
+def test_result_catalog_rejects_foreign_key_definition_drift():
+    from aurora.aurorasql.sqlite_additive_migration import _verify_result_catalog
+    actual = sqlite3.connect(':memory:')
+    expected = sqlite3.connect(':memory:')
+    try:
+        for db in (actual, expected):
+            db.execute('CREATE TABLE parent (id INTEGER PRIMARY KEY)')
+        actual.execute('CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id) ON DELETE CASCADE)')
+        expected.execute('CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id) ON DELETE RESTRICT)')
+        with pytest.raises(RuntimeError, match='foreign_key_list'):
+            _verify_result_catalog(actual, expected, ('parent', 'child'))
+    finally:
+        actual.close()
+        expected.close()
+
+
+def test_result_catalog_rejects_index_definition_drift():
+    from aurora.aurorasql.sqlite_additive_migration import _verify_result_catalog
+    actual = sqlite3.connect(':memory:')
+    expected = sqlite3.connect(':memory:')
+    try:
+        for db in (actual, expected):
+            db.execute('CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT)')
+        actual.execute('CREATE INDEX lookup ON records(value ASC)')
+        expected.execute('CREATE INDEX lookup ON records(value DESC)')
+        with pytest.raises(RuntimeError, match='catalog definition|index'):
+            _verify_result_catalog(actual, expected, ('records',))
+    finally:
+        actual.close()
+        expected.close()
