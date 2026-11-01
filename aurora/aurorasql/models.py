@@ -93,6 +93,72 @@ def column(python_type, **options):
     return Column(python_type, **options)
 
 
+class ModelRow(dict):
+    """Dictionary row with read-only attribute-style lookup compatibility."""
+
+    def __getattr__(self, name):
+        try:
+            return self[name]
+        except KeyError as error:
+            raise AttributeError(name) from error
+
+
+class ModelResult(list):
+    """Eager, list-compatible read/JOIN rows with safe in-memory summaries.
+
+    Column references are resolved from declared model metadata, never SQL.
+    A JOIN may project columns away; aggregating an absent column is refused.
+    """
+
+    def __init__(self, rows=(), *, columns=None):
+        super().__init__(rows)
+        self._columns = dict(columns or {})
+
+    def all(self):
+        return [ModelRow(row) if type(row) is dict else row for row in self]
+
+    def first(self):
+        row = self[0] if self else None
+        return ModelRow(row) if type(row) is dict else row
+
+    def last(self):
+        row = self[-1] if self else None
+        return ModelRow(row) if type(row) is dict else row
+
+    def count(self):
+        return len(self)
+
+    def _values(self, column):
+        if not isinstance(column, str):
+            raise TypeError("Aggregate column must be a string")
+        key = self._columns.get(column)
+        if key is None:
+            raise ValueError(f"Unknown or unavailable aggregate column: {column!r}")
+        return [row[key] for row in self if row[key] is not None]
+
+    def min(self, column):
+        values = self._values(column)
+        return min(values) if values else None
+
+    def max(self, column):
+        values = self._values(column)
+        return max(values) if values else None
+
+    def sum(self, column):
+        values = self._values(column)
+        if any(type(value) is bool or not isinstance(value, (int, float, Decimal))
+               for value in values):
+            raise TypeError("sum requires a numeric column")
+        return sum(values) if values else None
+
+    def avg(self, column):
+        values = self._values(column)
+        if any(type(value) is bool or not isinstance(value, (int, float, Decimal))
+               for value in values):
+            raise TypeError("avg requires a numeric column")
+        return sum(values) / len(values) if values else None
+
+
 class Model:
     """Declared model with Alpha 4-style binding and explicit .using(db) support."""
 
@@ -178,7 +244,7 @@ class Model:
 
     @classmethod
     def read(cls, where=None, *, order_by=None, limit=None, offset=0):
-        """Read records directly as a list of plain dictionaries."""
+        """Read plain dictionaries in a list-compatible ModelResult."""
         return cls._operations().read(where, order_by=order_by, limit=limit,
                                       offset=offset)
 
@@ -596,7 +662,11 @@ class ModelOperations:
     def read(self, where=None, *, order_by=None, limit=None, offset=0):
         """Execute a read and return plain dictionaries with normalized values."""
         query = self.legacy_query(where, order_by=order_by, limit=limit, offset=offset)
-        return [vars(row).copy() for row in query.all()]
+        rows = [vars(row) for row in query.all()]
+        columns = {name: name for name in self.model.__columns__}
+        for prefix in (self.model.__name__, self.model.__table_name__):
+            columns.update({f"{prefix}.{name}": name for name in self.model.__columns__})
+        return ModelResult(rows, columns=columns)
 
     def join(self, models, *, cols=None, where=None, order_by=None,
              limit=None, offset=0, on=None):
@@ -715,7 +785,20 @@ class ModelOperations:
             query = query.limit(limit)
         if offset:
             query = query.offset(offset)
-        return query.all()
+        rows = query.all()
+        columns = {}
+        joined_models = [self.model, *models]
+        for index, model in enumerate(joined_models):
+            alias = "left" if index == 0 else (
+                "right" if len(joined_models) == 2 else f"right{index}")
+            for field in model.__columns__:
+                canonical = f"{model.__table_name__}.{field}"
+                if query._selected is not None and canonical not in query._selected:
+                    continue
+                key = f"{alias}__{field}"
+                for prefix in (model.__name__, model.__table_name__):
+                    columns[f"{prefix}.{field}"] = key
+        return ModelResult(rows, columns=columns)
 
     def all(self, *, where=None):
         clause, parameters = self._where(where)
