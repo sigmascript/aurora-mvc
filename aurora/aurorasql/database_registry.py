@@ -42,8 +42,16 @@ class DatabaseRegistry:
             self._closed = True
             instances = tuple(self._instances.values())
             self._instances.clear()
+        failure = None
         for connection in instances:
-            connection.close()
+            try:
+                connection.close()
+            except Exception as error:
+                # One failed close must not strand connections for other aliases.
+                if failure is None:
+                    failure = error
+        if failure is not None:
+            raise failure
 
     def __enter__(self):
         if self._closed:
