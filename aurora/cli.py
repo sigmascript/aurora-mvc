@@ -938,6 +938,11 @@ def main(argv: list[str] | None = None) -> int:
             command.add_argument("--explain", action="store_true")
             command.add_argument("--format", choices=("text", "json"), default="text")
             command.add_argument("--check", action="store_true")
+            command.add_argument("--review-before", help="Existing before schema snapshot JSON")
+            command.add_argument("--review-after", help="Existing after schema snapshot JSON")
+            command.add_argument("--review-id", help="Migration review identifier")
+            command.add_argument("--review-out", help="New non-executable review JSON destination")
+            command.add_argument("--review-ack", help="Exact optional reviewed SHA-256 acknowledgement")
         else:
             command.add_argument("--history-file", help="Optional legacy history SQLite file")
             command.add_argument("--format", choices=("text", "json"), default="text")
@@ -1052,6 +1057,15 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             parser.exit(1, "aurora: AuroraSQL migration preview refused; inspect configuration and schema manually.\n")
     if args.command == "db" and args.action == "plan" and args.backend == "aurorasql":
+        review_values = (args.review_before, args.review_after, args.review_id, args.review_out)
+        if any(value is not None for value in review_values) or args.review_ack is not None:
+            if args.check or args.explain or args.model or args.format != "text":
+                parser.exit(1, "aurora: Review export cannot be combined with schema planning flags.\n")
+            from aurora.aurorasql.cli_review_workflow import run_review_export
+            try:
+                return run_review_export(args)
+            except Exception:
+                parser.exit(1, "aurora: Read-only migration review refused; inspect snapshots, journal and destination.\n")
         from aurora.aurorasql.cli_plan import run_plan
         try:
             return run_plan(args)

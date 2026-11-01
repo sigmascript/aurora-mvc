@@ -154,7 +154,9 @@ def review_history(connection, *, entries=None):
         entries = list_history(connection)
     findings = []
     by_table = {}
+    by_operation = {}
     for entry in entries:
+        by_operation.setdefault(entry.operation_id, []).append(entry)
         by_table.setdefault(entry.table, []).append(entry)
         if entry.status not in ("started", "applied", "uncertain"):
             findings.append(HistoryFinding(entry.operation_id, entry.table,
@@ -173,6 +175,12 @@ def review_history(connection, *, entries=None):
         if entry.status in ("started", "uncertain") and observed.exists:
             findings.append(HistoryFinding(entry.operation_id, entry.table,
                                            "unresolved_table_exists", "Table exists, but schema and DDL outcome are unverified"))
+    for operation_id, records in by_operation.items():
+        if len(records) > 1:
+            for entry in records:
+                findings.append(HistoryFinding(entry.operation_id, entry.table,
+                                               "duplicate_operation_id",
+                                               "Operation identifier appears more than once"))
     for table, records in by_table.items():
         if len(records) > 1:
             for entry in records:
