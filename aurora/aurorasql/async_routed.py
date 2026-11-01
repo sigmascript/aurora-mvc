@@ -5,9 +5,8 @@ Cancellation of a waiter does not interrupt an already accepted job.
 """
 
 import asyncio
-import inspect
 
-from .async_work import _run_work
+from .async_work import _run_work, _validate_callback
 from .configuration import DatabaseConfiguration
 
 
@@ -38,17 +37,32 @@ class RoutedWorkManager:
         self._check_loop()
         if self._closed:
             raise RuntimeError("RoutedWorkManager is closed")
-        if not callable(callback) or inspect.iscoroutinefunction(callback):
-            raise TypeError("callback must be a synchronous callable")
+        _validate_callback(callback)
         url = self._configuration.resolve(alias)
-        task = asyncio.create_task(self._execute(url, callback))
+        task = asyncio.create_task(self._execute(url, callback, transactional=False))
         self._pending.add(task)
         task.add_done_callback(self._completed)
         return await asyncio.shield(task)
 
-    async def _execute(self, url, callback):
+    async def run_transaction(self, alias, callback):
+        """Run a complete callback in an owned, atomic transaction.
+
+        The callback receives a scoped AuroraSQL connection, not a legacy
+        SQLAlchemy transaction. Cancellation does not interrupt committed work.
+        """
+        self._check_loop()
+        if self._closed:
+            raise RuntimeError("RoutedWorkManager is closed")
+        _validate_callback(callback)
+        url = self._configuration.resolve(alias)
+        task = asyncio.create_task(self._execute(url, callback, transactional=True))
+        self._pending.add(task)
+        task.add_done_callback(self._completed)
+        return await asyncio.shield(task)
+
+    async def _execute(self, url, callback, transactional):
         async with self._semaphore:
-            return await asyncio.to_thread(_run_work, url, callback)
+            return await asyncio.to_thread(_run_work, url, callback, transactional)
 
     def _completed(self, task):
         self._pending.discard(task)
