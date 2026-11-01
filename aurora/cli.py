@@ -945,6 +945,7 @@ def main(argv: list[str] | None = None) -> int:
             command.add_argument("--review-ack", help="Exact optional reviewed SHA-256 acknowledgement")
         else:
             command.add_argument("--history-file", help="Optional legacy history SQLite file")
+            command.add_argument("--intents", action="store_true", help="Read guarded SQLite intent journal v2 instead of earlier history")
             command.add_argument("--format", choices=("text", "json"), default="text")
     for verb in ("backup", "restore"):
         command = db_actions.add_parser(verb, help=("Create a verified SQLite or MySQL backup" if verb == "backup" else "Guided SQLite recovery or guarded MySQL staging restore"))
@@ -994,6 +995,7 @@ def main(argv: list[str] | None = None) -> int:
     sync.add_argument('--dry-run', action='store_true', help='Preview changes only; no files or schema writes')
     sync.add_argument('--check', action='store_true', help='CI check during --dry-run: exit 2 for schema drift')
     sync.add_argument('--approve', help='Reviewed SHA-256 digest; APPLY still required')
+    sync.add_argument('--review-file', help='Existing, validated AuroraSQL migration review JSON')
     sync.add_argument('--name', help='New migration review filename stem (required to apply)')
     sync.add_argument('--output-dir', default='migrations', help='Existing review directory (default: migrations)')
     sync.add_argument('--backup', help='New backup filename in an existing directory (required to apply)')
@@ -1045,6 +1047,12 @@ def main(argv: list[str] | None = None) -> int:
             parser.exit(1, "aurora: --explain requires --dry-run.\n")
         if args.format == "json" and not args.dry_run:
             parser.exit(1, "aurora: --format json requires --dry-run.\n")
+        if args.review_file:
+            from aurora.aurorasql.cli_migrate_reviewed import run_reviewed_migration
+            try:
+                return run_reviewed_migration(args)
+            except Exception:
+                parser.exit(1, "aurora: Reviewed AuroraSQL migration refused; no legacy fallback; inspect review, models, journal and database state.\n")
         if not args.dry_run or args.apply or args.approve or args.approve_review or args.approve_sql or args.confirm:
             parser.exit(1, "aurora: AuroraSQL migration writes are not yet integrated; refusing legacy fallback.\n")
         from types import SimpleNamespace
@@ -1077,6 +1085,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "db" and args.action == "history" and args.backend == "aurorasql":
         if args.history_file:
             parser.exit(1, "aurora: --history-file is for legacy history only.\n")
+        if args.intents:
+            from aurora.aurorasql.cli_intent_history import run_intent_history
+            try:
+                return run_intent_history(args)
+            except Exception:
+                parser.exit(1, "aurora: SQLite intent history refused; no legacy fallback.\n")
         from aurora.aurorasql.cli_history import run_history
         try:
             return run_history(args)
