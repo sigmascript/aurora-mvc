@@ -1,33 +1,42 @@
-# Database operations and safety
+# AuroraSQL database operations and safety
 
-Aurora MVC supports SQLite and guarded MySQL database workflows. This document describes the **six-command public CLI** in the unreleased `1.0.0a5` checkout. These commands still use the existing SQLAlchemy-backed database implementation; experimental `aurora.aurorasql` is separate and is not wired into this CLI. Use `aurora db COMMAND --help` for the complete supported flags.
+This guide describes the integrated **AuroraSQL** backend in the Aurora MVC `1.0.0a6` release candidate. The former SQLAlchemy-backed `aurora.database` implementation is retired. This is alpha software: **the presence of a command does not imply all operations are supported**. Run `aurora db COMMAND --help` for exact options and requirements.
 
-## Configuration
+## Configuration and drivers
 
-Database aliases are configured in `aurora_databases.json`; explicit model references can be registered in `aurora_models.json` or passed with `--model MODULE:CLASS`. `url_env` reads a connection URL from an environment variable at configuration construction time and is mutually exclusive with `url`; do not commit credentials to source control.
+Database aliases are configured in `aurora_databases.json`. Select models with `--model MODULE:CLASS` or register explicit references in `aurora_models.json`. Where supported, `url_env` reads the connection URL from an environment variable. Never commit database credentials. SQLite is included; MySQL and PostgreSQL require optional drivers (`PyMySQL` and `psycopg`).
 
-## Six commands
+## Public CLI
 
-1. `aurora db init`: initialize an empty selected schema once; refuse partial or unrelated schemas. Never use it as a migration command.
-2. `aurora db plan`: read-only inspection and schema planning with safety warnings. SQLite without models is inspection-only (unverified). MySQL combines schema comparison, policy classification, and readiness assessment; neither mode authorizes execution.
-3. `aurora db migrate`: guarded SQLite migration preview/application or one explicitly scoped MySQL operation. All existing review, backup, approval, digest, confirmation, and history protections remain mandatory.
-4. `aurora db backup`: verified SQLite backup or MySQL SQL dump using the configured client/login profile.
-5. `aurora db restore`: guided SQLite recovery; MySQL restoration is restricted to checked staging targets. Production MySQL restore is not supported.
-6. `aurora db history`: inspect applied migrations and optional legacy history file.
+| Command | Purpose | Important limit |
+| --- | --- | --- |
+| `init` | Initialize explicitly selected model tables | Only supported empty-schema initialization; never use to migrate an existing schema |
+| `plan` | Inspect selected schema and report differences | Read-only; inspection is not approval to write |
+| `migrate` | Preview/apply selected supported schema changes | Backend-specific scope, review, backup, and explicit approval gates |
+| `backup` | Create a verified backup | SQLite and guarded MySQL paths exist; backend support and client prerequisites vary |
+| `restore` | Reserved recovery command | **Execution disabled**; refuses unsafe legacy fallback |
+| `history` | Read migration records | Does not itself verify the entire database schema |
 
-All other database CLI commands and aliases are removed, including `sync`, `check`, `inspect`, `status`, `validate`, `compat`, `policy`, `readiness`, `migration`, `mysql-create-table`, and `mysql-add-column`. Their meaningful read-only schema checks now belong to `plan`; guarded execution belongs to `migrate`.
+No additional legacy database command aliases are exposed.
 
-## Safe workflow
+## Safe starting workflow
 
 ```sh
+aurora db init --model myapp.models:User
+aurora db plan --model myapp.models:User
 aurora db plan --model myapp.models:User --check
 aurora db migrate --model myapp.models:User --dry-run
-aurora db backup --to before.sqlite3
 aurora db history
 ```
 
-A plan can be incomplete even when it reports no differences: unselected tables and unsupported database features are not verified. `plan --check` exits 2 on drift and 3 for unverified states where applicable. Never treat a dry run or a policy classification as permission to execute DDL.
+The first `init` command is appropriate only when its target is eligible for initialization. Do not apply it blindly to an existing database. The commands above are illustrative: use `--config`, `--database`, and backend-specific options when required.
 
-SQLite application uses a reviewed digest, existing review directory, explicit backup path, and confirmation gates. MySQL application requires the exact schema and operation, review and SQL hashes, `--apply`, and `--confirm APPLY`; unsupported/destructive operations are not enabled. MySQL DDL may commit before recording history. If execution outcome is uncertain, inspect the live schema and history rather than retrying automatically.
+For a reviewed migration, follow the exact approval and backup instructions printed by `aurora db migrate --help`. Do **not** invent approval hashes, skip backups, or reuse an approval after schema drift. MySQL DDL may commit independently of migration-history recording; if an outcome is uncertain, inspect the schema and journal before any retry.
 
-MySQL backups/restores may require local MySQL command-line clients and secure `mysql_config_editor` login paths. Staging restore must use a separate restricted target; never point it at the production schema.
+## Current limits
+
+The supported migration set is deliberately constrained. Do not assume automatic arbitrary table/column renames, primary-key changes, foreign-key restructuring, destructive transformations, or production-safe recovery. Some schema differences can be detected but not applied. A plan limited to selected models is not proof that unrelated tables or constraints are correct.
+
+`aurora db restore` currently refuses execution. Recovery preflight or staging helper modules do not constitute an enabled, verified restoration workflow. Maintain an independently tested recovery plan before relying on AuroraSQL for important data.
+
+Live backend tests require **disposable databases and explicit authorization**. Never run test DDL against a production or shared application schema.

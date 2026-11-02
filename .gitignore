@@ -111,3 +111,9 @@ site/
 # Local Aurora development workspaces
 .local/
 .scratch/
+
+# Temporary release verification environment
+.release-venv/
+
+# Temporary source-distribution verification environment
+.sdist-venv/

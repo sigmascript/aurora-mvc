@@ -10,7 +10,7 @@ Aurora exposes project scaffolding and six public database commands. For exact f
 | `aurora db plan` | Inspect and compare selected schema, classify differences, report warnings | No |
 | `aurora db migrate` | Preview or apply supported migrations using backend-specific gates | Only after required approvals |
 | `aurora db backup` | Create verified database backup | Writes backup file, not schema |
-| `aurora db restore` | Guided SQLite recovery or restricted MySQL staging restore | Potentially destructive; explicit safeguards |
+| `aurora db restore` | Recovery command reserved for future acceptance | **No: restore execution is disabled** |
 | `aurora db history` | Read applied migration records | No |
 
 There are **no database command aliases**. Legacy commands such as `sync`, `check`, `inspect`, `status`, `policy`, `readiness`, `compat`, `migration`, `mysql-create-table`, and `mysql-add-column` are removed from the public CLI.
@@ -32,4 +32,4 @@ aurora db history
 
 For SQLite, `migrate --dry-run` previews the existing guarded migration workflow. Applying a migration requires the documented digest, review file, backup, and explicit approval. MySQL migration is restricted to one supported operation at a time, with schema/table/column targeting, exact review and SQL digests, `--apply`, and `--confirm APPLY`. MySQL DDL may commit before migration-history recording; never blindly retry an uncertain operation. See `aurora db migrate --help`.
 
-`restore` is especially sensitive: SQLite prompts before replacement, while MySQL supports only validated staging workflows, **not production restore**. See `aurora db restore --help` and the database guide.
+`restore` is currently disabled by the integrated AuroraSQL CLI. Preflight and staging-related modules are not a supported restore executor. See `aurora db restore --help` and the database guide.

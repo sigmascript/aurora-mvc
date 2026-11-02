@@ -1,6 +1,6 @@
 # Getting started
 
-**Status:** These instructions target the unreleased Aurora MVC `1.0.0a5` development checkout. The latest published version identified by the repository documentation is `1.0.0a3`; check PyPI for current publication status. AuroraSQL is experimental and opt-in; the existing database CLI remains unchanged.
+**Status:** These instructions target the Aurora MVC `1.0.0a6` release candidate after the Alpha 9 AuroraSQL cutover. The candidate is not confirmed published; check PyPI before installing by version. The integrated database backend is AuroraSQL. Its migration and recovery capabilities remain intentionally limited.
 
 ## Requirements and installation
 

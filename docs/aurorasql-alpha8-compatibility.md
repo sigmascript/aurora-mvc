@@ -1,3 +1,5 @@
+> **Historical Alpha 8 design snapshot — not current usage documentation.** The statements below reflect the pre-cutover implementation. Since Alpha 9, AuroraSQL is integrated into `aurora.database` and the SQLAlchemy-backed implementation has been retired. For current behavior, see [database.md](database.md).
+
 # AuroraSQL Alpha 8 — direct API and compatibility
 
 AuroraSQL is experimental. The existing SQLAlchemy-backed Aurora MVC database
