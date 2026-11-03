@@ -1,4 +1,4 @@
-"""Opt-in live MySQL/PostgreSQL Batch C checks on disposable databases only.
+"""Opt-in live MySQL/PostgreSQL filter, transaction, and schema checks on disposable databases only.
 
 These tests are skipped unless BOTH a disposable-database acknowledgement and
 an explicit backend URL are provided. They create/drop only a random table.
@@ -16,7 +16,7 @@ from aurora.database import Model, column, connect, create_table, schema_snapsho
     ("mysql", "AURORASQL_TEST_MYSQL_URL"),
     ("postgresql", "AURORASQL_TEST_POSTGRESQL_URL"),
 ])
-def test_live_batch_c_filter_transaction_and_schema(dialect, env):
+def test_live_filter_transaction_and_schema(dialect, env):
     if os.environ.get("AURORASQL_TEST_ALLOW_DDL") != "YES_DISPOSABLE_DB":
         pytest.skip("Requires explicit disposable-database opt-in")
     url = os.environ.get(env)

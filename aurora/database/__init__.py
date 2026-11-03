@@ -1,4 +1,4 @@
-"""Experimental AuroraSQL package, independent of the released database layer."""
+"""Canonical AuroraSQL database API for Aurora MVC."""
 
 from .configuration import DatabaseConfiguration, configure_databases
 from .core import Connection, connect

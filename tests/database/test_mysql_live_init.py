@@ -15,7 +15,7 @@ from aurora.database.init_validation import validate_init_models
 from aurora.database.mysql_init import execute_mysql_init
 from aurora.database import cli_init
 from tests.database.test_schema import Entry
-from tests.database.test_alpha9_init_validation import Parent, Child
+from tests.database.test_init_validation import Parent, Child
 
 
 @contextmanager

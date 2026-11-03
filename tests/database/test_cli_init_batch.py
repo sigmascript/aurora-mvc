@@ -26,8 +26,8 @@ def _args(tmp_path):
         "databases": {"default": {"url": "sqlite:///batch.sqlite3"}}}))
     (tmp_path / "aurora_models.json").write_text(json.dumps({
         "databases": {"default": [
-            "tests.database.test_alpha9_cli_init_batch:BatchParent",
-            "tests.database.test_alpha9_cli_init_batch:BatchChild"]}}))
+            "tests.database.test_cli_init_batch:BatchParent",
+            "tests.database.test_cli_init_batch:BatchChild"]}}))
     sqlite3.connect(tmp_path / "batch.sqlite3").close()
     return Namespace(config=str(tmp_path / "aurora_databases.json"),
                      database="default", model=[],

@@ -7,7 +7,7 @@ import pytest
 
 from aurora.database.cli_review_workflow import run_review_export
 from aurora.database.history import HistoryEntry, review_history
-from test_alpha9_batch2b_cli_review_workflow import setup
+from test_cli_review_workflow import setup
 
 
 @pytest.mark.parametrize("field", ["before", "after"])

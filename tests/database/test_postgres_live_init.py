@@ -81,7 +81,7 @@ def test_live_postgres_failed_ddl_rolls_back_journal_and_tables(monkeypatch):
 
 def test_live_postgres_foreign_key_batch_and_constraint():
     from aurora.database.init_validation import validate_init_models
-    from tests.database.test_alpha9_init_validation import Parent, Child
+    from tests.database.test_init_validation import Parent, Child
     with _isolated_schema() as connection:
         models = validate_init_models((Child, Parent), dialect="postgresql")
         assert len(execute_postgres_init(connection, models, approval="c" * 64,
