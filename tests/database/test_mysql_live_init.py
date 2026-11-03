@@ -27,9 +27,14 @@ def _scratch():
 
     parsed = urlsplit(url)
 
+    allowed_databases = {
+        "aurorasql_alpha9_scratch",
+        "aurorasql_test",
+    }
+
     if (parsed.scheme != "mysql+pymysql" or
-            unquote(parsed.path.lstrip("/")) != "aurorasql_alpha9_scratch"):
-        pytest.fail("MySQL live tests require the dedicated aurorasql_alpha9_scratch database")
+            unquote(parsed.path.lstrip("/")) not in allowed_databases):
+        pytest.fail("MySQL live tests require a dedicated disposable test database")
 
     with connect(url) as connection:
         tables = connection.fetch_all(
