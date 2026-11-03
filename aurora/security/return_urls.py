@@ -12,10 +12,12 @@ def safe_next(value, fallback="/"):
     an invalid fallback is a programmer error rather than an open redirect.
     """
     _check_local(fallback)
+
     try:
         _check_local(value)
     except (TypeError, ValueError):
         return fallback
+
     return value
 
 
@@ -25,25 +27,34 @@ def _check_local(value):
     # Reject Unicode/percent-encoded controls and ambiguous separators, even
     # when a proxy decodes more than once. Limit depth to avoid excess work.
     decoded = value
+
     for _ in range(4):
         if any(ord(c) < 32 or ord(c) == 127 for c in decoded):
             raise ValueError("Unsafe return URL control character")
+
         if "\\" in decoded or decoded.startswith("//"):
             raise ValueError("Unsafe return URL separator")
+
         parts = urlsplit(decoded)
+
         if parts.scheme or parts.netloc or parts.fragment or not parts.path.startswith("/"):
             raise ValueError("Return URL must be an absolute local path")
+
         next_decoded = unquote(decoded, errors="strict")
+
         if next_decoded == decoded:
             break
+
         decoded = next_decoded
     else:
         raise ValueError("Return URL has excessive encoding")
+
     redirect_local(value)  # Existing Aurora redirect policy remains authoritative.
 
 
 def request_next(request, fallback="/"):
     """Read and validate one `next` query parameter from an incoming request."""
+
     try:
         pairs = parse_qsl(
             request.query_string,
@@ -53,9 +64,12 @@ def request_next(request, fallback="/"):
         )
     except (UnicodeError, ValueError):
         return safe_next(None, fallback)
+
     candidates = [value for key, value in pairs if key == "next"]
+
     if len(candidates) != 1:
         return safe_next(None, fallback)
+
     return safe_next(candidates[0], fallback)
 
 

@@ -40,8 +40,10 @@ class ModularScaffoldNamespaceTests(unittest.TestCase):
             root = create_project('demo', directory=Path(temp), modular=True)
             paths = [root / 'views/layout.html', root / 'views/components.html',
                      root / 'statics/css/site.css']
+
             for path in paths:
                 path.write_bytes(b'custom developer content')
+
             add_app('news', directory=root)
             self.assertTrue(all(p.read_bytes() == b'custom developer content' for p in paths))
 

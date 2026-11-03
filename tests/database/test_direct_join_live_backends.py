@@ -15,7 +15,9 @@ from aurora.database import Model, column, connect, create_table
 def test_direct_join_live_backends(dialect, environment):
     if os.getenv("AURORASQL_TEST_ALLOW_DDL") != "YES_DISPOSABLE_DB":
         pytest.skip("Requires explicit disposable-database DDL opt-in")
+
     url = os.getenv(environment)
+
     if not url:
         pytest.skip(f"{environment} not configured")
 
@@ -44,7 +46,9 @@ def test_direct_join_live_backends(dialect, environment):
 
     with connect(url) as db:
         assert db.dialect == dialect
+
         created = []
+
         try:
             for model in (Writer, Story, Review):
                 create_table(db, model)
@@ -98,6 +102,7 @@ def test_direct_join_live_backends(dialect, environment):
 
             with pytest.raises(ValueError):
                 Story.using(db).join(models=[Writer], cols=["Writer.unknown"])
+
             with pytest.raises(ValueError):
                 Story.using(db).join(models=[Writer], order_by={"Writer.name": "RANDOM"})
         finally:

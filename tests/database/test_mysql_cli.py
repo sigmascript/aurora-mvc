@@ -36,15 +36,20 @@ def _setup(monkeypatch, *, status="EMPTY"):
 def test_mysql_review_never_writes(monkeypatch, capsys):
     _setup(monkeypatch)
     assert cli_init.run_init_apply(_args()) == 0
+
     report = json.loads(capsys.readouterr().out)
     assert report["status"] == "EMPTY"
+
     assert report["write_enabled"] is False
+
     assert report["transactional_ddl"] is False
+
     assert len(report["approval_sha256"]) == 64
 
 
 def test_mysql_wrong_approval_refuses_execution(monkeypatch):
     _setup(monkeypatch)
+
     with pytest.raises(ValueError, match="Exact schema approval"):
         cli_init.run_init_apply(_args("wrong", "APPLY"))
 
@@ -52,12 +57,14 @@ def test_mysql_wrong_approval_refuses_execution(monkeypatch):
 def test_mysql_nonempty_refuses_approval(monkeypatch, capsys):
     _setup(monkeypatch, status="REFUSED")
     assert cli_init.run_init_apply(_args()) == 3
+
     assert json.loads(capsys.readouterr().out)["approval_sha256"] is None
 
 
 def test_mysql_delegates_only_exact_approval(monkeypatch, capsys):
     connection = _setup(monkeypatch)
     assert cli_init.run_init_apply(_args()) == 0
+
     digest = json.loads(capsys.readouterr().out)["approval_sha256"]
     from aurora.database import mysql_init
     calls = []
@@ -65,8 +72,11 @@ def test_mysql_delegates_only_exact_approval(monkeypatch, capsys):
         calls.append((conn, models, kw)) or ("operation-1",)
     ))
     assert cli_init.run_init_apply(_args(digest, "APPLY")) == 0
+
     assert calls[0][0] is connection
+
     assert calls[0][2]["expected_identity"]
+
     assert json.loads(capsys.readouterr().out)["status"] == "INITIALIZED"
 
 
@@ -81,6 +91,7 @@ def test_mysql_identity_refuses_database_mismatch():
     connection = SimpleNamespace(fetch_first=lambda sql: {
         "database_name": "wrong", "server_name": "localhost", "server_port": 3306,
     })
+
     with pytest.raises(RuntimeError, match="differs"):
         cli_init._mysql_database_identity(
             connection, urlsplit("mysql+pymysql://localhost/aurorasql_test")

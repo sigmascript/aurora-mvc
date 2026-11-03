@@ -18,9 +18,12 @@ def test_rejects_snapshot_dialect_mismatch_on_either_side(tmp_path, field):
     content["dialect"] = "mysql"
     snapshot.write_text(json.dumps(content), encoding="utf-8")
     original = db.read_bytes()
+
     with pytest.raises(ValueError):
         run_review_export(args)
+
     assert db.read_bytes() == original
+
     assert not (tmp_path / "review.json").exists()
 
 
@@ -32,9 +35,12 @@ def test_rejects_malformed_snapshot_before_export(tmp_path, field):
     content["tables"][0]["columns"][0]["nullable"] = "yes"
     snapshot.write_text(json.dumps(content), encoding="utf-8")
     original = db.read_bytes()
+
     with pytest.raises(ValueError):
         run_review_export(args)
+
     assert db.read_bytes() == original
+
     assert not (tmp_path / "review.json").exists()
 
 
@@ -45,17 +51,22 @@ def test_duplicate_journal_operation_id_is_flagged():
         dialect = "sqlite"
     # Inspection is mocked only to isolate the duplicate-ID invariant.
     from unittest.mock import patch
+
     with patch("aurora.database.history.inspect_table") as inspect:
         inspect.return_value.exists = True
         findings = review_history(Connection(), entries=entries)
+
     assert [f.kind for f in findings].count("duplicate_operation_id") == 2
 
 
 def test_review_export_never_mutates_journal(tmp_path):
     db, args, _, _ = setup(tmp_path, unresolved=True)
+
     with sqlite3.connect(db) as conn:
         initial = conn.execute("SELECT * FROM aurorasql_schema_history").fetchall()
+
     with pytest.raises(ValueError):
         run_review_export(args)
+
     with sqlite3.connect(db) as conn:
         assert conn.execute("SELECT * FROM aurorasql_schema_history").fetchall() == initial

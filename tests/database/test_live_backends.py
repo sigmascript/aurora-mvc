@@ -19,7 +19,9 @@ from aurora.database import Model, column, connect, create_table, inspect_table,
 def test_live_database_workflow(dialect, environment):
     if os.environ.get("AURORASQL_TEST_ALLOW_DDL") != "YES_DISPOSABLE_DB":
         pytest.skip("Live DDL checks require explicit disposable-database opt-in")
+
     url = os.environ.get(environment)
+
     if not url:
         pytest.skip(f"{environment} not configured")
 
@@ -31,27 +33,40 @@ def test_live_database_workflow(dialect, environment):
         "title": column(str, length=100),
     })
     quoted = f"`{table_name}`" if dialect == "mysql" else f'"{table_name}"'
+
     with connect(url) as db:
         assert db.dialect == dialect
+
         created = False
+
         try:
             create_table(db, Probe)
             created = True
             assert inspect_table(db, table_name).exists
+
             ops = Probe.using(db)
+
             with db.transaction():
                 row = ops.create(title="alpha")
                 assert isinstance(row.id, int)
+
                 assert ops.first(where={"id": row.id}).title == "alpha"
+
                 assert ops.update(values={"title": "beta"}, where={"id": row.id}) == 1
+
             assert ops.first(where={"id": row.id}).title == "beta"
+
             with pytest.raises(ValueError):
                 with db.transaction():
                     ops.create(title="rollback")
                     raise ValueError("rollback probe")
+
             assert len(ops.all()) == 1
+
             assert ops.delete(where={"id": row.id}) == 1
+
             assert ops.all() == []
+
             plan = plan_schema(db, Probe)
             assert not plan.execution_allowed
         finally:

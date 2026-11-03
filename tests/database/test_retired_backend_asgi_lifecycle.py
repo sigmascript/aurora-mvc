@@ -33,7 +33,9 @@ def test_modern_pair_accepted_without_opening_connections(tmp_path):
     manager, registry = components(tmp_path)
     app = Aurora(database_work=manager, database_registry=registry)
     assert registry.initialized_aliases() == ()
+
     assert app.database_work is manager
+
     assert app.database_registry is registry
 
 
@@ -42,12 +44,15 @@ def test_modern_shutdown_drains_then_closes(tmp_path):
         manager, registry = components(tmp_path)
         app = Aurora(database_work=manager, database_registry=registry)
         assert await manager.run("default", lambda connection: 7) == 7
+
         sent = await lifespan(app, "lifespan.startup", "lifespan.shutdown")
         assert [item["type"] for item in sent] == [
             "lifespan.startup.complete", "lifespan.shutdown.complete"
         ]
+
         with pytest.raises(RuntimeError, match="closed"):
             registry.get()
+
         with pytest.raises(RuntimeError, match="closed"):
             await manager.run("default", lambda connection: None)
 
@@ -63,7 +68,9 @@ def test_failed_modern_drain_does_not_close_registry(tmp_path):
         app = Aurora(database_work=manager, database_registry=registry)
         sent = await lifespan(app, "lifespan.shutdown")
         assert sent == [{"type": "lifespan.shutdown.failed", "message": "Database shutdown failed"}]
+
         assert registry.get() is not None
+
         registry.close()
 
     asyncio.run(scenario())

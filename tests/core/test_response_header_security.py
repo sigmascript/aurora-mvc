@@ -12,6 +12,7 @@ class ResponseHeaderHardeningTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(ValueError):
             await response(send)
+
         self.assertEqual(messages, [])
 
     async def test_rejects_newline_in_header_value(self):

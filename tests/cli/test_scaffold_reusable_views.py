@@ -34,8 +34,10 @@ class TestReusableViews(unittest.TestCase):
                      root / 'views/navigation.html',
                      root / 'views/components.html',
                      root / 'statics/css/site.css']
+
             for idx, file in enumerate(files):
                 file.write_bytes(f'custom content {idx}\n'.encode())
+
             before = {file: file.read_bytes() for file in files}
             add_app('news', directory=root)
             self.assertEqual(before, {file: file.read_bytes() for file in files})
@@ -47,6 +49,8 @@ class TestReusableViews(unittest.TestCase):
             add_app('news', directory=root)
             layout = root / 'views/layout.html'
             original = layout.read_bytes()
+
             with self.assertRaises(FileExistsError):
                 add_app('news', directory=root)
+
             self.assertEqual(original, layout.read_bytes())

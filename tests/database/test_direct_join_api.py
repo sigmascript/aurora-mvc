@@ -2,6 +2,7 @@
 import pytest
 from aurora.database import Model, column, connect
 
+
 class Writer(Model):
     __table__ = 'writers_v2'
     id = column(int, primary_key=True)
@@ -26,6 +27,7 @@ def db():
                     'CREATE TABLE stories (id INTEGER PRIMARY KEY, writer_id INTEGER, title TEXT)',
                     'CREATE TABLE reviews (id INTEGER PRIMARY KEY, story_id INTEGER, score INTEGER)'):
             connection.execute_write(sql)
+
         with connection.transaction():
             Writer.using(connection).create(id=1, name='Mira')
             Writer.using(connection).create(id=2, name='Noor')
@@ -33,6 +35,7 @@ def db():
             Story.using(connection).create(id=11, writer_id=2, title='Two')
             Review.using(connection).create(id=100, story_id=10, score=4)
             Review.using(connection).create(id=101, story_id=11, score=5)
+
         yield connection
 
 def test_model_names_and_declared_relationships(db):
@@ -50,10 +53,13 @@ def test_physical_names_and_explicit_relationships(db):
 def test_reject_unknown_and_ambiguous_relationships(db):
     class Unrelated(Model):
         id = column(int, primary_key=True)
+
     with pytest.raises(ValueError, match='explicit on'):
         Story.using(db).join(models=[Unrelated])
+
     with pytest.raises(ValueError):
         Story.using(db).join(models=[Writer], cols=['Writer.unknown'])
+
     with pytest.raises(ValueError):
         Story.using(db).join(models=[Writer], order_by={'Writer.name': 'RANDOM'})
 

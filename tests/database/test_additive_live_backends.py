@@ -22,8 +22,10 @@ from aurora.database import (
 ])
 def test_live_additive_column(dialect, env):
     url = os.getenv(env)
+
     if not url or os.getenv("AURORASQL_TEST_ALLOW_DDL") != "YES_DISPOSABLE_DB":
         pytest.skip("Requires disposable database URL and explicit DDL opt-in")
+
     suffix = uuid4().hex[:12]
     table = f"aurorasql_add_{suffix}"
     journal = "aurorasql_additive_history_v1"
@@ -40,9 +42,12 @@ def test_live_additive_column(dialect, env):
     with connect(url) as conn:
         # Journal is global per database, so never remove a preexisting one.
         from aurora.database import inspect_table
+
         if inspect_table(conn, journal).exists:
             pytest.skip("Dedicated journal already exists: use a fresh disposable database")
+
         journal_created = False
+
         try:
             create_table(conn, Before)
             before = schema_snapshot(Before, dialect=dialect)
@@ -53,12 +58,15 @@ def test_live_additive_column(dialect, env):
             journal_created = True
             execute_add_column_recorded(conn, before, after, plan, approval, confirm=True)
             assert list_additive_history(conn)[0].status == "applied"
+
             assert "note" in {column.name for column in inspect_table(conn, table).columns}
+
             with pytest.raises(RuntimeError):
                 execute_add_column_recorded(conn, before, after, plan, approval, confirm=True)
         finally:
             # Cleanup is best effort and intentionally limited to the test-owned objects.
             from aurora.database.schema import _quote
             conn.execute_write(f"DROP TABLE IF EXISTS {_quote(table, dialect)}")
+
             if journal_created:
                 conn.execute_write(f"DROP TABLE IF EXISTS {_quote(journal, dialect)}")

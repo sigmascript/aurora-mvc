@@ -14,8 +14,10 @@ class RoutedWorkManager:
     def __init__(self, configuration: DatabaseConfiguration, *, max_concurrent=8):
         if isinstance(max_concurrent, bool) or not isinstance(max_concurrent, int) or max_concurrent < 1:
             raise ValueError("max_concurrent must be a positive integer")
+
         if not isinstance(configuration, DatabaseConfiguration):
             raise TypeError("configuration must be a DatabaseConfiguration")
+
         self._configuration = configuration
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._pending = set()
@@ -28,6 +30,7 @@ class RoutedWorkManager:
 
     def _check_loop(self):
         loop = asyncio.get_running_loop()
+
         if self._loop is None:
             self._loop = loop
         elif self._loop is not loop:
@@ -35,8 +38,10 @@ class RoutedWorkManager:
 
     async def run(self, alias, callback):
         self._check_loop()
+
         if self._closed:
             raise RuntimeError("RoutedWorkManager is closed")
+
         _validate_callback(callback)
         url = self._configuration.resolve(alias)
         task = asyncio.create_task(self._execute(url, callback, transactional=False))
@@ -51,8 +56,10 @@ class RoutedWorkManager:
         SQLAlchemy transaction. Cancellation does not interrupt committed work.
         """
         self._check_loop()
+
         if self._closed:
             raise RuntimeError("RoutedWorkManager is closed")
+
         _validate_callback(callback)
         url = self._configuration.resolve(alias)
         task = asyncio.create_task(self._execute(url, callback, transactional=True))
@@ -66,19 +73,23 @@ class RoutedWorkManager:
 
     def _completed(self, task):
         self._pending.discard(task)
+
         if not task.cancelled():
             task.exception()
 
     async def aclose(self):
         self._check_loop()
         self._closed = True
+
         while self._pending:
             await asyncio.shield(asyncio.gather(*tuple(self._pending), return_exceptions=True))
 
     async def __aenter__(self):
         self._check_loop()
+
         if self._closed:
             raise RuntimeError("RoutedWorkManager is closed")
+
         return self
 
     async def __aexit__(self, exc_type, exc, tb):

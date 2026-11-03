@@ -37,7 +37,10 @@ def test_postgres_validation_occurs_before_connection(monkeypatch):
 
     import aurora.database.init_validation as validation
     monkeypatch.setattr(validation, "validate_init_models", validate)
+
     with pytest.raises(ValueError, match="PostgreSQL DDL rejected"):
         cli_init.run_init_check(SimpleNamespace(config="unused", database="default"))
+
     assert seen == ["postgresql"]
+
     config.connect.assert_not_called()

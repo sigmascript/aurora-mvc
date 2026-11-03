@@ -35,8 +35,11 @@ def test_absent_table_requires_manual_investigation():
         seed(db)
         result = assess_recovery(db, "recovery-probe", RecoveryNote)
         assert not result.table_exists
+
         assert result.fingerprint_matches
+
         assert result.disposition == "table_absent_manual_investigation"
+
         assert list_history(db)[0].status == "uncertain"
 
 
@@ -46,7 +49,9 @@ def test_existing_table_is_not_automatically_reconciled():
         create_table(db, RecoveryNote)
         result = assess_recovery(db, "recovery-probe", RecoveryNote)
         assert result.columns_match
+
         assert result.disposition == "partial_schema_match_manual_verification_required"
+
         assert list_history(db)[0].status == "started"
 
 
@@ -55,10 +60,14 @@ def test_mismatched_model_and_resolved_entry_are_rejected():
         seed(db)
         result = assess_recovery(db, "recovery-probe", ChangedRecoveryNote)
         assert not result.fingerprint_matches
+
         assert result.disposition == "model_mismatch_manual_investigation"
+
         with pytest.raises(ValueError, match="exactly one"):
             assess_recovery(db, "missing-id", RecoveryNote)
+
         db.execute_write('UPDATE "aurorasql_schema_history" SET status=:status',
                          {"status": "applied"})
+
         with pytest.raises(ValueError, match="unresolved"):
             assess_recovery(db, "recovery-probe", RecoveryNote)

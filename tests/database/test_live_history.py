@@ -24,7 +24,9 @@ from aurora.database import history as history_module
 def test_live_recorded_history_and_recovery_readonly(dialect, environment, monkeypatch):
     if os.environ.get("AURORASQL_TEST_ALLOW_DDL") != "YES_DISPOSABLE_DB":
         pytest.skip("Live DDL checks require explicit disposable-database opt-in")
+
     url = os.environ.get(environment)
+
     if not url:
         pytest.skip(f"{environment} not configured")
 
@@ -48,9 +50,12 @@ def test_live_recorded_history_and_recovery_readonly(dialect, environment, monke
 
     with connect(url) as db:
         assert db.dialect == dialect
+
         for name in (journal_name, table_name, unresolved_name):
             assert not inspect_table(db, name).exists
+
         created = []
+
         try:
             initialize_history(db, confirm=True)
             created.append(journal_name)
@@ -59,9 +64,13 @@ def test_live_recorded_history_and_recovery_readonly(dialect, environment, monke
             created.append(table_name)
             entries = list_history(db)
             assert len(entries) == 1
+
             assert entries[0].operation_id == operation_id
+
             assert entries[0].status == "applied"
+
             assert not unresolved_history(db)
+
             assert not review_history(db)
 
             # Inject only an audit record, not DDL: assessment must remain read-only.
@@ -76,13 +85,19 @@ def test_live_recorded_history_and_recovery_readonly(dialect, environment, monke
             )
             pending = unresolved_history(db, table=unresolved_name)
             assert len(pending) == 1
+
             assessment = assess_recovery(db, pending[0].operation_id, Pending)
             assert not assessment.table_exists
+
             assert assessment.fingerprint_matches
+
             assert assessment.disposition == "table_absent_manual_investigation"
+
             findings = review_recovery_schema(db, pending[0].operation_id, Pending)
             assert any(item.kind == "table_missing" for item in findings)
+
             assert any(item.kind == "unresolved" for item in review_history(db))
+
             assert not inspect_table(db, unresolved_name).exists
         finally:
             # Never drop a table not created by this test. If cleanup fails,

@@ -40,6 +40,7 @@ class MultilingualRoutingTests(unittest.TestCase):
         app.add_route("/items/{locale}", lambda request, locale: locale, name="item")
         self.assertEqual(app.url_for("item", locale="x"), "/items/x")
         self.assertEqual(app.localized_url_for("item", language="ku", locale="x"), "/ku/items/x")
+
         with self.assertRaises(ValueError):
             app.localized_url_for("item", language="fr", locale="x")
 

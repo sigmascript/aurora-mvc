@@ -42,6 +42,7 @@ class StaticSymlinkSecurityTests(unittest.TestCase):
             (self.root / "escape.txt").symlink_to(self.base / "private.txt")
         except (OSError, NotImplementedError):
             self.skipTest("Symlink creation unavailable")
+
         messages = self.request("escape.txt")
         self.assertEqual(messages[0]["status"], 404)
         self.assertNotIn(b"SECRET", repr(messages).encode())
@@ -51,6 +52,7 @@ class StaticSymlinkSecurityTests(unittest.TestCase):
             (self.root / "escape").symlink_to(self.base, target_is_directory=True)
         except (OSError, NotImplementedError):
             self.skipTest("Symlink creation unavailable")
+
         self.assertEqual(self.request("escape/private.txt")[0]["status"], 404)
 
     def test_no_preopen_path_resolution_dependency(self):
@@ -58,6 +60,7 @@ class StaticSymlinkSecurityTests(unittest.TestCase):
         # the new implementation opens relative to trusted directory handles.
         if os.name == "nt":
             self.skipTest("POSIX-specific handle traversal")
+
         with patch.object(Path, "resolve", side_effect=AssertionError("pre-open resolution")):
             self.assertEqual(self.request("safe.txt")[0]["status"], 200)
 

@@ -18,6 +18,7 @@ class Controller:
         Each call creates a controller and passes route parameters to the
         method as keyword arguments. Async results are awaited by Application.
         """
+
         if not isinstance(action_name, str) or not action_name.strip():
             raise ValueError("Action name must be a non-empty string")
 
@@ -38,11 +39,15 @@ class Controller:
         from aurora.core.http_exception import HTTPException
 
         method = request.method.lower()
+
         if method not in {"get", "post", "put", "patch", "delete", "head", "options"}:
             raise HTTPException(405, "Method Not Allowed")
+
         action = getattr(cls(request), method, None)
+
         if not callable(action):
             raise HTTPException(405, "Method Not Allowed")
+
         return action(**params)
 
     @classmethod

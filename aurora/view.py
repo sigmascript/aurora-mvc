@@ -17,6 +17,7 @@ class View:
     ):
         if context is not None and not isinstance(context, dict):
             raise TypeError("View context must be a dictionary")
+
         self.name = template
         self.context = dict(context or {})
         self.context.update(values)

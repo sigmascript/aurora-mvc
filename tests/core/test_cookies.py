@@ -109,10 +109,13 @@ class TestCookies(unittest.IsolatedAsyncioTestCase):
             with self.subTest(options=options):
                 with self.assertRaises(ValueError):
                     Response().set_cookie("token", "abc", **options)
+
         with self.assertRaises(ValueError):
             Response().set_cookie("label", "سڵاو")
+
         with self.assertRaises(ValueError):
             Response().set_cookie("label", "line\r\nInjected: value")
+
         with self.assertRaises(CookieError):
             Response().set_cookie("bad name", "value")
 
@@ -129,5 +132,6 @@ class TestCookies(unittest.IsolatedAsyncioTestCase):
                 response.set_cookie("token", "abc")
                 headers = await self.headers_for(response)
                 self.assertEqual(sum(name == b"set-cookie" for name, _ in headers), 1)
+
                 if isinstance(response, RedirectResponse):
                     self.assertEqual(dict(headers)[b"location"], b"/notes")

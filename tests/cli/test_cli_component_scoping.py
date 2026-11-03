@@ -19,6 +19,7 @@ class TestScopedComponents(unittest.TestCase):
     def invoke(self, *args):
         with patch('pathlib.Path.cwd', return_value=self.root), contextlib.redirect_stdout(io.StringIO()) as output:
             result = main(list(args))
+
         return result, output.getvalue()
 
     def test_shared_model_default(self):
@@ -53,6 +54,7 @@ class TestScopedComponents(unittest.TestCase):
 
     def test_never_overwrite(self):
         self.invoke('model', 'add', 'User')
+
         with self.assertRaises(SystemExit):
             self.invoke('model', 'add', 'User')
 
@@ -60,6 +62,7 @@ class TestScopedComponents(unittest.TestCase):
         with patch.dict(os.environ, {'AURORA_ENV': 'production'}):
             with self.assertRaises(SystemExit):
                 self.invoke('model', 'add', 'User')
+
         self.assertFalse((self.root / 'models/User.py').exists())
 
     def test_no_database_change(self):

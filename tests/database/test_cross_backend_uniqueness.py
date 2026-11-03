@@ -32,8 +32,11 @@ def test_mysql_single_column_unique_excludes_composite_and_primary():
     db = InspectionConnection("mysql", [columns, indexes])
     table = inspect_table(db, "accounts")
     assert table.unique_columns == ("email",)
+
     assert table.uniqueness_verified
+
     assert not table.constraints_verified
+
     assert all(params == {"name": "accounts"} for _, params in db.queries)
 
 
@@ -46,8 +49,11 @@ def test_postgresql_unique_index_discovery_uses_nonpartial_single_key_filter():
     db = InspectionConnection("postgresql", [columns, indexes])
     table = inspect_table(db, "accounts")
     assert table.unique_columns == ("email",)
+
     assert table.uniqueness_verified
+
     assert "pg_catalog.pg_index" in db.queries[-1][0]
+
     assert "i.indnkeyatts AS key_count" in db.queries[-1][0]
 
 
@@ -59,6 +65,7 @@ def test_missing_mysql_table_does_not_query_indexes():
     db = Missing("mysql", [[]])
     table = inspect_table(db, "missing")
     assert not table.exists
+
     assert not table.uniqueness_verified
 
 
@@ -75,7 +82,9 @@ def test_postgresql_inventory_includes_composite_and_nonunique_indexes():
     ]
     table = inspect_table(InspectionConnection("postgresql", [columns, indexes]), "pair")
     assert table.indexes == ("pair_lookup", "pair_unique")
+
     assert table.unique_columns == ()
+
     assert not table.constraints_verified
 
 
@@ -92,4 +101,5 @@ def test_postgresql_partial_or_invalid_unique_index_is_not_column_unique():
     ]
     table = inspect_table(InspectionConnection("postgresql", [columns, indexes]), "accounts")
     assert len(table.indexes) == 2
+
     assert table.unique_columns == ()

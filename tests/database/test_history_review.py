@@ -34,7 +34,9 @@ def test_uncertain_history_is_read_only_even_when_table_exists():
         before = db.fetch_all('SELECT * FROM aurorasql_schema_history')
         findings = review_history(db)
         assert {f.kind for f in findings} == {'unresolved'}
+
         assert db.fetch_all('SELECT * FROM aurorasql_schema_history') == before
+
         assert not db.fetch_first("SELECT name FROM sqlite_master WHERE name='review_item'")
 
 

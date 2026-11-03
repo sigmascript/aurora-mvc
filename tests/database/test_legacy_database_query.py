@@ -15,8 +15,11 @@ def test_database_query_fetchall_and_fetchone():
             {"minimum": 1},
         )
         assert result.fetchone() == {"id": 1, "title": "News"}
+
         assert result.fetchall() == [{"id": 2, "title": "Sports"}]
+
         assert result.fetchall() == []
+
         assert db.query("SELECT id FROM category WHERE id = :id", {"id": 99}).fetchone() is None
 
 
@@ -25,6 +28,7 @@ def test_database_query_write_rowcount_and_fetch_rejection():
         db.execute("CREATE TABLE category (id INTEGER PRIMARY KEY, title TEXT)")
         result = db.query("INSERT INTO category (title) VALUES (:title)", {"title": "News"})
         assert result.rowcount == 1
+
         with pytest.raises(ValueError, match="did not return rows"):
             result.fetchall()
 
@@ -37,6 +41,7 @@ def test_database_query_bindings_prevent_value_injection():
         assert db.query(
             "SELECT id FROM category WHERE title = :title", {"title": malicious}
         ).fetchall() == []
+
         with pytest.raises(ValueError, match="Missing SQL parameter"):
             db.query("SELECT id FROM category WHERE title = :title")
 

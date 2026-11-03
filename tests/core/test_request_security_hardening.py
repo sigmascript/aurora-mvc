@@ -32,9 +32,11 @@ class RequestSecurityHardeningTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = create_project("demo", directory=Path(tmp), modular=True)
             before = (root / "app.py").read_bytes()
+
             with patch("aurora.cli.os.replace", side_effect=OSError("simulated failure")):
                 with self.assertRaises(OSError):
                     add_app("news", directory=root)
+
             self.assertEqual((root / "app.py").read_bytes(), before)
             self.assertFalse((root / "apps/news").exists())
             self.assertFalse(list(root.glob(".aurora-app-*.tmp")))
@@ -61,6 +63,7 @@ class RequestSecurityHardeningTests(unittest.TestCase):
             (root / "ok.txt").write_text("ok")
             (root / ".env").write_text("secret")
             app = Aurora(statics_directory=root)
+
             for path in ("/statics/.env", "/statics/%2eenv", "/statics/%2e%2e/ok.txt",
                          "/statics/%5cok.txt", "/statics/%00ok.txt"):
                 with self.subTest(path=path):

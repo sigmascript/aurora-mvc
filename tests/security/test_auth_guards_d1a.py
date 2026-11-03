@@ -45,8 +45,10 @@ class AuthGuardTests(unittest.TestCase):
             @login_required("auth.signin", authenticated=authenticated)
             def post(self):
                 return "secret"
+
         with self.assertRaises(HTTPException) as error:
             Private(self.request("POST")).post()
+
         self.assertEqual(error.exception.status_code, 403)
 
     def test_required_api_mode_is_401(self):
@@ -54,8 +56,10 @@ class AuthGuardTests(unittest.TestCase):
             @login_required("auth.signin", authenticated=authenticated, api=True)
             def get(self):
                 return "secret"
+
         with self.assertRaises(HTTPException) as error:
             Private(self.request()).get()
+
         self.assertEqual(error.exception.status_code, 401)
 
     def test_abort_sync(self):
@@ -88,6 +92,7 @@ class AuthGuardTests(unittest.TestCase):
     def test_invalid_configuration(self):
         with self.assertRaises(TypeError):
             login_required("auth.signin", authenticated=None)
+
         with self.assertRaises(ValueError):
             login_abort("", authenticated=authenticated)
 

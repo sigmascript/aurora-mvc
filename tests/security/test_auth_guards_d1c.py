@@ -42,6 +42,7 @@ class LocaleAuthGuardTests(unittest.TestCase):
             @login_required("auth.signin", authenticated=authenticated)
             def get(self):
                 return "secret"
+
         for locale in ("en", "ku", "ar"):
             with self.subTest(locale=locale):
                 result = Private(self.request(locale=locale, path=f"/{locale}/notes/new")).get()
@@ -83,6 +84,7 @@ class LocaleAuthGuardTests(unittest.TestCase):
             @login_required("auth.signin", authenticated=authenticated)
             def get(self):
                 return "secret"
+
         with self.assertRaises(ValueError):
             Private(self.request(locale="xx")).get()
 

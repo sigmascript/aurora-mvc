@@ -31,11 +31,15 @@ def inspect_live_migration_readiness(connection, review, *, reviewed_sha256):
     The returned object is never executable, even when checks pass.
     """
     validate_review(review)
+
     if connection.dialect != review["plan"]["dialect"]:
         raise ValueError("Migration review dialect does not match connection")
+
     evidence = inspect_reviewed_baseline(connection, review["before"])
+
     if evidence.findings:
         raise RuntimeError("Live schema structural drift: " + "; ".join(evidence.findings))
+
     readiness = inspect_migration_readiness(
         connection, review, reviewed_sha256=reviewed_sha256,
         observed_snapshot=review["before"],

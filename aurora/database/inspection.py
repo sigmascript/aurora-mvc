@@ -11,6 +11,7 @@ from .models import _identifier
 
 @dataclass(frozen=True)
 class ColumnInfo:
+    """Inspected database column metadata."""
     name: str
     sql_type: str
     nullable: bool
@@ -20,6 +21,7 @@ class ColumnInfo:
 
 @dataclass(frozen=True)
 class TableInfo:
+    """Inspected database table metadata."""
     name: str
     exists: bool
     columns: tuple[ColumnInfo, ...]
@@ -33,18 +35,22 @@ def inspect_table(connection, table_name):
     """Inspect an existing table, or report its absence, without writing."""
     _identifier(table_name)
     dialect = connection.dialect
+
     if dialect == "sqlite":
         # table_list is not available on all supported SQLite versions.
         found = connection.fetch_first(
             "SELECT name FROM sqlite_master WHERE type='table' AND name=:name",
             {"name": table_name},
         )
+
         if found is None:
             return TableInfo(table_name, False, ())
+
         rows = connection.fetch_all(f'PRAGMA table_info("{table_name}")')
         index_rows = connection.fetch_all(f'PRAGMA index_list("{table_name}")')
         unique_columns = set()
         index_names = []
+
         for index in index_rows:
             index_name = index["name"]
             _identifier(index_name)
@@ -53,8 +59,10 @@ def inspect_table(connection, table_name):
             if index["unique"] and not index["partial"]:
                 members = connection.fetch_all(f'PRAGMA index_xinfo("{index_name}")')
                 keys = [member for member in members if member["key"]]
+
                 if len(keys) == 1 and keys[0]["name"] is not None:
                     unique_columns.add(keys[0]["name"])
+
         return TableInfo(
             table_name, True,
             tuple(ColumnInfo(
@@ -64,6 +72,7 @@ def inspect_table(connection, table_name):
             ) for row in rows),
             tuple(sorted(unique_columns)), tuple(sorted(index_names)), True, True,
         )
+
     if dialect == "mysql":
         rows = connection.fetch_all(
             "SELECT COLUMN_NAME AS name, COLUMN_TYPE AS sql_type, "
@@ -78,6 +87,7 @@ def inspect_table(connection, table_name):
             "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :name AND TABLE_TYPE = 'BASE TABLE'",
             {"name": table_name},
         ) is not None
+
         if not exists:
             return TableInfo(table_name, False, ())
         # A composite unique index does not make its individual columns unique.
@@ -90,18 +100,23 @@ def inspect_table(connection, table_name):
             {"name": table_name},
         )
         groups = {}
+
         for index in index_rows:
             groups.setdefault(index["index_name"], []).append(index)
+
         unique_columns = set()
+
         for name, members in groups.items():
             if (name != "PRIMARY" and len(members) == 1
                     and not bool(members[0]["non_unique"])
                     and members[0]["column_name"] is not None):
                 unique_columns.add(members[0]["column_name"])
+
         return TableInfo(table_name, True, tuple(
             ColumnInfo(row["name"], row["sql_type"], row["nullable"] == "YES", row["column_key"] == "PRI", row["default_sql"])
             for row in rows
         ), tuple(sorted(unique_columns)), tuple(sorted(groups)), False, True)
+
     if dialect == "postgresql":
         # Resolve via the connection's current search_path, without concatenating
         # user-controlled table names into SQL identifiers.
@@ -110,8 +125,10 @@ def inspect_table(connection, table_name):
             "WHERE c.oid = to_regclass(:name) AND c.relkind IN ('r','p')",
             {"name": table_name},
         ) is not None
+
         if not exists:
             return TableInfo(table_name, False, ())
+
         rows = connection.fetch_all(
             "SELECT a.attname AS name, pg_catalog.format_type(a.atttypid, a.atttypmod) AS sql_type, "
             "NOT a.attnotnull AS nullable, "
@@ -151,4 +168,5 @@ def inspect_table(connection, table_name):
             ColumnInfo(row["name"], row["sql_type"], bool(row["nullable"]), bool(row["primary_key"]), row["default_sql"])
             for row in rows
         ), unique_columns, tuple(sorted({row["index_name"] for row in index_rows})), False, True)
+
     raise ValueError("Unsupported database dialect")

@@ -39,15 +39,18 @@ class DatabaseProjectImportTests(unittest.TestCase):
 
     def invoke_without_project_on_path(self, *args):
         original = sys.path[:]
+
         try:
             sys.path[:] = [p for p in original if p not in ("", str(self.root))]
             stdout = io.StringIO()
             stderr = io.StringIO()
+
             with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
                 try:
                     result = main(list(args))
                 except SystemExit as exc:
                     result = exc.code
+
             return result, stdout.getvalue(), stderr.getvalue()
         finally:
             sys.path[:] = original
@@ -65,23 +68,27 @@ class DatabaseProjectImportTests(unittest.TestCase):
     def test_db_init_is_idempotent_via_console_import(self):
         with contextlib.closing(sqlite3.connect(self.root / "data.sqlite3")):
             pass
+
         for _ in range(2):
             code, output, error = self.invoke_without_project_on_path(
                 "db", "init", "--check", "--model", f"models.users:{self.model_name}"
             )
             self.assertEqual(code, 0, error)
             self.assertEqual(json.loads(output)["status"], "EMPTY")
+
         with contextlib.closing(sqlite3.connect(self.root / "data.sqlite3")) as conn:
             self.assertEqual(conn.execute("SELECT count(*) FROM sqlite_master WHERE type='table'").fetchone()[0], 0)
 
     def test_db_plan_can_import_project_model(self):
         with contextlib.closing(sqlite3.connect(self.root / "data.sqlite3")):
             pass
+
         code, output, error = self.invoke_without_project_on_path(
             "db", "plan", "--model", f"models.users:{self.model_name}"
         )
         self.assertEqual(code, 0, error)
         self.assertTrue(output.strip())
+
         with contextlib.closing(sqlite3.connect(self.root / "data.sqlite3")) as conn:
             self.assertEqual(conn.execute("SELECT count(*) FROM sqlite_master WHERE type='table'").fetchone()[0], 0)
 

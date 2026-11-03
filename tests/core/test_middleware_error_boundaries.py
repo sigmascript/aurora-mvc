@@ -15,6 +15,7 @@ def invoke(app, *, send=None):
             return {"type": "http.request", "body": b"", "more_body": False}
         async def collect(message):
             events.append(message)
+
             if send is not None:
                 await send(message)
         await app({"type": "http", "method": "GET", "path": "/", "headers": [], "query_string": b""}, receive, collect)
@@ -77,8 +78,10 @@ class MiddlewareBoundaryTests(unittest.TestCase):
         async def broken_send(message):
             sent.append(message["type"])
             raise OSError("socket closed")
+
         with self.assertRaisesRegex(OSError, "socket closed"):
             invoke(app, send=broken_send)
+
         self.assertEqual(sent, ["http.response.start"])
 
     def test_cancelled_middleware_propagates(self):
@@ -87,6 +90,7 @@ class MiddlewareBoundaryTests(unittest.TestCase):
         async def cancelled(request, call_next):
             raise asyncio.CancelledError()
         app.add_route("/", lambda request: Response("ok"))
+
         with self.assertRaises(asyncio.CancelledError):
             invoke(app)
 

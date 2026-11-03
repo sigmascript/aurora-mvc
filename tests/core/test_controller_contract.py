@@ -27,8 +27,10 @@ class ControllerContractTests(unittest.TestCase):
             get = None
 
         self.assertEqual(Resource.http_methods(), [])
+
         with self.assertRaises(HTTPException) as caught:
             Resource.dispatch(Request({"method": "GET"}))
+
         self.assertEqual(caught.exception.status_code, 405)
 
     def test_named_action_supports_sync_and_async_methods(self):
@@ -56,5 +58,6 @@ class ControllerContractTests(unittest.TestCase):
             pass
 
         handler = Resource.action("missing")
+
         with self.assertRaises(AttributeError):
             handler(Request({"method": "GET"}))

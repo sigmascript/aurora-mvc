@@ -21,9 +21,11 @@ def csrf_token(request):
     """
     session = request.session
     token = session.get(_CSRF_KEY)
+
     if token is None:
         token = secrets.token_urlsafe(32)
         session[_CSRF_KEY] = token
+
     return token
 
 
@@ -33,9 +35,12 @@ def validate_csrf(request, token):
     Only for state-changing HTTP methods. The expected token must already
     exist in the current server-side session; validation never creates one.
     """
+
     if request.method not in _UNSAFE_METHODS:
         raise HTTPException(status_code=405, detail="Method Not Allowed")
+
     expected = request.session.get(_CSRF_KEY)
+
     if (
         not isinstance(expected, str)
         or not isinstance(token, str)
@@ -44,6 +49,7 @@ def validate_csrf(request, token):
         or not secrets.compare_digest(expected, token)
     ):
         raise HTTPException(status_code=403, detail="Invalid CSRF token")
+
     return True
 
 

@@ -25,6 +25,7 @@ class TestViewTemplates(unittest.TestCase):
             root = create_project("site", directory=Path(temp), modular=True)
             layout = (root / "views/layout.html").read_text(encoding="utf-8")
             self.assertIn('\n    <main>', layout)
+
             for path in ("apps/home/views/index.html", "apps/blog/views/index.html"):
                 view = (root / path).read_text(encoding="utf-8")
                 self.assertIn('{% extends "layout.html" %}', view)

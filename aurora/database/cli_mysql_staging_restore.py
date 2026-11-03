@@ -36,20 +36,27 @@ def _parse_values(values: str) -> int:
     def skip_space(pos):
         while pos < length and values[pos].isspace():
             pos += 1
+
         return pos
 
     index = skip_space(index)
+
     while index < length:
         if values[index] != '(':
             raise ValueError('Unsupported INSERT values: expected tuple')
+
         index += 1
         fields = 0
+
         while True:
             index = skip_space(index)
+
             if index >= length:
                 raise ValueError('Unterminated INSERT tuple')
+
             if values[index] == "'":
                 index += 1
+
                 while index < length:
                     if values[index] == "\\":
                         index += 2
@@ -65,28 +72,41 @@ def _parse_values(values: str) -> int:
                     raise ValueError('Unterminated INSERT string')
             else:
                 match = token.match(values, index)
+
                 if not match:
                     raise ValueError('Unsupported INSERT expression')
+
                 index = match.end()
+
             fields += 1
             index = skip_space(index)
+
             if index >= length:
                 raise ValueError('Unterminated INSERT tuple')
+
             if values[index] == ')':
                 index += 1
                 break
+
             if values[index] != ',':
                 raise ValueError('Unsupported INSERT expression')
+
             index += 1
+
         if not fields:
             raise ValueError('Empty INSERT tuple')
+
         rows += 1
         index = skip_space(index)
+
         if index == length:
             return rows
+
         if values[index] != ',':
             raise ValueError('Unsupported INSERT separator')
+
         index = skip_space(index + 1)
+
     raise ValueError('Empty INSERT values')
 
 
@@ -100,10 +120,13 @@ def _safe_values(values: str) -> bool:
 def _expected_rows(data: bytes) -> dict[str, int]:
     """Count literal tuples in a previously validated dump."""
     counts: dict[str, int] = {}
+
     for line in data.decode('utf-8-sig').splitlines():
         match = re.fullmatch(r'INSERT INTO `([A-Za-z0-9_]+)` VALUES (.+);', line.strip())
+
         if match:
             counts[match.group(1)] = counts.get(match.group(1), 0) + _parse_values(match.group(2))
+
     return counts
 
 
@@ -150,31 +173,40 @@ def _validate_dump(data: bytes) -> tuple[int, int]:
     Reject routines, triggers, views, events, database switches, executable
     version comments outside a tiny allowlist, and unrecognized statements.
     """
+
     if len(data) > 128 * 1024 * 1024 or b'\x00' in data:
         raise ValueError('Unsupported MySQL dump size or binary content')
+
     try:
         sql = data.decode('utf-8-sig')
     except UnicodeDecodeError:
         raise ValueError('MySQL staging restore requires UTF-8 SQL') from None
+
     if not sql.startswith('-- MySQL dump') or '-- Dump completed on' not in sql.splitlines()[-1]:
         raise ValueError('MySQL dump header/footer missing')
+
     tables: set[str] = set()
     dropped_tables: set[str] = set()
     inserts = 0
     statements = 0
     in_create = False
     current = None
+
     for line_number, original in enumerate(sql.splitlines(), start=1):
         line = original.strip()
+
         if not line or line.startswith('--'):
             continue
+
         if line.startswith('/*'):
             if not _allowed_versioned_comment(line):
                 raise ValueError(
                     f'Unsupported executable MySQL dump comment at line {line_number}'
                 )
+
             statements += 1
             continue
+
         if in_create:
             if re.fullmatch(r'\) ENGINE=InnoDB(?: [A-Za-z0-9_=., ]+)?;', line, re.I):
                 in_create = False
@@ -185,32 +217,45 @@ def _validate_dump(data: bytes) -> tuple[int, int]:
                 continue
             else:
                 raise ValueError('Unsupported CREATE TABLE definition in dump')
+
             continue
+
         match = re.fullmatch(r'CREATE TABLE `([A-Za-z0-9_]+)` \(', line)
+
         if match:
             current = match.group(1)
+
             if current in tables:
                 raise ValueError('Duplicate table definition in dump')
+
             tables.add(current)
             in_create = True
             continue
+
         match = re.fullmatch(r'DROP TABLE IF EXISTS `([A-Za-z0-9_]+)`;', line)
+
         if match:
             dropped_tables.add(match.group(1))
             statements += 1
             continue
+
         match = re.fullmatch(r'INSERT INTO `([A-Za-z0-9_]+)` VALUES (.+);', line)
+
         if match and match.group(1) in tables and _safe_values(match.group(2)):
             # Values must be parsed by MySQL; a quoted string can contain SQL
             # punctuation, so do not attempt unsafe string substitutions.
             inserts += 1
             statements += 1
             continue
+
         raise ValueError('Unsupported SQL statement in staging dump')
+
     if dropped_tables - tables:
         raise ValueError("Dump attempts to drop a table not defined in the backup")
+
     if in_create or not tables or not inserts:
         raise ValueError('Dump requires completed InnoDB tables and data inserts')
+
     return len(tables), statements
 
 
@@ -218,8 +263,10 @@ def _identity(command: list[str], database: str, username: str, label: str) -> s
     result = _run(['mysql', *command, '--batch', '--skip-column-names', database,
                    '--execute=SELECT DATABASE(), CURRENT_USER()'], label=label)
     fields = result.stdout.strip().split('\t')
+
     if len(fields) != 2 or fields[0] != database or fields[1].split('@')[0] != username:
         raise ValueError('MySQL account/database identity mismatch')
+
     return fields[1]
 
 
@@ -227,8 +274,10 @@ def _stage_grants(connection: list[str], stage: str, account: str) -> None:
     result = _run(['mysql', *connection, '--batch', '--skip-column-names', stage,
                    '--execute=SHOW GRANTS'], label='staging privilege inspection')
     grants = result.stdout.splitlines()
+
     if not grants:
         raise ValueError('Staging grants could not be verified')
+
     required = {'SELECT', 'INSERT', 'CREATE', 'DROP', 'ALTER'}
     allowed = {'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'DROP', 'INDEX',
                'ALTER', 'CREATE VIEW', 'SHOW VIEW', 'TRIGGER'}
@@ -238,20 +287,28 @@ def _stage_grants(connection: list[str], stage: str, account: str) -> None:
     # roles, partial grants, unexpected clauses, and other schemas.
     if not re.fullmatch(r"[A-Za-z0-9_]+@[A-Za-z0-9_.:%-]+", account):
         raise ValueError('Staging account identity cannot be verified')
+
     username, hostname = account.split('@', 1)
     principal = f'`{username}`@`{hostname}`'
+
     for line in grants:
         if line == f'GRANT USAGE ON *.* TO {principal}':
             continue
+
         match = re.fullmatch(
             r'GRANT ([A-Z ,]+) ON `([A-Za-z0-9_]+)`\.\* TO (.+)', line
         )
+
         if not match or match.group(2) != stage or match.group(3) != principal:
             raise ValueError('Staging account has non-staging or unrecognized grants')
+
         privileges = set(match.group(1).split(', '))
+
         if not privileges <= allowed:
             raise ValueError('Staging account has excessive privileges')
+
         present |= privileges
+
     if not required <= present:
         raise ValueError('Staging account lacks required import privileges')
 
@@ -261,16 +318,22 @@ def staging_restore(config_path: str, alias: str, source: str, login_path: str |
                     *, check_only: bool, confirm=lambda _: False) -> StagingPlan:
     if not login_path or not _IDENTIFIER.fullmatch(login_path):
         raise ValueError('Source --login-path is required')
+
     if not staging_login_path or not _IDENTIFIER.fullmatch(staging_login_path) or staging_login_path == login_path:
         raise ValueError('A separate --staging-login-path is required')
+
     config, _ = _load_config(config_path)
     url = urlsplit(config.resolve(alias))
     target = unquote(url.path.lstrip("/"))
+
     if url.scheme != 'mysql+pymysql' or not target or not _IDENTIFIER.fullmatch(target) or not unquote(url.username) or not url.hostname:
         raise ValueError('Staging restore requires a configured MySQL source')
+
     stage = staging_database
+
     if not stage or not _IDENTIFIER.fullmatch(stage) or len(stage) > 64 or stage.lower() == target.lower():
         raise ValueError('Staging database must be a distinct simple identifier')
+
     backup, size = _backup_file(source)
     data = backup.read_bytes()
     tables, statements = _validate_dump(data)
@@ -284,14 +347,17 @@ def staging_restore(config_path: str, alias: str, source: str, login_path: str |
     stage_probe = _run(['mysql', *stage_conn, '--batch', '--skip-column-names', stage,
                         '--execute=SELECT DATABASE(), CURRENT_USER()'], label='staging identity inspection')
     fields = stage_probe.stdout.strip().split('\t')
+
     if len(fields) != 2 or fields[0] != stage or fields[1] == source_identity:
         raise ValueError('Staging database/account must differ from source')
+
     _stage_grants(stage_conn, stage, fields[1])
 
     def verify_empty():
         result = _run(['mysql', *stage_conn, '--batch', '--skip-column-names', stage,
                        '--execute=SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()'],
                       label='staging emptiness inspection')
+
         if result.stdout.strip() != '0':
             raise ValueError('Staging database is not empty; no import attempted')
         # A schema with routines or events is not empty for restore purposes.
@@ -299,23 +365,29 @@ def staging_restore(config_path: str, alias: str, source: str, login_path: str |
                        '--execute=SELECT (SELECT COUNT(*) FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = DATABASE()) + '
                        '(SELECT COUNT(*) FROM information_schema.EVENTS WHERE EVENT_SCHEMA = DATABASE())'],
                       label='staging object inspection')
+
         if result.stdout.strip() != '0':
             raise ValueError('Staging database contains routines/events; no import attempted')
 
     verify_empty()
+
     if check_only:
         return plan
+
     if not confirm(plan):
         raise ValueError('Staging restore cancelled; no SQL imported')
+
     verify_empty()
     # Refuse a changed file after approval; do not open arbitrary new content.
     if backup.read_bytes() != data:
         raise ValueError('Backup changed during staging restore approval')
+
     try:
         completed = subprocess.run(['mysql', *stage_conn, '--binary-mode=OFF', stage],
                                    input=data, capture_output=True, timeout=120)
     except (OSError, subprocess.TimeoutExpired):
         raise ValueError('Staging import failed; partial staging changes may remain. Do not retry without inspection') from None
+
     if completed.returncode:
         raise ValueError('Staging import failed; partial staging changes may remain. Do not retry without inspection')
     # A zero client exit code is not proof that all expected data arrived.
@@ -327,15 +399,19 @@ def staging_restore(config_path: str, alias: str, source: str, login_path: str |
                        'WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = \'BASE TABLE\''],
                       label='post-import table verification')
         actual = set(result.stdout.splitlines())
+
         if actual != set(expected):
             raise ValueError('Staging table set differs from dump')
+
         for table, count in expected.items():
             result = _run(['mysql', *stage_conn, '--batch', '--skip-column-names', stage,
                            f'--execute=SELECT COUNT(*) FROM `{table}`'],
                           label='post-import row verification')
+
             if result.stdout.strip() != str(count):
                 raise ValueError(f'Staging row count differs for {table}')
     except (ValueError, OSError, subprocess.TimeoutExpired) as exc:
         raise ValueError('Staging import verification failed; partial or unverified staging changes may remain. '
                          'Do not retry without inspection') from exc
+
     return plan

@@ -27,8 +27,10 @@ class ScaffoldingContractTests(unittest.TestCase):
         old.write_text("# existing developer file\n")
         self.assertEqual(Path(show_standalone_controller("Legacy", directory=root)["path"]).resolve(), old.resolve())
         before = (root / "app.py").read_bytes()
+
         with self.assertRaises(FileExistsError):
             create_standalone_controller("Legacy", directory=root)
+
         self.assertEqual((root / "app.py").read_bytes(), before)
 
     def test_modular_camelcase_routes_and_legacy_collision(self):
@@ -39,8 +41,10 @@ class ScaffoldingContractTests(unittest.TestCase):
         self.assertEqual(Path(show_component("controller", "blog", "AccountSettings", directory=root)["path"]).resolve(), path.resolve())
         old = root / "apps" / "blog" / "controllers" / "legacy.py"
         old.write_text("# legacy\n")
+
         with self.assertRaises(FileExistsError):
             create_controller("blog", "Legacy", directory=root)
+
         self.assertEqual(Path(show_component("controller", "blog", "Legacy", directory=root)["path"]).resolve(), old.resolve())
 
     def test_models_camelcase_and_legacy_snake_case_lookup(self):
@@ -55,6 +59,7 @@ class ScaffoldingContractTests(unittest.TestCase):
         legacy = root / "models" / "old_entry.py"
         legacy.write_text("# legacy\n")
         self.assertEqual(Path(show_shared_component("model", "OldEntry", directory=root)["path"]).resolve(), legacy.resolve())
+
         with self.assertRaises(FileExistsError):
             create_shared_component("model", "OldEntry", directory=root)
 
@@ -62,6 +67,7 @@ class ScaffoldingContractTests(unittest.TestCase):
         root = create_project("site", directory=self.base, modular=True)
         self.assertIn('app.route("/blog/", Blog)', (root / "app.py").read_text())
         self.assertNotIn('app.route("/blog", Blog)', (root / "app.py").read_text())
+
         for path in (create_view("blog", "contact", directory=root),
                      create_shared_component("view", "contact", directory=root),
                      root / "apps/blog/views/index.html"):

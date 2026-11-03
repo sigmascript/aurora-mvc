@@ -35,9 +35,11 @@ class FakeConnection:
 
     def fetch_all(self, sql, params=None):
         self.queries.append(sql)
+
         if sql.startswith("PRAGMA table_info"):
             return [{"name": name, "type": "INTEGER", "notnull": 0,
                      "pk": int(name == "id"), "dflt_value": None} for name in self.columns]
+
         return []
 
 
@@ -52,8 +54,11 @@ def test_preflight_is_read_only_and_never_authorizes_execution():
     connection = FakeConnection()
     result = preflight_migration(connection, before, after, plan)
     assert result.ready_for_execution is False
+
     assert result.migration_id == "a7_add_note"
+
     assert all(sql.startswith(("SELECT", "PRAGMA")) for sql in connection.queries)
+
     assert any("no migration execution" in item for item in result.findings)
 
 
@@ -67,6 +72,7 @@ def test_preflight_detects_live_drift(columns, exists):
 def test_preflight_rejects_modified_snapshot():
     before, after, plan = artifacts()
     after["tables"][0]["columns"][1]["nullable"] = False
+
     with pytest.raises(ValueError, match="fingerprint"):
         preflight_migration(FakeConnection(), before, after, plan)
 
@@ -74,6 +80,7 @@ def test_preflight_rejects_modified_snapshot():
 def test_preflight_rejects_forged_operation():
     before, after, plan = artifacts()
     plan["operations"][0]["risk"] = "potential_data_loss"
+
     with pytest.raises(ValueError, match="operations"):
         preflight_migration(FakeConnection(), before, after, plan)
 
@@ -82,5 +89,6 @@ def test_preflight_rejects_dialect_mismatch():
     before, after, plan = artifacts()
     connection = FakeConnection()
     connection.dialect = "mysql"
+
     with pytest.raises(ValueError, match="dialect"):
         preflight_migration(connection, before, after, plan)

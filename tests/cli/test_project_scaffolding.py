@@ -33,6 +33,7 @@ class ProjectScaffoldingTests(unittest.TestCase):
     def test_empty_manifest_requires_explicit_registration(self):
         with tempfile.TemporaryDirectory() as temp:
             root = create_project('demo', directory=Path(temp))
+
             with self.assertRaisesRegex(ValueError, 'No models registered'):
                 select_model_refs(manifest=root / 'aurora_models.json')
 
@@ -40,8 +41,10 @@ class ProjectScaffoldingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = create_project('demo', directory=Path(temp))
             (root / 'aurora_models.json').write_text('custom')
+
             with self.assertRaises(FileExistsError):
                 create_project('demo', directory=Path(temp))
+
             self.assertEqual((root / 'aurora_models.json').read_text(), 'custom')
 
     def test_cli_new_scaffolds_config(self):

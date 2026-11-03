@@ -78,6 +78,7 @@ class StagingRestoreTests(unittest.TestCase):
     def fake_run(self, command, **kwargs):
         self.calls.append(command)
         sql = command[-1]
+
         if 'CURRENT_USER()' in sql:
             value = ('aurora_recovery_test\taurora_test@localhost\n'
                      if '--user=aurora_test' in command else
@@ -92,6 +93,7 @@ class StagingRestoreTests(unittest.TestCase):
             value = '2\n'
         else:
             value = '0\n'
+
         return subprocess.CompletedProcess(command, 0, value, '')
 
     def run_stage(self, **kwargs):
@@ -109,6 +111,7 @@ class StagingRestoreTests(unittest.TestCase):
             b"/*!40103 SET TIME_ZONE='+00:00' */;",
             b"/*!40103 SET TIME_ZONE='+00:00'; DROP DATABASE x */;",
         )
+
         with self.assertRaisesRegex(ValueError, r'comment at line 7'):
             _validate_dump(dump)
 
@@ -117,6 +120,7 @@ class StagingRestoreTests(unittest.TestCase):
             b'/*!50503 SET NAMES utf8mb4 */;',
             b'/*!50503 SET NAMES latin1 */;',
         )
+
         with self.assertRaisesRegex(ValueError, 'Unsupported executable'):
             _validate_dump(dump)
 
@@ -125,6 +129,7 @@ class StagingRestoreTests(unittest.TestCase):
             b'/*!40000 ALTER TABLE `recovery_items` ENABLE KEYS */;',
             b'/*!40000 ALTER TABLE `other`.`recovery_items` ENABLE KEYS */;',
         )
+
         with self.assertRaisesRegex(ValueError, 'Unsupported executable'):
             _validate_dump(dump)
 
@@ -145,11 +150,13 @@ class StagingRestoreTests(unittest.TestCase):
 
     def test_rejects_extra_statement(self):
         bad = DUMP.replace(b'-- Dump completed', b'DROP DATABASE `aurora_recovery_test`;\n-- Dump completed')
+
         with self.assertRaisesRegex(ValueError, 'Unsupported SQL'):
             _validate_dump(bad)
 
     def test_rejects_sql_injection_in_insert(self):
         bad = DUMP.replace(b"(2,'MySQL Devil');", b"(2,'MySQL Devil'); DROP DATABASE x;")
+
         with self.assertRaisesRegex(ValueError, 'Unsupported SQL'):
             _validate_dump(bad)
 
@@ -157,6 +164,7 @@ class StagingRestoreTests(unittest.TestCase):
         for expression in ('UUID()', '@session_value', '1+1', 'NOW()', 'SLEEP(1)'):
             with self.subTest(expression=expression):
                 bad = DUMP.replace(b"(2,'MySQL Devil')", f"(2,{expression})".encode())
+
                 with self.assertRaisesRegex(ValueError, 'Unsupported SQL'):
                     _validate_dump(bad)
 
@@ -169,9 +177,12 @@ class StagingRestoreTests(unittest.TestCase):
                    return_value=subprocess.CompletedProcess([], 0, b'', b'')):
             def wrong_count(command, **kwargs):
                 result = self.fake_run(command, **kwargs)
+
                 if 'SELECT COUNT(*) FROM `recovery_items`' in command[-1]:
                     return subprocess.CompletedProcess(command, 0, '1\n', '')
+
                 return result
+
             with patch('aurora.database.cli_mysql_staging_restore._run',
                        side_effect=wrong_count):
                 with self.assertRaisesRegex(ValueError, 'verification failed'):
@@ -181,15 +192,19 @@ class StagingRestoreTests(unittest.TestCase):
 
     def test_rejects_routines(self):
         bad = DUMP.replace(b'-- Dump completed', b'CREATE PROCEDURE evil() SELECT 1;\n-- Dump completed')
+
         with self.assertRaisesRegex(ValueError, 'Unsupported SQL'):
             _validate_dump(bad)
 
     def test_refuses_nonempty_stage(self):
         def occupied(command, **kwargs):
             result = self.fake_run(command, **kwargs)
+
             if 'information_schema.TABLES' in command[-1]:
                 return subprocess.CompletedProcess(command, 0, '1\n', '')
+
             return result
+
         with patch('aurora.database.cli_mysql_staging_restore._run', side_effect=occupied):
             with self.assertRaisesRegex(ValueError, 'not empty'):
                 staging_restore(str(self.config), 'default', str(self.dump), 'aurora_recovery',
@@ -198,9 +213,12 @@ class StagingRestoreTests(unittest.TestCase):
     def test_rejects_broad_grants(self):
         def broad(command, **kwargs):
             result = self.fake_run(command, **kwargs)
+
             if 'SHOW GRANTS' in command[-1]:
                 return subprocess.CompletedProcess(command, 0, 'GRANT ALL PRIVILEGES ON *.* TO user\n', '')
+
             return result
+
         with patch('aurora.database.cli_mysql_staging_restore._run', side_effect=broad):
             with self.assertRaisesRegex(ValueError, 'grants'):
                 staging_restore(str(self.config), 'default', str(self.dump), 'aurora_recovery',
@@ -234,7 +252,9 @@ class StagingRestoreTests(unittest.TestCase):
         def modified(command, **kwargs):
             if 'SHOW GRANTS' in command[-1]:
                 return subprocess.CompletedProcess(command, 0, grant, '')
+
             return self.fake_run(command, **kwargs)
+
         with patch('aurora.database.cli_mysql_staging_restore._run', side_effect=modified):
             with self.assertRaisesRegex(ValueError, 'grants'):
                 staging_restore(str(self.config), 'default', str(self.dump),
@@ -249,6 +269,7 @@ class StagingRestoreTests(unittest.TestCase):
         with patch('aurora.database.cli_mysql_staging_restore.subprocess.run',
                    return_value=subprocess.CompletedProcess([], 0, b'', b'')) as importer:
             self.run_stage(check_only=False, confirm=lambda _: True)
+
         self.assertEqual(importer.call_count, 1)
         self.assertEqual(importer.call_args.args[0][0], 'mysql')
 
@@ -271,5 +292,6 @@ def test_staging_dump_rejects_drop_of_unrelated_table():
         b"DROP TABLE IF EXISTS `recovery_items`;",
         b"DROP TABLE IF EXISTS `unrelated_table`;",
     )
+
     with pytest.raises(ValueError, match="drop a table not defined"):
         _validate_dump(dump)

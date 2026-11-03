@@ -19,6 +19,7 @@ class ViewRenderer:
     def __init__(self, views_directory, *, view_namespaces=None):
         # Namespace lookup is explicit; legacy filesystem view roots still work.
         loader = FileSystemLoader(views_directory)
+
         if view_namespaces:
             loader = ChoiceLoader(
                 [
@@ -28,6 +29,7 @@ class ViewRenderer:
                     loader,
                 ]
             )
+
         self.environment = Environment(
             loader=loader,
             autoescape=select_autoescape(["html", "htm", "xml"]),
@@ -35,6 +37,7 @@ class ViewRenderer:
 
     def render(self, view: View) -> str:
         """Render a View's view and context; other inputs raise TypeError."""
+
         if not isinstance(view, View):
             raise TypeError("ViewRenderer.render() expects a View")
 

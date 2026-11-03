@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 from aurora.cli import create_project, create_model, list_components, main, show_component
 
+
 class ModelCLITests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -16,8 +17,10 @@ class ModelCLITests(unittest.TestCase):
 
     def invoke(self, *args):
         out = io.StringIO()
+
         with patch('pathlib.Path.cwd', return_value=self.root), contextlib.redirect_stdout(out):
             self.assertEqual(main(list(args)), 0)
+
         return out.getvalue()
 
     def test_add_scaffolds_model(self):
@@ -39,8 +42,10 @@ class ModelCLITests(unittest.TestCase):
     def test_no_overwrite(self):
         path = create_model('blog','BlogPost',directory=self.root)
         path.write_text('developer work')
+
         with self.assertRaises(FileExistsError):
             create_model('blog','BlogPost',directory=self.root)
+
         self.assertEqual(path.read_text(), 'developer work')
 
     def test_invalid_model_name(self):
@@ -57,6 +62,7 @@ class ModelCLITests(unittest.TestCase):
         with patch.dict(os.environ, {'AURORA_ENV':'production'}), contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit) as caught:
                 self.invoke('model','add','blog','Article')
+
         self.assertEqual(caught.exception.code,1)
 
     def test_model_not_imported_on_inspection(self):

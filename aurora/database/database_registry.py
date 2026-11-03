@@ -11,9 +11,11 @@ from .configuration import DatabaseConfiguration
 
 
 class DatabaseRegistry:
+    """Resolve configured database aliases without implicit schema changes."""
     def __init__(self, configuration: DatabaseConfiguration):
         if not isinstance(configuration, DatabaseConfiguration):
             raise TypeError("configuration must be a DatabaseConfiguration")
+
         self._configuration = configuration
         self._instances = {}
         self._lock = RLock()
@@ -26,9 +28,12 @@ class DatabaseRegistry:
         with self._lock:
             if self._closed:
                 raise RuntimeError("Database registry is closed")
+
             self._configuration.resolve(alias)
+
             if alias not in self._instances:
                 self._instances[alias] = self._configuration.connect(alias)
+
             return self._instances[alias]
 
     def initialized_aliases(self):
@@ -39,10 +44,13 @@ class DatabaseRegistry:
         with self._lock:
             if self._closed:
                 return
+
             self._closed = True
             instances = tuple(self._instances.values())
             self._instances.clear()
+
         failure = None
+
         for connection in instances:
             try:
                 connection.close()
@@ -50,12 +58,14 @@ class DatabaseRegistry:
                 # One failed close must not strand connections for other aliases.
                 if failure is None:
                     failure = error
+
         if failure is not None:
             raise failure
 
     def __enter__(self):
         if self._closed:
             raise RuntimeError("Database registry is closed")
+
         return self
 
     def __exit__(self, exc_type, exc, tb):

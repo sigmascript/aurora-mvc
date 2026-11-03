@@ -14,6 +14,7 @@ from .planning import plan_schema
 def _preflight(connection, models, alias):
     # Refuse unknown existing schema rather than silently adopting it.
     dialect = connection.dialect
+
     if dialect == "sqlite":
         rows = connection.fetch_all("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
         existing = {row["name"] for row in rows}
@@ -25,6 +26,7 @@ def _preflight(connection, models, alias):
         rows = connection.fetch_all("SELECT tablename AS name FROM pg_catalog.pg_tables "
                                     "WHERE schemaname = current_schema()")
         existing = {row["name"] for row in rows}
+
     target = {model.__table_name__ for model in models}
     unexpected = existing - target
     plans = [plan_schema(connection, model) for model in models]
@@ -47,13 +49,18 @@ def _postgres_read_only_preflight(connection, models, alias):
     opening a READ ONLY transaction ensures all catalog queries share a stable
     snapshot and cannot accidentally execute DDL or write journal entries.
     """
+
     if connection.dialect != "postgresql":
         raise ValueError("PostgreSQL preflight requires a PostgreSQL connection")
+
     connection._ensure_open()
+
     if connection._transaction_active:
         raise RuntimeError("Cannot inspect inside an active AuroraSQL transaction")
+
     raw = connection._raw
     raw.execute("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+
     try:
         report = _preflight(connection, models, alias)
         report["transaction_mode"] = "REPEATABLE READ, READ ONLY"
@@ -66,16 +73,21 @@ def _postgres_read_only_preflight(connection, models, alias):
 
 def _dialect_for_init_scheme(scheme):
     """Validate DDL using the actual configured engine, never SQLite by default."""
+
     if scheme in ("sqlite", "sqlite+pysqlite"):
         return "sqlite"
+
     if scheme == "postgresql+psycopg":
         return "postgresql"
+
     if scheme in ("mysql+pymysql", "mysql+mysqlconnector"):
         return "mysql"
+
     raise ValueError("Unsupported database driver for AuroraSQL initialization")
 
 
 def run_init_check(args):
+    """Inspect whether initialization is safe without applying schema changes."""
     config, base_dir = _load_config(args.config)
     refs, models = _select_models(args, base_dir)
     from .init_validation import validate_init_models
@@ -83,20 +95,26 @@ def run_init_check(args):
     parsed = urlsplit(url)
     dialect = _dialect_for_init_scheme(parsed.scheme)
     models = validate_init_models(models, dialect=dialect)
+
     if parsed.scheme in ("sqlite", "sqlite+pysqlite"):
         path = unquote(parsed.path)
+
         if path == "/:memory:":
             raise ValueError("Cannot inspect an in-memory database")
+
         name = path[2:] if path.startswith("///") else path[1:]
         db_file = Path(name).expanduser()
+
         if not db_file.is_absolute():
             db_file = base_dir / db_file
+
         if not db_file.is_file():
             report = {"database_alias": args.database, "read_only": True,
                       "status": "MISSING_DATABASE", "model_tables": sorted(m.__table_name__ for m in models)}
         else:
             raw = sqlite3.connect(db_file.resolve().as_uri() + "?mode=ro", uri=True,
                                   isolation_level=None)
+
             with Connection(raw, "sqlite") as connection:
                 report = _preflight(connection, models, args.database)
     elif parsed.scheme == "postgresql+psycopg":
@@ -115,6 +133,7 @@ def run_init_check(args):
         # account is required until its own guarded preflight is implemented.
         with config.connect(args.database) as connection:
             report = _preflight(connection, models, args.database)
+
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0 if report["status"] in ("EMPTY", "MISSING_DATABASE") else 3
 
@@ -134,8 +153,10 @@ def _postgres_database_identity(connection, parsed):
     row = connection.fetch_first(
         "SELECT current_database() AS database_name, current_schema() AS schema_name"
     )
+
     if not row or not row["database_name"] or not row["schema_name"]:
         raise RuntimeError("Cannot identify PostgreSQL database and schema")
+
     return json.dumps({
         "host": parsed.hostname.lower(),
         "port": parsed.port or 5432,
@@ -155,6 +176,7 @@ def _postgres_approval_digest(models, alias, database_identity):
 
     if not isinstance(database_identity, str) or not database_identity:
         raise ValueError("PostgreSQL database identity is required")
+
     proposal = json.dumps({
         "version": "aurorasql-postgresql-init-preview-v1",
         "alias": alias,
@@ -169,10 +191,13 @@ def _mysql_database_identity(connection, parsed):
     row = connection.fetch_first(
         "SELECT DATABASE() AS database_name, @@hostname AS server_name, @@port AS server_port"
     )
+
     if not row or not row["database_name"]:
         raise RuntimeError("Cannot identify MySQL database")
+
     if row["database_name"] != unquote(parsed.path.lstrip("/")):
         raise RuntimeError("Connected MySQL database differs from configuration")
+
     return json.dumps({
         "host": parsed.hostname.lower(), "port": parsed.port or 3306,
         "database": row["database_name"], "server_name": row["server_name"],
@@ -195,8 +220,10 @@ def _mysql_approval_digest(models, alias, identity):
 
 def _mysql_read_only_preflight(connection, models, alias):
     """Inspect MySQL without writes; DDL is not transactional."""
+
     if connection.dialect != "mysql":
         raise ValueError("MySQL preflight requires a MySQL connection")
+
     report = _preflight(connection, models, alias)
     report["write_enabled"] = False
     report["transactional_ddl"] = False
@@ -226,33 +253,44 @@ def _execute_batch(connection, models):
     # Enable it before BEGIN IMMEDIATE and fail closed if it is not active.
     if connection.dialect != "sqlite":
         raise ValueError("Coordinated initialization currently supports SQLite only")
+
     connection._ensure_open()
+
     if connection._transaction_active or connection._raw.in_transaction:
         raise RuntimeError("Foreign-key initialization requires no active transaction")
+
     connection._raw.execute("PRAGMA foreign_keys = ON")
+
     if connection._raw.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
         raise RuntimeError("SQLite foreign-key enforcement could not be enabled")
 
     operation_ids = []
+
     with migration_lock(connection):
         if inspect_table(connection, "aurorasql_schema_history").exists:
             raise RuntimeError("Existing migration journal requires manual review")
         # Revalidate under the lock, including any external schema change.
         report = _preflight(connection, models, "default")
+
         if report["status"] != "EMPTY" or _unsafe_warnings(report):
             raise RuntimeError("Database changed before locked initialization")
+
         initialize_history(connection, confirm=True)
         journal = _quote("aurorasql_schema_history", connection.dialect)
+
         for model in models:
             sql = create_table_sql(model, connection.dialect)
             approval = CreateApproval(model.__table_name__, connection.dialect,
                                       sha256(sql.encode("utf-8")).hexdigest())
+
             if review_history(connection) or list_history(connection) and any(
                 entry.table == model.__table_name__ for entry in list_history(connection)
             ):
                 raise RuntimeError("Migration journal requires manual review")
+
             if inspect_table(connection, model.__table_name__).exists:
                 raise RuntimeError("Table appeared during initialization")
+
             operation_id = str(uuid4())
             connection.execute_write(
                 f"INSERT INTO {journal} (operation_id, table_name, dialect, fingerprint, status) "
@@ -260,6 +298,7 @@ def _execute_batch(connection, models):
                 {"id": operation_id, "name": model.__table_name__,
                  "dialect": connection.dialect, "fingerprint": approval.fingerprint,
                  "status": "started"})
+
             try:
                 execute_create(connection, model, approval, confirm=True)
             except BaseException:
@@ -269,7 +308,9 @@ def _execute_batch(connection, models):
                         {"status": "uncertain", "id": operation_id})
                 except BaseException:
                     pass
+
                 raise
+
             connection.execute_write(
                 f"UPDATE {journal} SET status=:status WHERE operation_id=:id",
                 {"status": "applied", "id": operation_id})
@@ -283,14 +324,17 @@ def _execute_batch(connection, models):
             # Preserve uncertainty in the journal before releasing the lock.
             _mark_batch_uncertain(connection, journal, operation_ids)
             raise
+
         if violations:
             _mark_batch_uncertain(connection, journal, operation_ids)
             raise RuntimeError("SQLite foreign-key check failed; review migration journal")
+
     return operation_ids
 
 
 def _mark_batch_uncertain(connection, journal, operation_ids):
     """Best-effort durable warning when post-DDL integrity cannot be certified."""
+
     for operation_id in operation_ids:
         try:
             connection.execute_write(
@@ -313,11 +357,14 @@ def run_init_apply(args):
     from .init_validation import validate_init_models
     url = config.resolve(args.database)
     parsed = urlsplit(url)
+
     if parsed.scheme == "postgresql+psycopg":
         models = validate_init_models(models, dialect="postgresql")
+
         with config.connect(args.database) as connection:
             identity = _postgres_database_identity(connection, parsed)
             digest = _postgres_approval_digest(models, args.database, identity)
+
             if args.approve is None and args.confirm is None:
                 report = _postgres_read_only_preflight(connection, models, args.database)
                 report["approval_sha256"] = (
@@ -327,22 +374,28 @@ def run_init_apply(args):
                 report["write_enabled"] = False
                 print(json.dumps(report, indent=2, sort_keys=True))
                 return 0 if report["status"] == "EMPTY" else 3
+
             if args.approve != digest or args.confirm != "APPLY":
                 raise ValueError("Exact schema approval and --confirm APPLY are required")
+
             from .postgres_init import execute_postgres_init
             operation_ids = execute_postgres_init(
                 connection, models, approval=args.approve,
                 expected_approval=digest, alias=args.database,
             )
+
         print(json.dumps({"status": "INITIALIZED", "database_alias": args.database,
                           "tables": [model.__table_name__ for model in models],
                           "operation_ids": list(operation_ids)}, indent=2, sort_keys=True))
         return 0
+
     if parsed.scheme == "mysql+pymysql":
         models = validate_init_models(models, dialect="mysql")
+
         with config.connect(args.database) as connection:
             identity = _mysql_database_identity(connection, parsed)
             digest = _mysql_approval_digest(models, args.database, identity)
+
             if args.approve is None and args.confirm is None:
                 report = _mysql_read_only_preflight(connection, models, args.database)
                 report["approval_sha256"] = (
@@ -351,49 +404,68 @@ def run_init_apply(args):
                 )
                 print(json.dumps(report, indent=2, sort_keys=True))
                 return 0 if report["status"] == "EMPTY" else 3
+
             if args.approve != digest or args.confirm != "APPLY":
                 raise ValueError("Exact schema approval and --confirm APPLY are required")
+
             from .mysql_init import execute_mysql_init
             operation_ids = execute_mysql_init(
                 connection, models, approval=args.approve,
                 expected_approval=digest, alias=args.database,
                 expected_identity=identity, parsed=parsed,
             )
+
         print(json.dumps({"status": "INITIALIZED", "database_alias": args.database,
                           "tables": [model.__table_name__ for model in models],
                           "operation_ids": list(operation_ids)}, indent=2, sort_keys=True))
         return 0
+
     if parsed.scheme not in ("sqlite", "sqlite+pysqlite"):
         raise ValueError("Guarded initialization is not enabled for this database driver")
+
     models = validate_init_models(models, dialect="sqlite")
+
     if parsed.path == "/:memory:":
         raise ValueError("In-memory initialization is not supported")
+
     path = unquote(parsed.path)
     name = path[2:] if path.startswith("///") else path[1:]
     db_file = Path(name).expanduser()
+
     if not db_file.is_absolute():
         db_file = base_dir / db_file
+
     if not db_file.is_file():
         raise ValueError("Create an empty SQLite database file explicitly before initialization")
+
     digest = _approval_digest(models, args.database, db_file)
+
     if args.approve is None and args.confirm is None:
         raw = sqlite3.connect(db_file.resolve().as_uri() + "?mode=ro", uri=True,
                               isolation_level=None)
+
         with Connection(raw, "sqlite") as connection:
             report = _preflight(connection, models, args.database)
+
         report["approval_sha256"] = digest if report["status"] == "EMPTY" and not _unsafe_warnings(report) else None
         report["write_enabled"] = False
         print(json.dumps(report, indent=2, sort_keys=True))
         return 0 if report["status"] == "EMPTY" else 3
+
     if args.approve != digest or args.confirm != "APPLY":
         raise ValueError("Exact schema approval and --confirm APPLY are required")
+
     raw = sqlite3.connect(db_file.resolve().as_uri() + "?mode=rw", uri=True,
                           isolation_level=None)
+
     with Connection(raw, "sqlite") as connection:
         report = _preflight(connection, models, args.database)
+
         if report["status"] != "EMPTY" or _unsafe_warnings(report):
             raise RuntimeError("Database changed after review; initialization refused")
+
         operation_ids = _execute_batch(connection, models)
+
     print(json.dumps({"status": "INITIALIZED", "database_alias": args.database,
                       "tables": [model.__table_name__ for model in models],
                       "operation_ids": operation_ids}, indent=2, sort_keys=True))

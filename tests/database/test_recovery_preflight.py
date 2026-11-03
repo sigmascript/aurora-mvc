@@ -31,11 +31,17 @@ def test_preflight_reports_missing_table_without_mutating_history():
         before = list_history(db)
         result = preflight_recovery(db, "recovery-op", RecoveryProbe)
         assert result.operation_id == "recovery-op"
+
         assert result.assessment.disposition == "table_absent_manual_investigation"
+
         assert any(item.kind == "table_missing" for item in result.schema_findings)
+
         assert any(item.kind == "unresolved" for item in result.history_findings)
+
         assert result.reconciliation_allowed is False
+
         assert list_history(db) == before
+
         assert not inspect_table(db, "recovery_probe").exists
 
 
@@ -48,16 +54,21 @@ def test_preflight_does_not_approve_even_when_table_exists():
         before = list_history(db)
         result = preflight_recovery(db, "recovery-op", RecoveryProbe)
         assert result.assessment.table_exists
+
         assert result.reconciliation_allowed is False
+
         assert list_history(db) == before
 
 
 def test_preflight_refuses_missing_or_applied_operations():
     with connect("sqlite:///:memory:") as db:
         initialize_history(db, confirm=True)
+
         with pytest.raises(ValueError):
             preflight_recovery(db, "not-found", RecoveryProbe)
+
         _unresolved(db, status="applied")
+
         with pytest.raises(ValueError, match="unresolved"):
             preflight_recovery(db, "recovery-op", RecoveryProbe)
 
@@ -68,6 +79,7 @@ def test_preflight_refuses_nested_coordination():
     with connect("sqlite:///:memory:") as db:
         initialize_history(db, confirm=True)
         _unresolved(db)
+
         with migration_lock(db):
             with pytest.raises(RuntimeError, match="nested"):
                 preflight_recovery(db, "recovery-op", RecoveryProbe)

@@ -27,9 +27,11 @@ def invoke(app, *, cookie=None):
 
 def cookie_value(messages):
     headers = messages[0]["headers"]
+
     for name, value in headers:
         if name.lower() == b"set-cookie" and value.startswith(b"aurora_session="):
             return value.split(b";", 1)[0].decode("ascii")
+
     return None
 
 

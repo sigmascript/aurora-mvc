@@ -29,16 +29,20 @@ class DeploymentSecurityAuditTests(unittest.TestCase):
 
     def test_csrf_rejects_missing_token_without_creating_session_token(self):
         request = SimpleNamespace(method='POST', session=Session())
+
         with self.assertRaises(HTTPException) as error:
             validate_csrf(request, None)
+
         self.assertEqual(error.exception.status_code, 403)
         self.assertEqual(dict(request.session), {})
 
     def test_csrf_rejects_valid_token_for_safe_method(self):
         request = SimpleNamespace(method='GET', session=Session())
         token = csrf_token(request)
+
         with self.assertRaises(HTTPException) as error:
             validate_csrf(request, token)
+
         self.assertEqual(error.exception.status_code, 405)
 
 

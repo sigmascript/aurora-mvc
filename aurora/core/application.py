@@ -75,8 +75,10 @@ class Application:
         self.router = Router()
         self._middleware = []
         self.renderer = None
+
         if view_context is not None and not callable(view_context):
             raise TypeError("view_context must be callable")
+
         self.view_context = view_context
         self.view_headers = dict(view_headers or {})
 
@@ -94,10 +96,13 @@ class Application:
         Registration order is outermost-first. Static files and lifespan
         messages are outside this HTTP middleware boundary.
         """
+
         if not callable(middleware):
             raise TypeError("middleware must be callable")
+
         if not inspect.iscoroutinefunction(middleware):
             raise TypeError("middleware must be an async callable")
+
         self._middleware.append(middleware)
         return middleware
 
@@ -110,16 +115,21 @@ class Application:
 
             async def call_next(next_request):
                 nonlocal next_called
+
                 if next_request is not request:
                     raise ValueError("call_next must receive the original request")
+
                 if next_called:
                     raise RuntimeError("call_next may only be called once per request")
+
                 next_called = True
                 return await dispatch(index + 1)
 
             result = await self._middleware[index](request, call_next)
+
             if not isinstance(result, Response):
                 raise TypeError("HTTP middleware must return a Response")
+
             return result
 
         return await dispatch(0)
@@ -138,11 +148,15 @@ class Application:
         Example: app.route("/signin", Signin) dispatches GET to Signin.get
         and POST to Signin.post. The existing add_route API stays available.
         """
+
         if not isinstance(controller, type) or not issubclass(controller, Controller):
             raise TypeError("route() expects a Controller subclass")
+
         methods = controller.http_methods()
+
         if not methods:
             raise ValueError("Controller must implement at least one HTTP method")
+
         route = self.add_route(path, controller.dispatch, methods=methods, name=name)
         route.method_controller = True
         return route
@@ -155,10 +169,13 @@ class Application:
 
     def localized_url_for(self, name, *, language, **params):
         """Build a locale-prefixed named URL without reserving route parameter names."""
+
         if self.locales is None:
             raise RuntimeError("Multilingual routing is not configured")
+
         if not isinstance(language, str) or language not in self.locales:
             raise ValueError("Unsupported locale")
+
         path = self.url_for(name, **params)
         return f"/{language}" + ("" if path == "/" else path)
 
@@ -167,12 +184,16 @@ class Application:
 
         Use secure=True for HTTPS deployments. No session or database is required.
         """
+
         if self.locale_cookie_name is None:
             raise RuntimeError("Locale preference cookie is not configured")
+
         if not isinstance(response, Response):
             raise TypeError("response must be a Response")
+
         if not isinstance(language, str) or language not in self.locales:
             raise ValueError("Unsupported locale")
+
         response.set_cookie(
             self.locale_cookie_name, language, path="/", max_age=max_age,
             secure=secure, httponly=True, samesite="Lax",
@@ -183,9 +204,11 @@ class Application:
 
     async def __call__(self, scope, receive, send):
         """Handle an ASGI HTTP request; ignore other scope types."""
+
         if scope["type"] == "lifespan":
             await self._handle_lifespan(receive, send)
             return
+
         if scope["type"] != "http":
             return
 
@@ -200,13 +223,16 @@ class Application:
 
         # Static requests bypass sessions and application middleware.
         request = Request(scope, receive, max_body_bytes=self.max_request_body_bytes)
+
         if self.locale_cookie_name is not None:
             candidate = request.cookies.get(self.locale_cookie_name)
             request.preferred_locale = candidate if candidate in self.locales else None
+
         if self.locales is not None:
             # The raw request.path remains intact for logging and application use.
             # Matching uses a request-local stripped path; no shared router mutation.
             parts = request.path.split("/", 2)
+
             if len(parts) >= 2 and parts[1] in self.locales:
                 request.locale = parts[1]
                 request.routing_path = "/" + parts[2] if len(parts) == 3 else "/"
@@ -218,7 +244,9 @@ class Application:
         try:
             if self.session_manager is not None:
                 await self.session_manager.load(request)
+
             response = await self._run_http_middleware(request)
+
             if self.session_manager is not None:
                 await self.session_manager.save(request, response)
         except ClientDisconnect:
@@ -245,6 +273,7 @@ class Application:
             async def send_head(message):
                 if message.get("type") == "http.response.body":
                     message = {**message, "body": b""}
+
                 await send(message)
 
             await response(send_head)
@@ -259,15 +288,18 @@ class Application:
         Shutdown failures are reported to the ASGI server; a failed drain never
         disposes potentially active connections. No database is opened at startup.
         """
+
         while True:
             message = await receive()
             kind = message.get("type")
+
             if kind == "lifespan.startup":
                 if self._lifespan_stopped:
                     await send(
                         {"type": "lifespan.startup.failed", "message": "Application already stopped"}
                     )
                     return
+
                 self._lifespan_started = True
                 await send({"type": "lifespan.startup.complete"})
             elif kind == "lifespan.shutdown":
@@ -275,12 +307,14 @@ class Application:
                     if self.database_work is not None:
                         await self.database_work.aclose()
                         self.database_registry.close()
+
                     self._lifespan_stopped = True
                 except BaseException:
                     await send(
                         {"type": "lifespan.shutdown.failed", "message": "Database shutdown failed"}
                     )
                     return
+
                 await send({"type": "lifespan.shutdown.complete"})
                 return
             else:
@@ -302,13 +336,16 @@ class Application:
                     and registered.pattern.fullmatch(request.routing_path)
                 ):
                     return Response("Method Not Allowed", status_code=405)
+
             return Response("Not Found", status_code=404)
 
         # Keep request-local helpers available through template rendering.
         # Always restore the previous context, including on exceptions.
         token = _current_application.set(self)
+
         try:
             result = route.handler(request, **params)
+
             if inspect.isawaitable(result):
                 result = await result
 
@@ -323,10 +360,13 @@ class Application:
                 # values supplied explicitly by the controller.
                 if self.view_context is not None:
                     provided = self.view_context(request)
+
                     if inspect.isawaitable(provided):
                         provided = await provided
+
                     if not isinstance(provided, dict):
                         raise TypeError("view_context must return a dictionary")
+
                     context = {**provided, **result.context}
                     result = View(result.name, context, status_code=result.status_code,
                                   headers={**self.view_headers, **result.headers})
@@ -336,8 +376,10 @@ class Application:
                 if self.locales is not None:
                     def localized_url_for(name, *, language=None, **params):
                         target = request.locale if language is None else language
+
                         if target is None:
                             raise ValueError("No active URL locale")
+
                         return self.localized_url_for(name, language=target, **params)
 
                     context = dict(result.context)

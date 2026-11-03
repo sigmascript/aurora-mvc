@@ -16,6 +16,7 @@ class ExceptionBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
         async def capture(message):
             messages.append(message)
+
             if send is not None:
                 await send(message)
 
@@ -68,9 +69,11 @@ class ExceptionBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
         async def fail_after_headers(message):
             attempts.append(message["type"])
+
             if message["type"] == "http.response.body":
                 raise OSError("connection lost")
 
         with self.assertRaises(OSError):
             await self._invoke(app, send=fail_after_headers)
+
         self.assertEqual(attempts, ["http.response.start", "http.response.body"])

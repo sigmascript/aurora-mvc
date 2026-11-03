@@ -21,9 +21,13 @@ def test_postgres_proposal_is_deterministic_and_order_sensitive(monkeypatch):
     monkeypatch.setattr(schema, "create_table_sql", lambda model, dialect: f"CREATE {model.__table_name__} {dialect}")
     a = _postgres_approval_digest([_ModelA, _ModelB], "default", "localhost:5432/test")
     assert len(a) == 64
+
     assert a == _postgres_approval_digest([_ModelA, _ModelB], "default", "localhost:5432/test")
+
     assert a != _postgres_approval_digest([_ModelB, _ModelA], "default", "localhost:5432/test")
+
     assert a != _postgres_approval_digest([_ModelA, _ModelB], "other", "localhost:5432/test")
+
     assert a != _postgres_approval_digest([_ModelA, _ModelB], "default", "localhost:5432/other")
 
 

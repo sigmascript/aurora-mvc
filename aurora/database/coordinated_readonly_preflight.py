@@ -27,6 +27,7 @@ def inspect_coordinated_readiness(connection, review, *, reviewed_sha256):
     Never returns a write authorization, even when every check succeeds.
     Lock acquisition failures propagate and fail closed.
     """
+
     with migration_lock(connection):
         preflight = inspect_live_migration_readiness(
             connection, review, reviewed_sha256=reviewed_sha256,

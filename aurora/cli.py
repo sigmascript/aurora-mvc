@@ -39,13 +39,19 @@ from ._cli_scaffolding import (
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the Aurora CLI and return its process exit status.
+
+        Public command names and legacy aliases are preserved for compatibility."""
+    # Build the public command tree while retaining hidden legacy aliases.
     parser = argparse.ArgumentParser(prog="aurora", description="Aurora MVC developer tools")
+
     try:
         installed_version = version("aurora-mvc")
     except PackageNotFoundError:
         from aurora import __version__
 
         installed_version = __version__
+
     parser.add_argument(
         "-v", "--version", action="version", version=f"Aurora MVC {installed_version}"
     )
@@ -54,35 +60,46 @@ def main(argv: list[str] | None = None) -> int:
     new.add_argument("name")
     new.add_argument("--mvc", action="store_true", help="Create a minimal MVC project")
     new.add_argument("--modular", action="store_true", help="Create an MVC project with an apps/ directory")
+
+    # Legacy commands remain callable by existing projects and automation.
     for command in ("create-app", "add-app"):
         add = sub.add_parser(command, help=argparse.SUPPRESS)
         add.add_argument("name")
+
     sub.add_parser("list-apps", help=argparse.SUPPRESS)
     show = sub.add_parser("show-app", help=argparse.SUPPRESS)
     show.add_argument("name")
+
     for command in ("create-controller", "create-view"):
         scaffold = sub.add_parser(command, help=argparse.SUPPRESS)
         scaffold.add_argument("app", help="Existing modular app name")
         scaffold.add_argument("name", help="Controller class name or view name")
+
     # Keep legacy command dispatch for compatibility, but omit it from public help.
     sub._choices_actions[:] = [choice for choice in sub._choices_actions
                                if choice.help != argparse.SUPPRESS]
+
     # Canonical resource-first commands. Existing flat commands remain supported.
     app_group = sub.add_parser("app", help="Add, list, or inspect modular applications")
     app_actions = app_group.add_subparsers(dest="action", required=True)
     app_actions.add_parser("add", help="Add a modular application").add_argument("name")
     app_actions.add_parser("list", help="List modular applications")
     app_actions.add_parser("show", help="Inspect a modular application").add_argument("name")
+
     for resource in ("controller", "view", "model"):
         group = sub.add_parser(resource, help=f"Add, list, or inspect {resource} components")
         actions = group.add_subparsers(dest="action", required=True)
+
         for verb in ("add", "list", "show"):
             command = actions.add_parser(verb, help=f"{verb.title()} {resource} components")
             command.add_argument("first", nargs="?" if verb == "list" else None,
                                  help="Component name, or legacy app name")
+
             if verb != "list":
                 command.add_argument("second", nargs="?", help="Legacy component name")
+
             command.add_argument("--app", dest="app_option", help="Target modular app")
+
         if resource == "model":
             register = actions.add_parser("register", help="Register an explicit model reference in the project manifest")
             register.add_argument("reference", metavar="MODULE:CLASS")
@@ -91,17 +108,20 @@ def main(argv: list[str] | None = None) -> int:
             registered = actions.add_parser("registered", help="List model references registered for one database")
             registered.add_argument("--database", default="default", help="Database alias (default: default)")
             registered.add_argument("--models-config", default="aurora_models.json", help="Model manifest JSON path")
-    # Read-only named database commands; no model imports or schema writes.
+
+    # Database commands use explicit safety gates; planning remains read-only.
     db_group = sub.add_parser("db", help="Inspect databases and run guarded AuroraSQL operations")
     db_group.description = "Database commands: init, plan, migrate, backup, restore, history."
     db_group.epilog = "First setup: aurora db init --config aurora_databases.json --models-config aurora_models.json"
     db_actions = db_group.add_subparsers(dest="action", required=True)
+
     for verb in ("plan", "history"):
         command = db_actions.add_parser(verb, help=(
             "Read applied migration history" if verb == "history"
             else "Inspect schema, plan changes, and report safety warnings (read-only)"))
         command.add_argument("--config", default="aurora_databases.json")
         command.add_argument("--database", default="default")
+
         if verb == "plan":
             command.add_argument("--model", action="append", default=[], metavar="MODULE:CLASS")
             command.add_argument("--models-config", default="aurora_models.json")
@@ -117,10 +137,12 @@ def main(argv: list[str] | None = None) -> int:
             command.add_argument("--history-file", help="Optional legacy history SQLite file")
             command.add_argument("--intents", action="store_true", help="Read guarded SQLite intent journal v2 instead of earlier history")
             command.add_argument("--format", choices=("text", "json"), default="text")
+
     for verb in ("backup", "restore"):
         command = db_actions.add_parser(verb, help=("Create a verified supported database backup" if verb == "backup" else "Inspect recovery options (restore execution unavailable)"))
         command.add_argument("--config", default="aurora_databases.json")
         command.add_argument("--database", default="default")
+
         if verb == "backup":
             command.add_argument("--to", help="New backup destination; never overwrites")
             command.add_argument("--login-path", help="MySQL client login-path profile (required for MySQL backup)")
@@ -131,6 +153,7 @@ def main(argv: list[str] | None = None) -> int:
             command.add_argument("--staging-database", help="Reserved for future recovery; restore currently unavailable")
             command.add_argument("--staging-login-path", help="Reserved for future recovery; restore currently unavailable")
             command.add_argument("--staging-only", action="store_true", help="Reserved for future recovery; restore currently unavailable")
+
     init = db_actions.add_parser(
         "init",
         help="Create selected tables in an empty SQLite or MySQL database (writes once)",
@@ -203,65 +226,87 @@ def main(argv: list[str] | None = None) -> int:
         "init", "plan", "migrate"
     ):
         project_dir = str(Path.cwd().resolve())
+
         if project_dir not in sys.path:
             sys.path.insert(0, project_dir)
+
     if args.command == "db" and args.action in ("backup", "restore") and args.backend == "aurorasql":
         if args.action == "restore":
             parser.exit(1, "aurora: AuroraSQL restore remains disabled pending recovery acceptance; refusing legacy fallback.\n")
+
         from aurora.database.cli_plan import _load_config
         from urllib.parse import urlsplit
+
         try:
             config, _ = _load_config(args.config)
             scheme = urlsplit(config.resolve(args.database)).scheme
+
             if scheme == "mysql+pymysql":
                 if os.environ.get("AURORA_ENV", "development").lower() == "production":
                     raise ValueError("Production backup requires separate approval")
+
                 from aurora.database.cli_mysql_backup import backup_mysql_database
                 backup_mysql_database(args.config, args.database, args.to, args.login_path)
                 return 0
+
             if args.login_path:
                 raise ValueError("--login-path is supported only for MySQL")
+
             from aurora.database.cli_backup import run_backup
             return run_backup(args)
         except Exception:
             parser.exit(1, "aurora: AuroraSQL backup refused; refusing legacy fallback; inspect source and destination manually.\n")
+
     if args.command == "db" and args.action == "migrate" and args.backend == "aurorasql":
         # Validate read-only CLI contracts before attempting configuration or
         # model imports. Never interpret a write flag as preview permission.
         if args.check and not args.dry_run:
             parser.exit(1, "aurora: --check requires --dry-run.\n")
+
         if args.explain and not args.dry_run:
             parser.exit(1, "aurora: --explain requires --dry-run.\n")
+
         if args.format == "json" and not args.dry_run:
             parser.exit(1, "aurora: --format json requires --dry-run.\n")
+
         if args.review_file:
             from aurora.database.cli_migrate_reviewed import run_reviewed_migration
+
             try:
                 return run_reviewed_migration(args)
             except Exception:
                 parser.exit(1, "aurora: Reviewed AuroraSQL migration refused; no legacy fallback; inspect review, models, journal and database state.\n")
+
         if not args.dry_run or args.apply or args.approve or args.approve_review or args.approve_sql or args.confirm:
             parser.exit(1, "aurora: AuroraSQL migration writes are not yet integrated; refusing legacy fallback.\n")
+
         from types import SimpleNamespace
         from aurora.database.cli_plan import run_plan
         plan_args = SimpleNamespace(config=args.config, database=args.database,
                                     model=args.model or [], models_config=args.models_config,
                                     format=args.format, check=args.check)
+
         try:
             return run_plan(plan_args)
         except Exception:
             parser.exit(1, "aurora: AuroraSQL migration preview refused; inspect configuration and schema manually.\n")
+
     if args.command == "db" and args.action == "plan" and args.backend == "aurorasql":
         review_values = (args.review_before, args.review_after, args.review_id, args.review_out)
+
         if any(value is not None for value in review_values) or args.review_ack is not None:
             if args.check or args.explain or args.model or args.format != "text":
                 parser.exit(1, "aurora: Review export cannot be combined with schema planning flags.\n")
+
             from aurora.database.cli_review_workflow import run_review_export
+
             try:
                 return run_review_export(args)
             except Exception:
                 parser.exit(1, "aurora: Read-only migration review refused; inspect snapshots, journal and destination.\n")
+
         from aurora.database.cli_plan import run_plan
+
         try:
             return run_plan(args)
         except (ValueError, TypeError, OSError, ImportError, AttributeError) as exc:
@@ -269,39 +314,52 @@ def main(argv: list[str] | None = None) -> int:
             parser.exit(1, f"aurora: AuroraSQL plan refused: {type(exc).__name__}; check configuration, model references, and database access.\n")
         except Exception:
             parser.exit(1, "aurora: AuroraSQL plan failed; inspect database access and schema manually.\n")
+
     if args.command == "db" and args.action == "history" and args.backend == "aurorasql":
         if args.history_file:
             parser.exit(1, "aurora: --history-file is for legacy history only.\n")
+
         if args.intents:
             from aurora.database.cli_intent_history import run_intent_history
+
             try:
                 return run_intent_history(args)
             except Exception:
                 parser.exit(1, "aurora: SQLite intent history refused; no legacy fallback.\n")
+
         from aurora.database.cli_history import run_history
+
         try:
             return run_history(args)
         except Exception:
             # Never print URLs, driver errors, or connection credentials.
             parser.exit(1, "aurora: AuroraSQL history refused; inspect database configuration and journal manually.\n")
+
     if args.command == "db" and args.action == "init" and args.backend == "aurorasql":
         from aurora.database.cli_init import run_init_check, run_init_apply
+
         try:
             if args.check:
                 if args.approve or args.confirm:
                     parser.exit(1, "aurora: --check cannot approve or execute initialization.\n")
+
                 return run_init_check(args)
+
             if os.environ.get("AURORA_ENV", "development").lower() == "production":
                 parser.exit(1, "aurora: Refusing AuroraSQL initialization in production.\n")
+
             return run_init_apply(args)
         except Exception:
             parser.exit(1, "aurora: AuroraSQL initialization preflight refused; inspect configuration and schema manually.\n")
+
     if args.command == "model" and args.action in ("register", "registered"):
         from aurora.database.cli_registration import register_model, registered_models
+
         try:
             if args.action == "register":
                 if os.environ.get("AURORA_ENV", "development").lower() == "production":
                     raise ValueError("Refusing to modify model manifest in production environment")
+
                 changed = register_model(args.reference, database=args.database, manifest=args.models_config)
                 print(("Registered " if changed else "Already registered: ") + args.reference + f" (database: {args.database})")
             else:
@@ -309,6 +367,7 @@ def main(argv: list[str] | None = None) -> int:
                 print("\n".join(refs) if refs else f"No models registered for database: {args.database}")
         except (ValueError, OSError) as exc:
             parser.exit(1, f"aurora: {exc}\n")
+
         return 0
     # Normalize grouped commands to the established, tested handlers.
     # No duplication of project modification logic.
@@ -316,19 +375,25 @@ def main(argv: list[str] | None = None) -> int:
         args.command = {"add": "create-app", "list": "list-apps", "show": "show-app"}[args.action]
     elif args.command in ("controller", "view", "model"):
         resource = args.command
+
         if getattr(args, "second", None) is not None:
             if args.app_option is not None:
                 parser.error("Specify the app either positionally or with --app, not both. Example: aurora controller add User --app blog")
+
             app_name, name = args.first, args.second
         else:
             app_name, name = args.app_option, args.first
+
             if args.action == "list" and args.first is not None and args.app_option is None:
                 app_name, name = args.first, None  # Legacy: resource list APP
+
         if args.action != "list" and not name:
             parser.error(f"{resource} {args.action} requires a component name. Example: aurora {resource} {args.action} "
                          + ("user" if resource == "view" else "User"))
+
         if args.action == "add" and os.environ.get("AURORA_ENV", "development").lower() == "production":
             parser.exit(1, "aurora: Refusing to modify project in production environment.\n")
+
         try:
             if args.action == "add":
                 if resource == "model":
@@ -340,12 +405,15 @@ def main(argv: list[str] | None = None) -> int:
                                    else create_shared_component(resource, name))
                 else:
                     destination = {"controller": create_controller, "view": create_view}[resource](app_name, name)
+
                 note = {"controller": " (route registered)", "view": " (routes unchanged)",
                         "model": " (database unchanged; import model explicitly)"}[resource]
+
                 if resource == "model" and backend == "aurorasql":
                     from aurora.database.cli_registration import register_generated_model
                     reference, _ = register_generated_model(destination, name)
                     note = f" (registered {reference}; database unchanged)"
+
                 print(f"Created {destination}" + note)
             elif args.action == "list":
                 entries = (list_components(resource, app_name) if app_name is not None
@@ -359,55 +427,70 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{resource.title()}: {info['name']}\nApp: {info['app']}\nPath: {info['path']}")
         except (OSError, ValueError) as exc:
             parser.exit(1, f"aurora: {exc}\n")
+
         return 0
+
     if args.command == "new":
         try:
             root = create_project(args.name, mvc=args.mvc, modular=args.modular)
         except (OSError, ValueError) as exc:
             parser.exit(1, f"aurora: {exc}\n")
+
         print(f"Created {root}\nRun: cd {args.name} && aurora run")
         return 0
+
     if args.command in ("create-app", "add-app"):
         if os.environ.get("AURORA_ENV", "development").lower() == "production":
             parser.exit(1, "aurora: Refusing to modify project in production environment.\n")
+
         try:
             destination = add_app(args.name)
         except (OSError, ValueError) as exc:
             parser.exit(1, f"aurora: {exc}\n")
+
         print(f"Created {destination}\nRoute: /{args.name}")
         return 0
+
     if args.command in ("create-controller", "create-view", "create-model"):
         if os.environ.get("AURORA_ENV", "development").lower() == "production":
             parser.exit(1, "aurora: Refusing to modify project in production environment.\n")
+
         try:
             action = {"create-controller": create_controller, "create-view": create_view,
                       "create-model": create_model}[args.command]
             destination = action(args.app, args.name)
         except (OSError, ValueError) as exc:
             parser.exit(1, f"aurora: {exc}\n")
+
         suffix = {"create-controller": " (route registered)",
                   "create-view": " (routes unchanged)",
                   "create-model": " (database unchanged; import model explicitly)"}[args.command]
         print(f"Created {destination}" + suffix)
         return 0
+
     if args.command == "list-apps":
         try:
             names = list_apps()
         except (OSError, ValueError) as exc:
             parser.exit(1, f"aurora: {exc}\n")
+
         print("\n".join(names) if names else "No apps found.")
         return 0
+
     if args.command == "show-app":
         try:
             info = show_app(args.name)
         except (OSError, ValueError) as exc:
             parser.exit(1, f"aurora: {exc}\n")
+
         print(f"App: {info['name']}\nPath: {info['path']}")
         print("Controllers: " + (", ".join(info["controllers"]) or "(none)"))
         print("Views: " + (", ".join(info["views"]) or "(none)"))
         return 0
+
     if not 1 <= args.port <= 65535:
         parser.error("--port must be between 1 and 65535")
+
     try:
         import uvicorn
     except ImportError:
@@ -415,23 +498,28 @@ def main(argv: list[str] | None = None) -> int:
     # Console-script launchers do not necessarily include the working directory
     # in sys.path. Uvicorn must be able to import app:app from the project.
     cwd = str(Path.cwd().resolve())
+
     if cwd in sys.path:
         sys.path.remove(cwd)
+
     sys.path.insert(0, cwd)
     # Check simple modules consistently with and without reload. Do not import
     # developer code during preflight; dotted modules remain Uvicorn-owned.
     module_name = args.application.partition(":")[0]
+
     if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", module_name):
         try:
             module_spec = find_spec(module_name)
         except (ImportError, ValueError, AttributeError):
             module_spec = None
+
         if module_spec is None:
             parser.exit(
                 1,
                 f"aurora: Cannot find application module '{module_name}'. "
                 f"Check the target '{args.application}' or run from your project directory.\n",
             )
+
     uvicorn.run(args.application, host=args.host, port=args.port, reload=not args.no_reload)
     return 0
 

@@ -28,10 +28,13 @@ def test_scopes_restore_previous_connection_even_after_failure():
 
     with Model.connection_scope(first):
         assert ScopedNote.legacy_query()._operations.connection is first
+
         with pytest.raises(ValueError, match="abort"):
             with Model.connection_scope(second):
                 assert ScopedNote.legacy_query()._operations.connection is second
+
                 raise ValueError("abort")
+
         assert ScopedNote.legacy_query()._operations.connection is first
 
     with pytest.raises(RuntimeError, match="No database"):
@@ -51,6 +54,7 @@ def test_contexts_are_isolated_without_changing_global_binding():
         a = pool.submit(inspect, first)
         b = pool.submit(inspect, second)
         assert a.result() is first
+
         assert b.result() is second
 
     with pytest.raises(RuntimeError, match="No database"):

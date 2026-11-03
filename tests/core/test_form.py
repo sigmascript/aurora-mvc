@@ -52,8 +52,10 @@ class TestForm(unittest.IsolatedAsyncioTestCase):
         for content_type in [None, "application/json", "multipart/form-data"]:
             with self.subTest(content_type=content_type):
                 request = self.make_request(b"title=Hello", content_type)
+
                 with self.assertRaises(HTTPException) as error:
                     await request.form()
+
                 self.assertEqual(error.exception.status_code, 415)
                 self.assertEqual(self.receive_calls, 0)
 
@@ -61,8 +63,10 @@ class TestForm(unittest.IsolatedAsyncioTestCase):
         for body in [b"title=\xff", b"title=%FF"]:
             with self.subTest(body=body):
                 request = self.make_request(body)
+
                 with self.assertRaises(HTTPException) as error:
                     await request.form()
+
                 self.assertEqual(error.exception.status_code, 400)
                 self.assertEqual(error.exception.detail, "Invalid form data")
 
@@ -71,11 +75,13 @@ class TestForm(unittest.IsolatedAsyncioTestCase):
             with self.subTest(count=count):
                 body = "&".join(f"field{i}=value" for i in range(count)).encode()
                 request = self.make_request(body)
+
                 if count == 1000:
                     self.assertEqual(len(await request.form()), count)
                 else:
                     with self.assertRaises(HTTPException) as error:
                         await request.form()
+
                     self.assertEqual(error.exception.status_code, 400)
 
     async def test_form_error_becomes_http_response(self):

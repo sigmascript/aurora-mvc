@@ -36,5 +36,6 @@ class TestMVCScaffold(unittest.TestCase):
     def test_mvc_refuses_overwrite(self):
         with tempfile.TemporaryDirectory() as temp:
             create_project('sample_mvc', directory=Path(temp), mvc=True)
+
             with self.assertRaises(FileExistsError):
                 create_project('sample_mvc', directory=Path(temp), mvc=True)

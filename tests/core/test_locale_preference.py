@@ -54,9 +54,12 @@ class LocalePreferenceTests(unittest.TestCase):
     def test_validation(self):
         with self.assertRaises(ValueError):
             Application(locale_cookie_name="preferred_language")
+
         with self.assertRaises(ValueError):
             Application(locales=["en"], default_locale="en", locale_cookie_name="bad;name")
+
         app = self.make_app()
+
         with self.assertRaises(ValueError):
             app.remember_locale(Response(), "fr")
 

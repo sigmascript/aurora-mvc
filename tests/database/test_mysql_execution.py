@@ -28,8 +28,10 @@ class FakeConnection:
     def execute_write(self, sql, parameters=None):
         if "INSERT INTO" in sql:
             self.status = "started"
+
         if "UPDATE" in sql:
             self.status = parameters["status"]
+
         self.events.append((sql, parameters))
         return 1
 
@@ -60,10 +62,14 @@ def test_mysql_post_ddl_failure_is_uncertain(monkeypatch):
         raise RuntimeError("failure after implicit commit")
 
     monkeypatch.setattr(mysql_init, "execute_create", failed_ddl)
+
     with pytest.raises(RuntimeError, match="implicit commit"):
         mysql_init.execute_mysql_init(connection, (Entry,), **kwargs)
+
     assert connection.status == "uncertain"
+
     assert "entry" in connection.tables
+
     assert any("INSERT INTO" in sql for sql, _ in connection.events)
 
 
@@ -74,6 +80,7 @@ def test_mysql_success_marks_applied(monkeypatch):
                         conn.tables.add(model.__table_name__))
     ids = mysql_init.execute_mysql_init(connection, (Entry,), **kwargs)
     assert len(ids) == 1
+
     assert connection.status == "applied"
 
 
@@ -81,6 +88,8 @@ def test_mysql_refuses_wrong_identity_before_journal(monkeypatch):
     connection = FakeConnection()
     kwargs = _prepare(monkeypatch, connection)
     kwargs["expected_identity"] = "wrong-server"
+
     with pytest.raises(RuntimeError, match="changed after approval"):
         mysql_init.execute_mysql_init(connection, (Entry,), **kwargs)
+
     assert not connection.events

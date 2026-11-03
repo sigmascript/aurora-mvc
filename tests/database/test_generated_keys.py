@@ -17,13 +17,18 @@ def test_generated_ids_defaults_and_scoped_updates():
         db.execute("CREATE TABLE task (id INTEGER PRIMARY KEY, title TEXT NOT NULL, "
                    "status TEXT NOT NULL, detail TEXT)")
         tasks = Task.using(db)
+
         with db.transaction():
             first = tasks.create(title="One")
             second = tasks.create(title="Two", detail=None)
             assert (first.id, second.id) == (1, 2)
+
             assert first.status == "new"
+
             assert tasks.first(where={"id": 1}).title == "One"
+
             assert tasks.update(values={"status": "done"}, where={"id": 2}) == 1
+
         assert tasks.first(where={"id": 2}).status == "done"
 
 
@@ -32,14 +37,19 @@ def test_invalid_values_rejected_before_writes():
         db.execute("CREATE TABLE task (id INTEGER PRIMARY KEY, title TEXT NOT NULL, "
                    "status TEXT NOT NULL, detail TEXT)")
         tasks = Task.using(db)
+
         with pytest.raises(ValueError, match="length"):
             tasks.create(title="x" * 21)
+
         with pytest.raises(TypeError, match="Expected str"):
             tasks.create(title=10)
+
         with pytest.raises(ValueError, match="Non-nullable"):
             tasks.create(title=None)
+
         with pytest.raises(TypeError, match="Boolean"):
             tasks.create(id=True, title="no")
+
         assert tasks.all() == []
 
 

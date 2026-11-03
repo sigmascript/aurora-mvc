@@ -17,14 +17,18 @@ def test_migration_status_reports_empty_and_applied_history():
     with connect("sqlite:///:memory:") as db:
         with pytest.raises(RuntimeError, match="missing"):
             migration_status(db)
+
         initialize_history(db, confirm=True)
         initial = migration_status(db)
         assert (initial.total, initial.applied, initial.unresolved) == (0, 0, 0)
+
         assert initial.ready_for_new_create and not initial.findings
+
         approval = prepare_create(db, StatusNote)
         execute_create_recorded(db, StatusNote, approval, confirm=True)
         status = migration_status(db)
         assert (status.total, status.applied, status.unresolved) == (1, 1, 0)
+
         assert status.ready_for_new_create
 
 
@@ -40,5 +44,7 @@ def test_migration_status_blocks_uncertain_history():
         )
         status = migration_status(db)
         assert status.total == 1 and status.unresolved == 1
+
         assert not status.ready_for_new_create
+
         assert any(f.kind == "unresolved" for f in status.findings)

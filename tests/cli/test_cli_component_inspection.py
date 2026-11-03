@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 from aurora.cli import create_project, main, list_components, show_component
 
+
 class ComponentInspectTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -15,8 +16,10 @@ class ComponentInspectTests(unittest.TestCase):
 
     def call(self, *argv):
         buf = io.StringIO()
+
         with patch('pathlib.Path.cwd', return_value=self.root), contextlib.redirect_stdout(buf):
             self.assertEqual(main(list(argv)), 0)
+
         return buf.getvalue()
 
     def test_controller_list(self):
@@ -38,6 +41,7 @@ class ComponentInspectTests(unittest.TestCase):
         with patch('pathlib.Path.cwd',return_value=self.root),contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit) as caught:
                 main(['controller','show','blog','missing'])
+
         self.assertEqual(caught.exception.code,1)
 
     def test_no_imports_required(self):
@@ -51,8 +55,10 @@ class ComponentInspectTests(unittest.TestCase):
     def test_symlink_not_followed(self):
         with tempfile.TemporaryDirectory() as outside:
             link=self.root/'apps/blog/controllers/external.py'
+
             try: link.symlink_to(Path(outside)/'external.py')
             except (OSError,NotImplementedError): self.skipTest('symlink unavailable')
+
             self.assertNotIn('external',list_components('controller','blog',directory=self.root))
 
 if __name__=='__main__': unittest.main()

@@ -37,8 +37,10 @@ class MiddlewareContractTests(unittest.TestCase):
         @app.add_middleware
         async def middleware(request, call_next):
             response = await call_next(request)
+
             with self.assertRaisesRegex(RuntimeError, "only be called once"):
                 await call_next(request)
+
             return response
 
         def handler(request):
@@ -57,6 +59,7 @@ class MiddlewareContractTests(unittest.TestCase):
         async def middleware(request, call_next):
             with self.assertRaisesRegex(ValueError, "original request"):
                 await call_next(object())
+
             return await call_next(request)
 
         app.add_route("/", lambda request: calls.append("handler") or Response("ok"))

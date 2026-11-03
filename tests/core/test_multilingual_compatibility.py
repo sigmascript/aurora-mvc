@@ -30,6 +30,7 @@ class MultilingualCompatibilityTests(unittest.TestCase):
         for path in ("/articles/hello", "/fr/articles/hello"):
             with self.subTest(path=path):
                 self.assertEqual(asyncio.run(get(self.app, path))[0], 404)
+
         for language in ("en", "ku", "ar"):
             self.assertEqual(asyncio.run(get(self.app, f"/{language}/articles/hello"))[0], 200)
 
@@ -43,6 +44,7 @@ class MultilingualCompatibilityTests(unittest.TestCase):
         url = self.app.localized_url_for("article", language="ku", slug="هەواڵی نوێ")
         self.assertTrue(url.startswith("/ku/articles/"))
         self.assertIn("%", url)
+
         for slug in ("../admin", "one/two", ".."):
             with self.subTest(slug=slug):
                 with self.assertRaises(ValueError):
@@ -62,6 +64,7 @@ class MultilingualCompatibilityTests(unittest.TestCase):
         plain.add_route("/articles/{slug}", lambda req, slug: Response(slug), name="article")
         self.assertEqual(asyncio.run(get(plain, "/articles/hello")), (200, "hello"))
         self.assertEqual(plain.url_for("article", slug="hello"), "/articles/hello")
+
         with self.assertRaises(RuntimeError):
             plain.localized_url_for("article", language="en", slug="hello")
 

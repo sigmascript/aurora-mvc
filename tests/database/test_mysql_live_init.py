@@ -21,19 +21,25 @@ from tests.database.test_init_validation import Parent, Child
 @contextmanager
 def _scratch():
     url = os.environ.get("AURORASQL_MYSQL_TEST_URL")
+
     if not url:
         pytest.skip("AURORASQL_MYSQL_TEST_URL not configured")
+
     parsed = urlsplit(url)
+
     if (parsed.scheme != "mysql+pymysql" or
             unquote(parsed.path.lstrip("/")) != "aurorasql_alpha9_scratch"):
         pytest.fail("MySQL live tests require the dedicated aurorasql_alpha9_scratch database")
+
     with connect(url) as connection:
         tables = connection.fetch_all(
             "SELECT TABLE_NAME AS name FROM information_schema.TABLES "
             "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE'"
         )
+
         if tables:
             pytest.fail("MySQL scratch database must be empty before each test")
+
         try:
             yield connection, parsed
         finally:
@@ -55,15 +61,18 @@ def test_live_mysql_parent_child_and_replay_refusal():
         models = validate_init_models((Child, Parent), dialect="mysql")
         ids = execute_mysql_init(connection, models, **_approve(connection, parsed, models))
         assert len(ids) == 2
+
         statuses = connection.fetch_all(
             "SELECT table_name, status FROM aurorasql_schema_history ORDER BY table_name"
         )
         assert [(row["table_name"], row["status"]) for row in statuses] == [
             ("alpha9_child", "applied"), ("alpha9_parent", "applied")]
+
         with pytest.raises(Exception):
             connection.execute_write(
                 "INSERT INTO `alpha9_child` (`id`, `parent_id`) VALUES (1, 999)"
             )
+
         with pytest.raises(RuntimeError, match="not empty"):
             execute_mysql_init(connection, models, **_approve(connection, parsed, models))
 
@@ -79,13 +88,16 @@ def test_live_mysql_failure_keeps_uncertain_journal(monkeypatch):
     with _scratch() as (connection, parsed):
         with monkeypatch.context() as patch:
             patch.setattr(mysql_init, "execute_create", fail_after_ddl)
+
             with pytest.raises(RuntimeError, match="injected post-DDL failure"):
                 execute_mysql_init(connection, (Entry,),
                                    **_approve(connection, parsed, (Entry,)))
+
         status = connection.fetch_first(
             "SELECT status FROM aurorasql_schema_history WHERE table_name='entry'"
         )
         assert status["status"] == "uncertain"
+
         with pytest.raises(RuntimeError, match="not empty"):
             execute_mysql_init(connection, (Entry,),
                                **_approve(connection, parsed, (Entry,)))

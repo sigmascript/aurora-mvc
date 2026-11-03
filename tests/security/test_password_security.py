@@ -28,6 +28,7 @@ class TestPasswordSecurity(unittest.TestCase):
             with self.subTest(value=type(value).__name__):
                 with self.assertRaises(ValueError):
                     hash_password(value)
+
                 self.assertFalse(verify_password(value, "invalid"))
 
     def test_malformed_hash_is_rejected_without_derivation(self):

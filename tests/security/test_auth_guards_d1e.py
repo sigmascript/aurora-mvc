@@ -39,9 +39,11 @@ class AuthSecurityCloseoutTests(unittest.TestCase):
             @login_required('auth.signin', authenticated=authenticated, with_next=True)
             def post(self):
                 return 'private'
+
         for method in ('POST', 'PUT', 'PATCH', 'DELETE'):
             with self.subTest(method=method), self.assertRaises(HTTPException) as ctx:
                 Private(self.request(method)).post()
+
             self.assertEqual(ctx.exception.status_code, 403)
 
     def test_nested_encoding_and_control_characters_are_rejected(self):

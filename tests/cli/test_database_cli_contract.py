@@ -13,6 +13,7 @@ class DatabaseCommandContractTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(SystemExit) as result:
                 with contextlib.redirect_stdout(io.StringIO()):
                     main(['db', name, '--help'])
+
             self.assertEqual(result.exception.code, 0)
 
     def test_deprecated_commands_are_rejected(self):
@@ -22,6 +23,7 @@ class DatabaseCommandContractTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(SystemExit) as result:
                 with contextlib.redirect_stderr(io.StringIO()):
                     main(['db', name])
+
             self.assertEqual(result.exception.code, 2)
 
 
@@ -32,22 +34,28 @@ class ModelFreePlanTests(unittest.TestCase):
         import sqlite3
         import tempfile
         from pathlib import Path
+
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             db = root / 'existing.sqlite3'
+
             with contextlib.closing(sqlite3.connect(db)) as connection:
                 connection.execute('CREATE TABLE articles (id INTEGER PRIMARY KEY)')
                 connection.commit()
+
             config = root / 'aurora_databases.json'
             config.write_text(json.dumps({'databases': {'default': {'url': f'sqlite:///{db.as_posix()}'}}}))
             missing = root / 'missing_models.json'
             out = io.StringIO()
+
             with contextlib.redirect_stdout(out):
                 code = main(['db', 'plan', '--config', str(config), '--models-config', str(missing)])
+
             self.assertEqual(code, 0)
             self.assertIn('Schema readable; 1 user table(s).', out.getvalue())
             self.assertIn('Safety warnings:', out.getvalue())
             self.assertIn('cannot be evaluated', out.getvalue())
+
             with contextlib.closing(sqlite3.connect(db)) as connection:
                 self.assertEqual(connection.execute("SELECT count(*) FROM sqlite_master WHERE type='table'").fetchone()[0], 1)
 
@@ -56,6 +64,7 @@ class ModelFreePlanTests(unittest.TestCase):
         import sqlite3
         import tempfile
         from pathlib import Path
+
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             db = root / 'existing.sqlite3'
@@ -63,8 +72,10 @@ class ModelFreePlanTests(unittest.TestCase):
             config = root / 'aurora_databases.json'
             config.write_text(json.dumps({'databases': {'default': {'url': f'sqlite:///{db.as_posix()}'}}}))
             out = io.StringIO()
+
             with contextlib.redirect_stdout(out):
                 code = main(['db', 'plan', '--config', str(config), '--models-config', str(root / 'absent.json'), '--format', 'json', '--check'])
+
             self.assertEqual(code, 3)
             self.assertEqual(json.loads(out.getvalue())['schema_status'], 'UNVERIFIED')
 
@@ -73,6 +84,7 @@ class ModelFreePlanTests(unittest.TestCase):
         import sqlite3
         import tempfile
         from pathlib import Path
+
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             db = root / 'existing.sqlite3'
@@ -81,6 +93,8 @@ class ModelFreePlanTests(unittest.TestCase):
             config.write_text(json.dumps({'databases': {'default': {'url': f'sqlite:///{db.as_posix()}'}}}))
             manifest = root / 'aurora_models.json'
             manifest.write_text('not json')
+
             with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
                 main(['db', 'plan', '--config', str(config), '--models-config', str(manifest)])
+
             self.assertEqual(caught.exception.code, 1)

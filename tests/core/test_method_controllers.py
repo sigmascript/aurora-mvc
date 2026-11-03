@@ -31,12 +31,15 @@ class TestMethodControllers(unittest.TestCase):
 
         with self.assertRaises(HTTPException) as caught:
             ReadOnly.dispatch(Request({"method": "DELETE", "path": "/"}))
+
         self.assertEqual(caught.exception.status_code, 405)
 
     def test_reject_non_controller_or_empty_controller(self):
         app = Application()
+
         with self.assertRaises(TypeError):
             app.route("/", lambda request: "hello")
+
         with self.assertRaises(ValueError):
             app.route("/", Controller)
 

@@ -15,6 +15,7 @@ class ResponseBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
         async def collect(message):
             messages.append(message)
+
             if send is not None:
                 await send(message)
 
@@ -65,6 +66,7 @@ class ResponseBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(OSError):
             await self.invoke(app, broken_send)
+
         self.assertEqual(calls, ["http.response.start"])
 
     async def test_body_transport_failure_does_not_send_second_start(self):
@@ -74,11 +76,13 @@ class ResponseBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
         async def broken_send(message):
             calls.append(message["type"])
+
             if message["type"] == "http.response.body":
                 raise OSError("connection lost")
 
         with self.assertRaises(OSError):
             await self.invoke(app, broken_send)
+
         self.assertEqual(calls, ["http.response.start", "http.response.body"])
 
 

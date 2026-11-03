@@ -88,8 +88,10 @@ class TestSessionStorage(unittest.IsolatedAsyncioTestCase):
         token = store.commit(None, None, {'user': 1})
         data, version = store.load(token)
         store.commit(token, version, {}, invalidate=True)
+
         with self.assertRaises(SessionConflict):
             store.commit(token, version, {'user': 1})
+
         self.assertIsNone(store.load(token))
 
     async def test_stale_writer_cannot_overwrite_newer_data(self):
@@ -97,8 +99,10 @@ class TestSessionStorage(unittest.IsolatedAsyncioTestCase):
         token = store.commit(None, None, {'n': 1})
         _, version = store.load(token)
         store.commit(token, version, {'n': 2})
+
         with self.assertRaises(SessionConflict):
             store.commit(token, version, {'n': 3})
+
         self.assertEqual(store.load(token)[0]['n'], 2)
 
     async def test_storage_error_fails_closed(self):
@@ -112,5 +116,6 @@ class TestSessionStorage(unittest.IsolatedAsyncioTestCase):
     async def test_opt_in_requires_configuration(self):
         with self.assertRaises(ValueError):
             Application(sessions=True)
+
         with self.assertRaises(ValueError):
             Application(session_settings=self.settings)

@@ -24,9 +24,11 @@ class ScaffoldNamingAndAssetsTests(unittest.TestCase):
     def test_app_name_validation_and_pascalcase(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = create_project("multi", directory=Path(tmp), modular=True)
+
             for invalid in ("2news", "my-app", "News", "_news", "news__feed", "class"):
                 with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                     add_app(invalid, directory=root)
+
             add_app("news_feed", directory=root)
             source = (root / "apps/news_feed/controllers/NewsFeed.py").read_text()
             self.assertIn("class NewsFeed(Controller)", source)
@@ -35,9 +37,11 @@ class ScaffoldNamingAndAssetsTests(unittest.TestCase):
     def test_production_guard(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = create_project("multi", directory=Path(tmp), modular=True)
+
             with patch("aurora.cli.Path.cwd", return_value=root), patch.dict(os.environ, {"AURORA_ENV": "production"}):
                 with self.assertRaises(SystemExit) as caught:
                     main(["create-app", "news"])
+
             self.assertEqual(caught.exception.code, 1)
             self.assertFalse((root / "apps/news").exists())
 
@@ -53,6 +57,7 @@ class ScaffoldNamingAndAssetsTests(unittest.TestCase):
             self.assertEqual(headers[b"content-type"], b"text/css")
             status, body, _ = asyncio.run(request(app, "/statics/site.css", "HEAD"))
             self.assertEqual((status, body), (200, b""))
+
             for path in ("/statics/.secret", "/statics/../other", "/statics/%2e%2e/other"):
                 with self.subTest(path=path):
                     self.assertEqual(asyncio.run(request(app, path))[0], 404)
@@ -68,6 +73,7 @@ class ScaffoldNamingAndAssetsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = create_project("multi", directory=Path(tmp), modular=True)
             (root / "apps" / "News").mkdir()
+
             with self.assertRaises(FileExistsError):
                 add_app("news", directory=root)
 
@@ -85,5 +91,6 @@ class ScaffoldNamingAndAssetsTests(unittest.TestCase):
             (root / "site.css").write_text("ok", encoding="utf-8")
             app = Aurora(static_directory=root, static_url="/static")
             self.assertEqual(asyncio.run(request(app, "/static/site.css"))[0], 200)
+
             with self.assertRaises(ValueError):
                 Aurora(static_directory=root, statics_directory=root)

@@ -15,7 +15,9 @@ from aurora.database import Model, column, connect, create_table
 def test_live_chained_joins_projection_filters_and_legacy_shape(dialect, environment):
     if os.getenv("AURORASQL_TEST_ALLOW_DDL") != "YES_DISPOSABLE_DB":
         pytest.skip("Requires explicit disposable-database DDL opt-in")
+
     url = os.getenv(environment)
+
     if not url:
         pytest.skip(f"{environment} not configured")
 
@@ -44,7 +46,9 @@ def test_live_chained_joins_projection_filters_and_legacy_shape(dialect, environ
 
     with connect(url) as db:
         assert db.dialect == dialect
+
         created = []
+
         try:
             for model in (Author, Book, Rating):
                 create_table(db, model)
@@ -87,7 +91,9 @@ def test_live_chained_joins_projection_filters_and_legacy_shape(dialect, environ
                 {"left__title": "Second", "right1__name": "Noor", "right2__score": 5},
                 {"left__title": "First", "right1__name": "Mira", "right2__score": 4},
             ]
+
             assert chained.count() == 2
+
             paged = chained.order_by(f"{ratings_table}.score", descending=True)
             assert paged.limit(1).offset(1).all() == [
                 {"left__title": "First", "right1__name": "Mira", "right2__score": 4}
@@ -98,17 +104,21 @@ def test_live_chained_joins_projection_filters_and_legacy_shape(dialect, environ
                 f"{ratings_table}.score--gt": 3,
             })
             assert filtered.count() == 1
+
             assert filtered.first() == {
                 "left__title": "First", "right1__name": "Mira", "right2__score": 4
             }
+
             assert chained.where_joined({
                 f"{authors_table}.name": "Mira' OR 1=1 --"
             }).count() == 0
 
             with pytest.raises(ValueError):
                 chained.select(f"{authors_table}.unknown")
+
             with pytest.raises(ValueError):
                 chained.order_by(f"{ratings_table}.score;DROP")
+
             with pytest.raises(TypeError, match="Unknown column"):
                 chained.where_joined({f"{authors_table}.unknown": "Mira"})
         finally:

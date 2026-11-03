@@ -41,6 +41,7 @@ class ResponsePreparationContractTests(unittest.IsolatedAsyncioTestCase):
 
         async def send(message):
             messages.append(message)
+
             if send_hook is not None:
                 await send_hook(message)
 
@@ -79,11 +80,13 @@ class ResponsePreparationContractTests(unittest.IsolatedAsyncioTestCase):
 
         async def fail_on_body(message):
             calls.append(message["type"])
+
             if message["type"] == "http.response.body":
                 raise OSError("transport closed")
 
         with self.assertRaisesRegex(OSError, "transport closed"):
             await self.invoke(CountingResponse(), send_hook=fail_on_body)
+
         self.assertEqual(calls, ["http.response.start", "http.response.body"])
 
 

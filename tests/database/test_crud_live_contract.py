@@ -18,7 +18,9 @@ from aurora.database import Model, column, connect, create_table
 def test_crud_result_shapes_and_generated_keys(dialect, environment):
     if os.getenv("AURORASQL_TEST_ALLOW_DDL") != "YES_DISPOSABLE_DB":
         pytest.skip("Requires explicit disposable-database DDL opt-in")
+
     url = os.getenv(environment)
+
     if not url:
         pytest.skip(f"{environment} not configured")
 
@@ -32,7 +34,9 @@ def test_crud_result_shapes_and_generated_keys(dialect, environment):
 
     with connect(url) as db:
         assert db.dialect == dialect
+
         created_table = False
+
         try:
             create_table(db, Entry)
             created_table = True
@@ -41,8 +45,11 @@ def test_crud_result_shapes_and_generated_keys(dialect, environment):
             first = ops.create(title="First", active=True)
             second = ops.create(title="Second", active=False)
             assert isinstance(first, Entry)
+
             assert isinstance(second, Entry)
+
             assert type(first.id) is int and first.id > 0
+
             assert type(second.id) is int and second.id > first.id
 
             rows = ops.read(order_by={"id": "ASC"})
@@ -50,21 +57,29 @@ def test_crud_result_shapes_and_generated_keys(dialect, environment):
                 {"id": first.id, "title": "First", "active": True},
                 {"id": second.id, "title": "Second", "active": False},
             ]
+
             assert all(type(row["active"]) is bool for row in rows)
+
             assert ops.read({"id": -1}) == []
 
             assert ops.update(values={"title": "Changed"}, where={"id": first.id}) == 1
+
             assert ops.update(values={"title": "Missing"}, where={"id": -1}) == 0
+
             assert ops.read({"id": first.id})[0]["title"] == "Changed"
 
             with pytest.raises(RuntimeError, match="confirm=True"):
                 ops.update(values={"title": "Unsafe"})
+
             with pytest.raises(RuntimeError, match="confirm=True"):
                 ops.delete()
 
             assert ops.delete(where={"id": second.id}) == 1
+
             assert ops.delete(where={"id": second.id}) == 0
+
             assert ops.delete(where={"id": first.id}) == 1
+
             assert ops.read() == []
         finally:
             if created_table:

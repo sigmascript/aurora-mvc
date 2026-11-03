@@ -34,6 +34,7 @@ class ReturnUrlTests(unittest.TestCase):
         unsafe = ("https://evil.example/", "//evil.example/", "/%2f%2fevil.example/",
                   "/%252f%252fevil.example/", "\\evil.example", "/%5c\\evil",
                   "/%00bad", "/%250dbad", "/notes#fragment", "notes/new", "")
+
         for value in unsafe:
             with self.subTest(value=value):
                 self.assertEqual(safe_next(value, "/notes"), "/notes")
@@ -77,8 +78,10 @@ class ReturnUrlTests(unittest.TestCase):
             @login_required("auth.signin", authenticated=logged_in, with_next=True)
             def post(self):
                 return "secret"
+
         with self.assertRaises(HTTPException) as ctx:
             Post(self.request(method="POST")).post()
+
         self.assertEqual(ctx.exception.status_code, 403)
 
 

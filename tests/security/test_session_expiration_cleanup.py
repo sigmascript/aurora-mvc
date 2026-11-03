@@ -20,9 +20,11 @@ class SessionCleanupTests(unittest.TestCase):
             old1 = self.store.commit(None, None, {'id': 1}, lifetime=10)
             old2 = self.store.commit(None, None, {'id': 2}, lifetime=20)
             active = self.store.commit(None, None, {'id': 3}, lifetime=100)
+
         self.assertEqual(self.store.cleanup_expired(now=130, limit=1), 1)
         self.assertEqual(self.store.cleanup_expired(now=130, limit=1), 1)
         self.assertEqual(self.store.cleanup_expired(now=130, limit=1), 0)
+
         with patch('aurora.security.sessions.time.time', return_value=130):
             self.assertIsNone(self.store.load(old1))
             self.assertIsNone(self.store.load(old2))
@@ -36,10 +38,12 @@ class SessionCleanupTests(unittest.TestCase):
     def test_cleanup_does_not_remove_boundary_future_session(self):
         with patch('aurora.security.sessions.time.time', return_value=100):
             token = self.store.commit(None, None, {'x': 1}, lifetime=30)
+
         self.assertEqual(self.store.cleanup_expired(now=129), 0)
         self.assertEqual(self.store.cleanup_expired(now=130), 1)
 
     def test_cleanup_uses_existing_session_schema(self):
         with closing(sqlite3.connect(self.store.path)) as db:
             columns = [row[1] for row in db.execute('PRAGMA table_info(aurora_sessions)')]
+
         self.assertEqual(columns, ['token_hash', 'data', 'expires_at', 'version'])

@@ -16,8 +16,10 @@ app = Application(
 @app.add_middleware
 async def locale_header(request, call_next):
     response = await call_next(request)
+
     if request.locale is not None:
         response.headers["Content-Language"] = request.locale
+
     return response
 
 
@@ -36,6 +38,7 @@ def switch_article(request, language, id):
     # arbitrary client-provided redirect target. The route id is a shared key.
     if language not in app.locales:
         raise HTTPException(404, "Unsupported language")
+
     target = app.localized_url_for("article", language=language, id=id)
     response = RedirectResponse(target, status_code=303)
     return app.remember_locale(response, language, secure=False)  # local HTTP only
@@ -44,6 +47,7 @@ def switch_article(request, language, id):
 def switch_home(request, language):
     if language not in app.locales:
         raise HTTPException(404, "Unsupported language")
+
     target = app.localized_url_for("home", language=language)
     response = RedirectResponse(target, status_code=303)
     return app.remember_locale(response, language, secure=False)  # local HTTP only

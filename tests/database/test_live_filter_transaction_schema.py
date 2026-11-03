@@ -19,7 +19,9 @@ from aurora.database import Model, column, connect, create_table, schema_snapsho
 def test_live_filter_transaction_and_schema(dialect, env):
     if os.environ.get("AURORASQL_TEST_ALLOW_DDL") != "YES_DISPOSABLE_DB":
         pytest.skip("Requires explicit disposable-database opt-in")
+
     url = os.environ.get(env)
+
     if not url:
         pytest.skip(f"{env} not configured")
 
@@ -31,30 +33,42 @@ def test_live_filter_transaction_and_schema(dialect, env):
         "score": column(int),
     })
     quoted = f"`{table}`" if dialect == "mysql" else f'"{table}"'
+
     with connect(url) as db:
         created = False
+
         try:
             create_table(db, Probe)
             created = True
             ops = Probe.using(db)
+
             with db.transaction():
                 a = ops.create(name="alpha", score=10)
                 b = ops.create(name="beta", score=20)
                 c = ops.create(name="gamma", score=30)
+
             query = {"score--ge": 10, "$or": [{"id": a.id}, {"name": "beta"}]}
             assert {item.name for item in ops.legacy_query(query).all()} == {"alpha", "beta"}
+
             assert ops.update(values={"score": 25}, where={"id": b.id}) == 1
+
             assert ops.first(where={"id": b.id}).score == 25
+
             with pytest.raises(RuntimeError, match="intentional rollback"):
                 with db.transaction():
                     ops.delete(where={"id": c.id})
                     raise RuntimeError("intentional rollback")
+
             assert ops.first(where={"id": c.id}) is not None
+
             assert len(ops.legacy_query({"score--between": [10, 30]}).all()) == 3
+
             snapshot = schema_snapshot(Probe, dialect=dialect)
             assert snapshot is not None
+
             with pytest.raises((TypeError, ValueError)):
                 ops.delete(where={"$or": []})
+
             assert len(ops.all()) == 3
         finally:
             if created:

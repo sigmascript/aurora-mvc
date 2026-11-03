@@ -33,42 +33,57 @@ def validate_migration_plan(plan):
     """Fail closed on malformed plans; validation does not approve execution."""
     keys = {"format", "id", "dialect", "before_fingerprint", "after_fingerprint",
             "operations", "execution_allowed"}
+
     if not isinstance(plan, dict) or set(plan) != keys or plan["format"] != _FORMAT:
         raise ValueError("Invalid migration plan format")
+
     if not isinstance(plan["id"], str) or not _IDENTIFIER.fullmatch(plan["id"]):
         raise ValueError("Invalid migration identifier")
+
     if plan["dialect"] not in ("sqlite", "mysql", "postgresql"):
         raise ValueError("Invalid migration dialect")
+
     for key in ("before_fingerprint", "after_fingerprint"):
         if not isinstance(plan[key], str) or not re.fullmatch(r"[0-9a-f]{64}", plan[key]):
             raise ValueError("Invalid schema fingerprint")
+
     if plan["execution_allowed"] is not False or not isinstance(plan["operations"], list):
         raise ValueError("Migration plans are review-only")
+
     for operation in plan["operations"]:
         if not isinstance(operation, dict) or set(operation) != {
             "kind", "table", "column", "risk", "requires_review"
         }:
             raise ValueError("Invalid migration operation")
+
         kind = operation["kind"]
+
         if kind not in _ORDER or operation["risk"] not in _RISK:
             raise ValueError("Unsupported migration operation")
+
         if not isinstance(operation["table"], str) or not _IDENTIFIER.fullmatch(operation["table"]):
             raise ValueError("Invalid table identifier")
+
         column = operation["column"]
+
         if kind in ("added_table", "removed_table"):
             if column is not None:
                 raise ValueError("Table operation cannot name a column")
         elif not isinstance(column, str) or not _IDENTIFIER.fullmatch(column):
             raise ValueError("Invalid column identifier")
+
         if operation["requires_review"] is not True:
             raise ValueError("Every operation requires review")
+
     return plan
 
 
 def migration_plan(before, after, *, migration_id):
     """Compare snapshots into an ordered, read-only migration proposal."""
+
     if not isinstance(migration_id, str) or not _IDENTIFIER.fullmatch(migration_id):
         raise ValueError("Invalid migration identifier")
+
     changes = compare_snapshots(before, after)
     operations = sorted(({
         "kind": item["kind"], "table": item["table"], "column": item["column"],

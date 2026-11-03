@@ -31,7 +31,9 @@ def test_generated_project_alias_plan_from_external_directory(tmp_path, layout):
         mvc=layout == "mvc", modular=layout == "modular",
     )
     assert (project / "aurora_databases.json").is_file()
+
     assert (project / "aurora_models.json").is_file()
+
     assert not (project / "data.sqlite3").exists()
 
     (project / "acceptance_model.py").write_text(
@@ -52,6 +54,7 @@ def test_generated_project_alias_plan_from_external_directory(tmp_path, layout):
 
     with sqlite3.connect(project / "archive.sqlite3") as database:
         database.execute("CREATE TABLE entry (id INTEGER PRIMARY KEY)")
+
     before = (project / "archive.sqlite3").read_bytes()
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
@@ -60,17 +63,24 @@ def test_generated_project_alias_plan_from_external_directory(tmp_path, layout):
     plan = _run(elsewhere, "db", "plan", "--config", config,
                 "--database", "archive", "--format", "json")
     assert plan.returncode == 0, plan.stderr
+
     report = json.loads(plan.stdout)
     assert report["backend"] == "aurorasql"
+
     assert report["database_alias"] == "archive"
+
     assert report["advisory_only"] is True
+
     assert (project / "archive.sqlite3").read_bytes() == before
+
     assert not (project / "data.sqlite3").exists()
 
     missing = _run(elsewhere, "db", "plan", "--config", config,
                    "--database", "default", "--format", "json")
     assert missing.returncode != 0
+
     assert not (project / "data.sqlite3").exists()
+
     assert (project / "archive.sqlite3").read_bytes() == before
 
 
@@ -94,5 +104,7 @@ def test_generated_project_init_preflight_never_creates_database(tmp_path, layou
     result = _run(elsewhere, "db", "init", "--check", "--config",
                   str(project / "aurora_databases.json"))
     assert result.returncode == 0, result.stderr
+
     assert "MISSING_DATABASE" in result.stdout
+
     assert not (project / "data.sqlite3").exists()

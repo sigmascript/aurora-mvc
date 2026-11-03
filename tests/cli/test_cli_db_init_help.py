@@ -10,9 +10,11 @@ from aurora.cli import main
 class DatabaseInitHelpTests(unittest.TestCase):
     def help_output(self, *args):
         stream = io.StringIO()
+
         with contextlib.redirect_stdout(stream):
             with self.assertRaises(SystemExit) as caught:
                 main([*args, "--help"])
+
         self.assertEqual(caught.exception.code, 0)
         return stream.getvalue()
 
@@ -28,6 +30,7 @@ class DatabaseInitHelpTests(unittest.TestCase):
 
     def test_init_help_explains_safety_and_options(self):
         output = self.help_output("db", "init")
+
         for expected in ("--config", "--database", "--model", "--models-config",
                          "already initialized", "never migrates", "registered models", "Examples:"):
             self.assertIn(expected, output)

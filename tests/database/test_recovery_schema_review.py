@@ -27,6 +27,7 @@ def test_matching_columns_do_not_mutate_history():
         setup(db)
         create_table(db, ReviewProbe)
         assert review_recovery_schema(db, "review-probe", ReviewProbe) == ()
+
         assert list_history(db)[0].status == "uncertain"
 
 
@@ -35,6 +36,7 @@ def test_missing_table_is_reported_without_changes():
         setup(db)
         findings = review_recovery_schema(db, "review-probe", ReviewProbe)
         assert [finding.kind for finding in findings] == ["table_missing"]
+
         assert list_history(db)[0].status == "uncertain"
 
 
@@ -44,4 +46,5 @@ def test_type_and_unique_mismatches_are_reported():
         db.execute_write('CREATE TABLE "review_probe" (id INTEGER PRIMARY KEY, title INTEGER)')
         findings = review_recovery_schema(db, "review-probe", ReviewProbe)
         assert {finding.kind for finding in findings} >= {"type_mismatch", "unique_missing"}
+
         assert list_history(db)[0].status == "uncertain"

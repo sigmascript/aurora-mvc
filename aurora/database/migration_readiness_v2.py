@@ -17,7 +17,9 @@ class MigrationReadiness:
 def assess_sqlite_migration_readiness(connection, review, *, reviewed_sha256):
     """Read-only readiness report; not an authorization or lock."""
     assessment = assess_execution_scope(review, reviewed_sha256=reviewed_sha256)
+
     if assessment.dialect != 'sqlite':
         raise ValueError('SQLite journal cannot assess a different dialect')
+
     blockers = (*assessment.blockers, *assess_intent_journal(connection))
     return MigrationReadiness(assessment.migration_id, assessment.dialect, blockers)

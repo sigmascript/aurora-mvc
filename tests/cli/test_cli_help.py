@@ -8,8 +8,10 @@ from aurora.cli import main
 class CLIHelpTests(unittest.TestCase):
     def capture(self, *args):
         output = io.StringIO()
+
         with contextlib.redirect_stdout(output), self.assertRaises(SystemExit) as raised:
             main(list(args))
+
         self.assertEqual(raised.exception.code, 0)
         return output.getvalue()
 
@@ -17,6 +19,7 @@ class CLIHelpTests(unittest.TestCase):
         output = self.capture('-h')
         self.assertIn('{new,app,controller,view,model,db,run}', output)
         self.assertIn('db                  Inspect databases', output)
+
         for old in ('create-app', 'add-app', 'list-apps', 'show-app', 'create-controller', 'create-view'):
             self.assertNotIn(old, output)
 

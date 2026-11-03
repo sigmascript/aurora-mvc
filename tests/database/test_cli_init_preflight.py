@@ -23,18 +23,24 @@ def test_missing_file_never_created(tmp_path):
     _setup(tmp_path)
     result = _run(tmp_path, "--check", "--model", "models:Item")
     assert result.returncode == 0, result.stderr
+
     assert json.loads(result.stdout)["status"] == "MISSING_DATABASE"
+
     assert not (tmp_path / "new.sqlite3").exists()
 
 
 def test_existing_unknown_schema_refused_unchanged(tmp_path):
     _setup(tmp_path)
     db = tmp_path / "new.sqlite3"
+
     with sqlite3.connect(db) as con:
         con.execute("CREATE TABLE unrelated (id INTEGER)")
+
     result = _run(tmp_path, "--check", "--model", "models:Item")
     assert result.returncode == 3, result.stderr
+
     assert json.loads(result.stdout)["status"] == "REFUSED"
+
     with sqlite3.connect(db) as con:
         assert con.execute("SELECT name FROM sqlite_master WHERE name='unrelated'").fetchone()
 
@@ -43,6 +49,7 @@ def test_write_disabled_even_with_backend(tmp_path):
     _setup(tmp_path)
     result = _run(tmp_path, "--model", "models:Item")
     assert result.returncode == 1
+
     assert not (tmp_path / "new.sqlite3").exists()
 
 

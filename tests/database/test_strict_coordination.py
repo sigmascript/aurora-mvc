@@ -28,7 +28,9 @@ def test_matching_catalog_still_cannot_certify_full_equivalence(monkeypatch):
     ))
     result = assess_strict_schema(SimpleNamespace(dialect="sqlite"), snapshot())
     assert not result.complete_schema_verified
+
     assert not result.execution_allowed
+
     assert any("Full catalog equivalence" in item for item in result.findings)
 
 
@@ -50,8 +52,10 @@ def test_lock_failure_prevents_all_checks(monkeypatch):
     @contextmanager
     def failed_lock(connection):
         raise RuntimeError("lock unavailable")
+
         yield
     monkeypatch.setattr(coordinated, "migration_lock", failed_lock)
+
     with pytest.raises(RuntimeError, match="lock unavailable"):
         inspect_coordinated_readiness(SimpleNamespace(dialect="sqlite"), {}, reviewed_sha256="x")
 
@@ -67,5 +71,7 @@ def test_coordinated_diagnostic_never_grants_permission(monkeypatch):
     monkeypatch.setattr(coordinated, "assess_strict_schema", lambda *a: SimpleNamespace(findings=("catalog incomplete",)))
     result = inspect_coordinated_readiness(SimpleNamespace(dialect="sqlite"), {"before": snapshot()}, reviewed_sha256="x")
     assert result.coordination_attempted
+
     assert not result.execution_allowed
+
     assert not result.complete_schema_verified

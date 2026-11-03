@@ -66,8 +66,10 @@ class ConcurrentBodyTests(unittest.IsolatedAsyncioTestCase):
         waiter = asyncio.create_task(request.body())
         await asyncio.sleep(0)
         waiter.cancel()
+
         with self.assertRaises(asyncio.CancelledError):
             await waiter
+
         release.set()
         self.assertEqual(await reader, b"safe")
         self.assertEqual(await request.body(), b"safe")
@@ -78,7 +80,9 @@ class ConcurrentBodyTests(unittest.IsolatedAsyncioTestCase):
             return {"type": "http.request", "body": b"oversized", "more_body": False}
 
         request = Request({"type": "http"}, receive, max_body_bytes=2)
+
         with self.assertRaises(HTTPException) as error:
             await request.body()
+
         self.assertEqual(error.exception.status_code, 413)
         self.assertIsNone(request._body)

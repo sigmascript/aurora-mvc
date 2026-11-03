@@ -37,6 +37,7 @@ class ExecutionAssessment:
 
 def execution_policy(dialect):
     """Return a conservative policy; unsupported dialects fail closed."""
+
     try:
         return _POLICIES[dialect]
     except (KeyError, TypeError):
@@ -54,17 +55,22 @@ def assess_execution_scope(review, *, reviewed_sha256):
     plan = review["plan"]
     policy = execution_policy(plan["dialect"])
     blockers = []
+
     if not plan["operations"]:
         blockers.append("Empty migration proposal")
+
     for operation in plan["operations"]:
         if operation["kind"] not in policy.permitted_operations or operation["risk"] != "additive":
             blockers.append(
                 f"Unsupported operation: {operation['kind']} on {operation['table']}"
             )
+
     blockers.append("Complete live catalog equivalence is not yet certified")
     blockers.append("Execution-time coordination and journal lifecycle are not yet certified")
+
     if not policy.transactional_ddl:
         blockers.append("Backend DDL can implicitly commit; recovery policy is pending")
+
     return ExecutionAssessment(
         plan["id"], plan["dialect"], review["review_sha256"],
         tuple(operation["kind"] for operation in plan["operations"]),

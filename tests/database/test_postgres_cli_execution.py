@@ -37,14 +37,18 @@ def _setup(monkeypatch, *, status="EMPTY"):
 def test_postgres_review_never_writes(monkeypatch, capsys):
     _setup(monkeypatch)
     assert cli_init.run_init_apply(_args()) == 0
+
     report = json.loads(capsys.readouterr().out)
     assert report["status"] == "EMPTY"
+
     assert report["write_enabled"] is False
+
     assert len(report["approval_sha256"]) == 64
 
 
 def test_postgres_wrong_approval_refuses_execution(monkeypatch):
     _setup(monkeypatch)
+
     with pytest.raises(ValueError, match="Exact schema approval"):
         cli_init.run_init_apply(_args("incorrect", "APPLY"))
 
@@ -59,8 +63,11 @@ def test_postgres_approved_execution_delegates_once(monkeypatch, capsys):
         calls.append((conn, models, kw)) or ("operation-1",)
     ))
     assert cli_init.run_init_apply(_args(digest, "APPLY")) == 0
+
     assert len(calls) == 1 and calls[0][0] is connection
+
     assert calls[0][2]["approval"] == digest
+
     assert json.loads(capsys.readouterr().out)["status"] == "INITIALIZED"
 
 
@@ -79,4 +86,5 @@ def test_postgres_schema_identity_changes_approval():
 def test_postgres_nonempty_schema_refuses_approval(monkeypatch, capsys):
     _setup(monkeypatch, status="REFUSED")
     assert cli_init.run_init_apply(_args()) == 3
+
     assert json.loads(capsys.readouterr().out)["approval_sha256"] is None

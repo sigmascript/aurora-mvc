@@ -32,9 +32,12 @@ def test_inconsistent_unrelated_history_blocks_create(status):
         initialize_history(db, confirm=True)
         _insert(db, 'one', 'other', 'sqlite', status)
         approval = prepare_create(db, Target)
+
         with pytest.raises(RuntimeError, match='history'):
             execute_create_recorded(db, Target, approval, confirm=True)
+
         assert len(list_history(db)) == 1
+
         assert not db.fetch_first("SELECT name FROM sqlite_master WHERE name='target'")
 
 
@@ -43,8 +46,10 @@ def test_missing_previously_applied_table_cannot_be_recreated():
         initialize_history(db, confirm=True)
         _insert(db, 'one', 'target', 'sqlite', 'applied')
         approval = prepare_create(db, Target)
+
         with pytest.raises(RuntimeError, match='history'):
             execute_create_recorded(db, Target, approval, confirm=True)
+
         assert len(list_history(db)) == 1
 
 
@@ -54,4 +59,5 @@ def test_clean_history_still_allows_recorded_create():
         approval = prepare_create(db, Target)
         operation_id = execute_create_recorded(db, Target, approval, confirm=True)
         assert len(operation_id) == 36
+
         assert list_history(db)[0].status == 'applied'

@@ -46,23 +46,31 @@ class SessionSettings:
     def __post_init__(self):
         if not self.database_path or self.database_path == ":memory:":
             raise ValueError("Sessions require a persistent SQLite database path")
+
         if not isinstance(self.lifetime, int) or isinstance(self.lifetime, bool) or self.lifetime <= 0:
             raise ValueError("Session lifetime must be a positive integer")
+
         if not isinstance(self.cookie_name, str) or not _COOKIE_NAME.fullmatch(self.cookie_name):
             raise ValueError("Invalid session cookie name")
+
         if self.samesite not in ("Lax", "Strict", "None"):
             raise ValueError("Invalid SameSite policy")
+
         if self.samesite == "None" and not self.secure:
             raise ValueError("SameSite=None requires secure cookies")
+
         if not isinstance(self.secure, bool):
             raise ValueError("secure must be a boolean")
+
         if not isinstance(self.max_data_bytes, int) or isinstance(self.max_data_bytes, bool) or self.max_data_bytes <= 0:
             raise ValueError("max_data_bytes must be a positive integer")
+
         if self.cookie_name.startswith(("__Host-", "__Secure-")) and not self.secure:
             raise ValueError("__Host- and __Secure- cookies require secure=True")
 
 
 class SQLiteSessionStore:
+    """Persist opaque-token sessions in SQLite with guarded writes."""
     def __init__(self, path):
         self.path = str(Path(path))
         self._initialize()
@@ -88,16 +96,21 @@ class SQLiteSessionStore:
     def load(self, token):
         if not token or len(token) > 256 or not token.isascii():
             return None
+
         with closing(self._connect()) as db, db:
             row = db.execute("SELECT data, expires_at, version FROM aurora_sessions WHERE token_hash=?", (self._hash(token),)).fetchone()
+
         if row is None or row[1] <= time.time():
             return None
+
         try:
             data = json.loads(row[0])
+
             if not isinstance(data, dict):
                 raise ValueError("Session record is not an object")
         except (ValueError, TypeError) as exc:
             raise SessionStorageError("Invalid stored session data") from exc
+
         return data, row[2]
 
     def cleanup_expired(self, *, limit=1000, now=None):
@@ -106,10 +119,13 @@ class SQLiteSessionStore:
         This is explicit maintenance, not a request-time operation. Call it
         periodically from an operator-owned maintenance job when needed.
         """
+
         if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
             raise ValueError("limit must be a positive integer")
+
         if now is None:
             now = time.time()
+
         with closing(self._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
             result = db.execute(
@@ -123,31 +139,41 @@ class SQLiteSessionStore:
     def commit(self, old_token, version, data, *, rotate=False, invalidate=False, lifetime=3600):
         """Atomically revoke/update/rotate a token with optimistic locking."""
         new_token = None
+
         with closing(self._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
+
             if old_token is not None:
                 row = db.execute("SELECT version, expires_at FROM aurora_sessions WHERE token_hash=?", (self._hash(old_token),)).fetchone()
+
                 if row is None or row[0] != version or row[1] <= time.time():
                     raise SessionConflict("Session has expired or changed")
+
             if invalidate:
                 if old_token is not None:
                     db.execute("DELETE FROM aurora_sessions WHERE token_hash=?", (self._hash(old_token),))
+
                 return None
+
             if rotate or old_token is None:
                 if old_token is not None:
                     db.execute("DELETE FROM aurora_sessions WHERE token_hash=?", (self._hash(old_token),))
+
                 new_token = secrets.token_urlsafe(32)
                 db.execute("INSERT INTO aurora_sessions VALUES (?, ?, ?, ?)", (
                     self._hash(new_token), json.dumps(data, allow_nan=False), time.time() + lifetime, 1))
             else:
                 result = db.execute("UPDATE aurora_sessions SET data=?, version=version+1 WHERE token_hash=? AND version=?", (
                     json.dumps(data, allow_nan=False), self._hash(old_token), version))
+
                 if result.rowcount != 1:
                     raise SessionConflict("Session was changed")
+
         return new_token
 
 
 class SessionManager:
+    """Coordinate session cookies and server-side session persistence."""
     def __init__(self, settings):
         self.settings = settings
         self.store = SQLiteSessionStore(settings.database_path)
@@ -166,33 +192,44 @@ class SessionManager:
         # The session manager exclusively owns its cookie. A handler must not
         # forge or overwrite it through response headers or cookie helpers.
         name = self.settings.cookie_name
+
         for key in response.headers:
             if key.lower() == "set-cookie":
                 raise SessionStorageError("Use response.set_cookie() for application cookies")
+
         if any(key[0] == name for key in response._cookie_headers):
             raise SessionStorageError("Session cookie is reserved for Aurora")
+
         session = request.session
         token = session._token
+
         if session.invalidated:
             await asyncio.to_thread(self.store.commit, token, session._version, {}, invalidate=True)
             response.delete_cookie(self.settings.cookie_name, secure=self.settings.secure, samesite=self.settings.samesite)
             return
+
         if not session.changed and not session.rotation_requested:
             if session._stale_cookie:
                 response.delete_cookie(self.settings.cookie_name, secure=self.settings.secure, samesite=self.settings.samesite)
+
             return
         # A new empty session is not persisted unless rotation was requested.
         if token is None and not session.rotation_requested and not dict(session):
             if session._stale_cookie:
                 response.delete_cookie(self.settings.cookie_name, secure=self.settings.secure, samesite=self.settings.samesite)
+
             return
+
         data = dict(session)
+
         if len(json.dumps(data, allow_nan=False).encode("utf-8")) > self.settings.max_data_bytes:
             raise SessionStorageError("Session data exceeds configured size limit")
+
         new_token = await asyncio.to_thread(
             self.store.commit, token, session._version, data,
             rotate=session.rotation_requested, lifetime=self.settings.lifetime,
         )
+
         if new_token is not None:
             response.set_cookie(self.settings.cookie_name, new_token, secure=self.settings.secure,
                                 httponly=True, samesite=self.settings.samesite, max_age=self.settings.lifetime)

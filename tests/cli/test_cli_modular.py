@@ -36,5 +36,6 @@ class TestModularScaffold(unittest.TestCase):
     def test_modular_refuses_overwrite(self):
         with tempfile.TemporaryDirectory() as temp:
             create_project("sample_modular", directory=Path(temp), modular=True)
+
             with self.assertRaises(FileExistsError):
                 create_project("sample_modular", directory=Path(temp), modular=True)

@@ -31,8 +31,10 @@ class RouteParameterValidationTests(unittest.TestCase):
 
     def test_invalid_registration_does_not_change_router(self):
         router = Router()
+
         with self.assertRaises(ValueError):
             router.add("/users/{id}/{id}", lambda: None, name="broken")
+
         self.assertEqual(router.routes, [])
         self.assertEqual(router.named_routes, {})
 

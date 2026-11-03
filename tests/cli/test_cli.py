@@ -23,6 +23,7 @@ class TestCLI(unittest.TestCase):
     def test_refuses_overwrite(self):
         with tempfile.TemporaryDirectory() as tmp:
             create_project("myproject", directory=Path(tmp))
+
             with self.assertRaises(FileExistsError):
                 create_project("myproject", directory=Path(tmp))
 
@@ -45,10 +46,12 @@ class TestCLI(unittest.TestCase):
     def test_run_adds_current_project_to_import_path(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = create_project("hello_aurora", directory=Path(tmp))
+
             with patch("aurora.cli.Path.cwd", return_value=project), patch("uvicorn.run") as run:
                 self.assertEqual(main(["run"]), 0)
                 self.assertEqual(sys.path[0], str(project.resolve()))
                 run.assert_called_once()
+
             sys.path.remove(str(project.resolve()))
 
 
@@ -66,6 +69,7 @@ class TestModularMultipleApps(unittest.TestCase):
     def test_modular_views_render_shared_layout(self):
         from aurora.rendering import ViewRenderer
         from aurora.view import View
+
         with tempfile.TemporaryDirectory() as tmp:
             root = create_project("multi", directory=Path(tmp), modular=True)
             renderer = ViewRenderer(root / "views", view_namespaces={"home": root / "apps/home/views", "blog": root / "apps/blog/views"})
@@ -79,6 +83,7 @@ class TestModularMultipleApps(unittest.TestCase):
     def test_modular_view_names_do_not_collide(self):
         from aurora.rendering import ViewRenderer
         from aurora.view import View
+
         with tempfile.TemporaryDirectory() as tmp:
             root = create_project("multi", directory=Path(tmp), modular=True)
             renderer = ViewRenderer(root / "views", view_namespaces={"home": root / "apps/home/views", "blog": root / "apps/blog/views"})
@@ -90,6 +95,7 @@ class TestModularMultipleApps(unittest.TestCase):
 class TestAddModularApp(unittest.TestCase):
     def test_add_app_creates_controller_view_and_explicit_route(self):
         from aurora.cli import add_app
+
         with tempfile.TemporaryDirectory() as tmp:
             root = create_project("multi", directory=Path(tmp), modular=True)
             created = add_app("news_feed", directory=root)
@@ -105,34 +111,43 @@ class TestAddModularApp(unittest.TestCase):
 
     def test_add_app_rejects_duplicates_without_changes(self):
         from aurora.cli import add_app
+
         with tempfile.TemporaryDirectory() as tmp:
             root = create_project("multi", directory=Path(tmp), modular=True)
             add_app("news", directory=root)
             source = (root / "app.py").read_text()
+
             with self.assertRaises(FileExistsError):
                 add_app("news", directory=root)
+
             self.assertEqual(source, (root / "app.py").read_text())
 
     def test_add_app_refuses_unmarked_project(self):
         from aurora.cli import add_app
+
         with tempfile.TemporaryDirectory() as tmp:
             root = create_project("multi", directory=Path(tmp), modular=True)
             source = (root / "app.py").read_text().replace("# aurora:routes", "")
             (root / "app.py").write_text(source)
+
             with self.assertRaises(ValueError):
                 add_app("news", directory=root)
+
             self.assertFalse((root / "apps/news").exists())
 
     def test_cli_add_app(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = create_project("multi", directory=Path(tmp), modular=True)
+
             with patch("aurora.cli.Path.cwd", return_value=root):
                 self.assertEqual(main(["add-app", "news"]), 0)
+
             self.assertTrue((root / "apps/news/controllers/News.py").is_file())
 
 class TestAppCrudRead(unittest.TestCase):
     def test_list_apps_and_show_app(self):
         from aurora.cli import list_apps, show_app
+
         with tempfile.TemporaryDirectory() as tmp:
             root = create_project("multi", directory=Path(tmp), modular=True)
             self.assertEqual(list_apps(directory=root), ["blog", "home"])
@@ -142,17 +157,22 @@ class TestAppCrudRead(unittest.TestCase):
 
     def test_create_app_command_and_compatibility_alias(self):
         from aurora.cli import list_apps
+
         with tempfile.TemporaryDirectory() as tmp:
             root = create_project("multi", directory=Path(tmp), modular=True)
+
             with patch("aurora.cli.Path.cwd", return_value=root):
                 self.assertEqual(main(["create-app", "news"]), 0)
                 self.assertEqual(main(["add-app", "store"]), 0)
+
             self.assertEqual(list_apps(directory=root), ["blog", "home", "news", "store"])
 
     def test_cli_list_and_show(self):
         from io import StringIO
+
         with tempfile.TemporaryDirectory() as tmp:
             root = create_project("multi", directory=Path(tmp), modular=True)
+
             with patch("aurora.cli.Path.cwd", return_value=root), patch("sys.stdout", new_callable=StringIO) as out:
                 self.assertEqual(main(["list-apps"]), 0)
                 self.assertEqual(main(["show-app", "home"]), 0)
@@ -161,12 +181,16 @@ class TestAppCrudRead(unittest.TestCase):
 
     def test_invalid_app_read_and_non_modular_project(self):
         from aurora.cli import list_apps, show_app
+
         with tempfile.TemporaryDirectory() as tmp:
             root = create_project("multi", directory=Path(tmp), modular=True)
+
             with self.assertRaises(ValueError):
                 show_app("../secrets", directory=root)
+
             with self.assertRaises(ValueError):
                 show_app("missing", directory=root)
+
             with self.assertRaises(ValueError):
                 list_apps(directory=Path(tmp))
 

@@ -22,6 +22,7 @@ def test_transaction_commit_rollback_and_alias_isolation(tmp_path):
             for alias in ("default", "audit"):
                 await manager.run(alias, lambda db: db.execute(
                     "CREATE TABLE events (id INTEGER PRIMARY KEY)"))
+
             await manager.run_transaction("default", lambda db: db.execute(
                 "INSERT INTO events(id) VALUES (1)"))
 
@@ -31,8 +32,10 @@ def test_transaction_commit_rollback_and_alias_isolation(tmp_path):
 
             with pytest.raises(ValueError, match="rollback probe"):
                 await manager.run_transaction("default", fail)
+
             assert await manager.run("default", lambda db: db.execute(
                 "SELECT id FROM events")) == [{"id": 1}]
+
             assert await manager.run("audit", lambda db: db.execute(
                 "SELECT id FROM events")) == []
 
@@ -64,11 +67,14 @@ def test_connection_bound_or_async_results_cannot_escape(tmp_path, kind):
             def callback(db):
                 if kind == "connection":
                     return db
+
                 if kind == "query":
                     return Entry.using(db)
+
                 async def late():
                     return 1
                 return late()
+
             with pytest.raises(TypeError, match="must not return"):
                 await manager.run_transaction("default", callback)
 
@@ -79,8 +85,10 @@ def test_unknown_alias_rejected_before_callback(tmp_path):
     async def scenario():
         async with RoutedWorkManager(_configuration(tmp_path)) as manager:
             invoked = []
+
             with pytest.raises(ValueError, match="Unknown database alias"):
                 await manager.run_transaction("unknown", lambda db: invoked.append(True))
+
             assert invoked == []
     asyncio.run(scenario())
 

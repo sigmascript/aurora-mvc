@@ -51,8 +51,10 @@ class StaleCookieAuditTests(unittest.IsolatedAsyncioTestCase):
     async def test_expired_cookie_cannot_restore_authentication(self):
         with patch('aurora.security.sessions.time.time', return_value=100):
             token = self.app.session_manager.store.commit(None, None, {'user': 'verified'}, lifetime=10)
+
         with patch('aurora.security.sessions.time.time', return_value=111):
             status, body, cookies = await self.call('/read', cookie=token)
+
         self.assertEqual((status, body), (200, b'anonymous'))
         self.assertEqual(len(cookies), 1)
         self.assertIn('max-age=0', cookies[0].lower())

@@ -18,6 +18,7 @@ class CleanModularScaffoldTests(unittest.TestCase):
             self.assertIn('class Blog(Controller):', (root / 'apps/blog/controllers/Blog.py').read_text())
             self.assertFalse((root / 'apps/blog/controllers/index.py').exists())
             self.assertFalse((root / 'views/shared').exists())
+
             for name in ('layout.html', 'navigation.html', 'components.html'):
                 self.assertTrue((root / 'views' / name).is_file())
 
@@ -30,10 +31,12 @@ class CleanModularScaffoldTests(unittest.TestCase):
                 'blog': root / 'apps/blog/views',
                 'news': news / 'views',
             })
+
             for name in ('home', 'blog', 'news'):
                 html = renderer.render(View(f'{name}/index', title=name))
                 self.assertIn('<html', html)
                 self.assertIn('Main navigation', html)
+
             self.assertIn('Back to home', renderer.render(View('news/index', title='News')))
 
     def test_create_app_never_overwrites_shared_files(self):
@@ -41,7 +44,9 @@ class CleanModularScaffoldTests(unittest.TestCase):
             root = create_project('demo', directory=Path(temp), modular=True)
             files = [root / 'views' / name for name in ('layout.html', 'navigation.html', 'components.html')]
             files += [root / 'statics/css/site.css']
+
             for i, file in enumerate(files):
                 file.write_bytes(f'custom-{i}'.encode())
+
             add_app('news', directory=root)
             self.assertEqual([f.read_bytes() for f in files], [f'custom-{i}'.encode() for i in range(len(files))])

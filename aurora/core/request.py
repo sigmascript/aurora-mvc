@@ -24,6 +24,7 @@ class Request:
             or max_body_bytes < 0
         ):
             raise ValueError("max_body_bytes must be a non-negative integer or None")
+
         self.max_body_bytes = max_body_bytes
         self.scope = scope
         self.receive = receive
@@ -40,8 +41,10 @@ class Request:
 
         Aurora's session manager will attach this before route handling.
         """
+
         if self._session is None:
             raise RuntimeError("Sessions are not configured for this request")
+
         return self._session
 
     @property
@@ -96,6 +99,7 @@ class Request:
         Only one coroutine may consume the ASGI receive stream at a time.
         Concurrent callers share the completed body rather than racing reads.
         """
+
         if self._body is not None:
             return self._body
 
@@ -116,18 +120,22 @@ class Request:
 
                 if message["type"] == "http.disconnect":
                     raise ClientDisconnect("Client disconnected during request body")
+
                 if message["type"] != "http.request":
                     raise RuntimeError("Unexpected ASGI message while reading request body")
 
                 chunk = message.get("body", b"")
+
                 if not isinstance(chunk, bytes):
                     raise RuntimeError("ASGI request body must be bytes")
 
                 total_bytes += len(chunk)
+
                 if self.max_body_bytes is not None and total_bytes > self.max_body_bytes:
                     raise HTTPException(status_code=413, detail="Request body too large")
 
                 chunks.append(chunk)
+
                 if not message.get("more_body", False):
                     break
 
@@ -145,6 +153,7 @@ class Request:
 
         Invalid JSON or UTF-8 raises HTTPException with status 400.
         """
+
         try:
             text = await self.text()
             return json.loads(text)

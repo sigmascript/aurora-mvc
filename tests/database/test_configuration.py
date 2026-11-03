@@ -16,8 +16,11 @@ def test_aliases_and_postgres_without_connecting():
         "reporting": {"url": "postgresql+psycopg://user:secret@localhost/app"},
     })
     assert config.aliases() == ("default", "reporting")
+
     assert config.resolve() == "sqlite:///:memory:"
+
     assert "secret" not in repr(config)
+
     with pytest.raises(ValueError, match="Unknown database alias"):
         config.resolve("missing")
 
@@ -25,6 +28,7 @@ def test_aliases_and_postgres_without_connecting():
 def test_environment_is_resolved_once():
     with patch.dict(os.environ, {"AURORA_DB_TEST_URL": "sqlite:///:memory:"}):
         config = DatabaseConfiguration({"default": {"url_env": "AURORA_DB_TEST_URL"}})
+
     assert config.resolve() == "sqlite:///:memory:"
 
 
@@ -38,13 +42,16 @@ def test_environment_is_resolved_once():
 def test_invalid_urls_fail_without_leaking_credentials(entry):
     with pytest.raises(ValueError) as exc:
         DatabaseConfiguration({"default": entry})
+
     assert "secret" not in str(exc.value)
 
 
 def test_explicit_connection_is_owned_by_caller():
     config = DatabaseConfiguration({"default": {"url": "sqlite:///:memory:"}})
+
     with config.connect() as db:
         assert db.dialect == "sqlite"
+
         assert db.fetch_all("SELECT 1 AS ok") == [{"ok": 1}]
 
 
@@ -57,6 +64,7 @@ def test_opt_in_app_model_generator_keeps_legacy_default():
         (app / "__init__.py").write_text("")
         path = create_model("blog", "BlogPost", directory=root, backend="aurorasql")
         assert "from aurora.database import Model, column" in path.read_text()
+
         assert "from aurora.database import Model, column" in create_model(
             "blog", "LegacyPost", directory=root
         ).read_text()

@@ -34,9 +34,13 @@ def check(monkeypatch, *, found=True, dialect="sqlite", findings=(), journal=())
 def test_consistent_structure_is_still_not_authorized(monkeypatch):
     result = check(monkeypatch)
     assert result.checked_tables == ("existing",)
+
     assert result.operation_count == 1
+
     assert result.execution_allowed is False
+
     assert result.complete_schema_verified is False
+
     assert result.coordination_verified is False
 
 
@@ -60,6 +64,7 @@ def test_invalid_review_acknowledgment_blocks_preflight(monkeypatch):
     from aurora.database.inspection import TableInfo
     monkeypatch.setattr(live, "inspect_table", lambda conn, name: TableInfo(name, True, ()))
     review = create_review(snapshot("existing"), snapshot("existing", "new"), migration_id="AddNew")
+
     with pytest.raises(PermissionError):
         inspect_live_migration_readiness(SimpleNamespace(dialect="sqlite"), review,
                                          reviewed_sha256="0" * 64)

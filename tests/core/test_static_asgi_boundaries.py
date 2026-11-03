@@ -21,6 +21,7 @@ class StaticASGIBoundaryTests(unittest.TestCase):
 
         async def capture(message):
             messages.append(message)
+
             if send is not None:
                 await send(message)
 
@@ -52,8 +53,10 @@ class StaticASGIBoundaryTests(unittest.TestCase):
                 raise OSError("connection lost")
 
         messages, run = self.invoke(send=fail_on_body)
+
         with self.assertRaisesRegex(OSError, "connection lost"):
             asyncio.run(run())
+
         self.assertEqual([m["type"] for m in messages].count("http.response.start"), 1)
 
     def test_send_failure_on_start_never_retries_response(self):
@@ -62,14 +65,17 @@ class StaticASGIBoundaryTests(unittest.TestCase):
                 raise OSError("connection lost")
 
         messages, run = self.invoke(send=fail_on_start)
+
         with self.assertRaisesRegex(OSError, "connection lost"):
             asyncio.run(run())
+
         self.assertEqual(len(messages), 1)
 
     def test_open_failure_returns_404_before_start(self):
         with patch("aurora.core.static_files._open_static_file", side_effect=OSError("file vanished")):
             messages, run = self.invoke()
             asyncio.run(run())
+
         self.assertEqual(messages[0]["status"], 404)
         self.assertEqual([m["type"] for m in messages].count("http.response.start"), 1)
 

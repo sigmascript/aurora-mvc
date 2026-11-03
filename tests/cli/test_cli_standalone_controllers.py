@@ -20,6 +20,7 @@ class TestStandaloneControllerCommands(unittest.TestCase):
         with patch("pathlib.Path.cwd", return_value=self.root):
             with contextlib.redirect_stdout(io.StringIO()) as output:
                 result = main(list(args))
+
         return result, output.getvalue()
 
     def test_add_register_list_and_show(self):
@@ -34,19 +35,25 @@ class TestStandaloneControllerCommands(unittest.TestCase):
     def test_duplicate_preserves_existing_files(self):
         self.invoke("controller", "add", "User")
         source = (self.root / "app.py").read_bytes()
+
         with self.assertRaises(SystemExit):
             self.invoke("controller", "add", "User")
+
         self.assertEqual((self.root / "app.py").read_bytes(), source)
 
     def test_invalid_name_creates_nothing(self):
         source = (self.root / "app.py").read_bytes()
+
         with self.assertRaises(SystemExit):
             self.invoke("controller", "add", "user")
+
         self.assertEqual((self.root / "app.py").read_bytes(), source)
         self.assertFalse((self.root / "controllers/User.py").exists())
 
     def test_rejects_unrecognized_application(self):
         (self.root / "app.py").write_text("# custom application\n")
+
         with self.assertRaises(SystemExit):
             self.invoke("controller", "add", "User")
+
         self.assertFalse((self.root / "controllers/User.py").exists())

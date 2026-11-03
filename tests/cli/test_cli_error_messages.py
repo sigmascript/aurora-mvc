@@ -18,18 +18,22 @@ class CLIErrorMessageTests(unittest.TestCase):
 
     def invoke_error(self, root, *args):
         error = io.StringIO()
+
         with patch("pathlib.Path.cwd", return_value=root), contextlib.redirect_stderr(error):
             with self.assertRaises(SystemExit) as raised:
                 main(list(args))
+
         return raised.exception.code, error.getvalue()
 
     def test_minimal_project_explains_mvc_requirement(self):
         root = create_project("minimal", directory=self.parent)
+
         for command, name in (("controller", "User"), ("model", "User"), ("view", "user")):
             with self.subTest(command=command):
                 code, message = self.invoke_error(root, command, "add", name)
                 self.assertEqual(code, 1)
                 self.assertIn("aurora new myapp --mvc", message)
+
         self.assertFalse((root / "controllers").exists())
         self.assertFalse((root / "models").exists())
         self.assertFalse((root / "views").exists())
@@ -44,8 +48,10 @@ class CLIErrorMessageTests(unittest.TestCase):
 
     def test_duplicate_controller_preserves_file(self):
         root = create_project("site", directory=self.parent, mvc=True)
+
         with patch("pathlib.Path.cwd", return_value=root), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(main(["controller", "add", "User"]), 0)
+
         target = root / "controllers/User.py"
         original = target.read_bytes()
         code, message = self.invoke_error(root, "controller", "add", "User")
@@ -61,8 +67,10 @@ class CLIErrorMessageTests(unittest.TestCase):
 
     def test_modular_component_generation_still_works(self):
         root = create_project("modular", directory=self.parent, modular=True)
+
         with patch("pathlib.Path.cwd", return_value=root), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(main(["controller", "add", "News", "--app", "blog"]), 0)
+
         self.assertTrue((root / "apps/blog/controllers/News.py").is_file())
 
 

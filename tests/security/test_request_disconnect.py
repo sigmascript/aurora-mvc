@@ -23,8 +23,10 @@ class RequestDisconnectTests(unittest.IsolatedAsyncioTestCase):
             return messages.pop(0)
 
         request = Request({"type": "http", "method": "POST"}, receive)
+
         with self.assertRaises(ClientDisconnect):
             await request.body()
+
         self.assertIsNone(request._body)
 
     async def test_unexpected_message_rejected(self):

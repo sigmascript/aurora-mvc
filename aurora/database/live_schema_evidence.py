@@ -33,19 +33,27 @@ def inspect_reviewed_baseline(connection, before):
     separate trustworthy dialect-specific canonicalization before execution.
     """
     tables = _snapshot_tables(before)
+
     if before["dialect"] != connection.dialect:
         raise ValueError("Snapshot dialect does not match the live connection")
+
     digest = snapshot_fingerprint(before)
     findings = []
+
     for name, columns in sorted(tables.items()):
         actual = inspect_table(connection, name)
+
         if not actual.exists:
             findings.append(f"Missing table: {name}")
             continue
+
         actual_columns = {column.name for column in actual.columns}
         expected_columns = set(columns)
+
         for missing in sorted(expected_columns - actual_columns):
             findings.append(f"Missing column: {name}.{missing}")
+
         for extra in sorted(actual_columns - expected_columns):
             findings.append(f"Unexpected column: {name}.{extra}")
+
     return LiveSchemaEvidence(connection.dialect, digest, tuple(sorted(tables)), tuple(findings))

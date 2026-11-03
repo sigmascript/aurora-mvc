@@ -68,10 +68,13 @@ class ASGILifecycleBoundaryTests(unittest.TestCase):
                 sent.append(message)
 
             await app({"type": "lifespan"}, receive, send)
+
             with self.assertRaises(RuntimeError):
                 await manager.run("default", lambda connection: None)
+
             with self.assertRaises(RuntimeError):
                 registry.get()
+
             return sent
 
         self.assertEqual(

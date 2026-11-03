@@ -31,6 +31,7 @@ def database():
         db.execute_write("CREATE TABLE members (id INTEGER PRIMARY KEY, name TEXT)")
         db.execute_write("CREATE TABLE tasks (id INTEGER PRIMARY KEY, member_id INTEGER, title TEXT)")
         db.execute_write("CREATE TABLE labels (id INTEGER PRIMARY KEY, task_id INTEGER, value TEXT)")
+
         with db.transaction():
             Member.using(db).create(id=1, name="A")
             Member.using(db).create(id=2, name="B")
@@ -38,6 +39,7 @@ def database():
             Task.using(db).create(id=11, member_id=2, title="Second")
             Label.using(db).create(id=100, task_id=10, value="urgent")
             Label.using(db).create(id=101, task_id=11, value="later")
+
         yield db
 
 
@@ -58,17 +60,23 @@ def test_three_table_join_qualified_filters_and_projection(database):
              .where_joined({"members.name": "A", "labels.value--like": "urg%"})
              .select("tasks.title", "members.name", "labels.value"))
     assert query.count() == 1
+
     assert query.exists()
+
     assert query.all() == [{"left__title": "First", "right1__name": "A", "right2__value": "urgent"}]
 
 
 def test_invalid_join_fields_fail_closed(database):
     query = Task.using(database).legacy_query().join(Member, on=("member_id", "id"))
+
     with pytest.raises((ValueError, TypeError)):
         query.where_joined({"members.name; DROP TABLE members": "A"})
+
     with pytest.raises((ValueError, TypeError)):
         query.select("members.secret")
+
     with pytest.raises((ValueError, TypeError)):
         query.order_by("members.secret")
+
     with pytest.raises((ValueError, TypeError)):
         query.join(Label, on=("members.secret", "task_id"))

@@ -22,9 +22,12 @@ _BACKENDS = (
 def _test_url(environment):
     if os.environ.get("AURORASQL_TEST_ALLOW_DDL") != "YES_DISPOSABLE_DB":
         pytest.skip("Live DDL checks require explicit disposable-database opt-in")
+
     url = os.environ.get(environment)
+
     if not url:
         pytest.skip(f"{environment} not configured")
+
     return url
 
 
@@ -39,18 +42,26 @@ def test_live_model_unique_column_inspection(dialect, environment):
         "label": column(str, length=80),
     })
     quote = "`" if dialect == "mysql" else '"'
+
     with connect(url) as db:
         assert db.dialect == dialect
+
         assert not inspect_table(db, name).exists
+
         created = False
+
         try:
             create_table(db, Probe)
             created = True
             observed = inspect_table(db, name)
             assert observed.exists and observed.uniqueness_verified
+
             assert "email" in observed.unique_columns
+
             assert "label" not in observed.unique_columns
+
             assert "id" not in observed.unique_columns
+
             plan = plan_schema(db, Probe)
             assert not any(change.kind == "unique_mismatch" for change in plan.changes)
         finally:
@@ -64,10 +75,14 @@ def test_live_composite_index_not_single_column_unique(dialect, environment):
     name = "aurorasql_composite_" + uuid4().hex[:16]
     quote = "`" if dialect == "mysql" else '"'
     quoted = f"{quote}{name}{quote}"
+
     with connect(url) as db:
         assert db.dialect == dialect
+
         assert not inspect_table(db, name).exists
+
         created = False
+
         try:
             db.execute_write(
                 f"CREATE TABLE {quoted} ("
@@ -78,9 +93,13 @@ def test_live_composite_index_not_single_column_unique(dialect, environment):
             created = True
             observed = inspect_table(db, name)
             assert observed.exists and observed.uniqueness_verified
+
             assert "first_name" not in observed.unique_columns
+
             assert "last_name" not in observed.unique_columns
+
             assert observed.indexes
+
             if dialect == "postgresql":
                 # Cross-check the composite index against PostgreSQL metadata.
                 composite = db.fetch_first(

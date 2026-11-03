@@ -57,17 +57,24 @@ def _exercise(conn, dialect, table, suffix):
     _migrate(conn, titled, noted, f"a7_notes_{suffix}", dialect)
     row = conn.fetch_first(f"SELECT id, title, notes FROM {quoted} WHERE id=1")
     assert row["id"] == 1
+
     assert row["title"] == "preserved"
+
     assert row["notes"] is None
+
     assert {column.name for column in inspect_table(conn, table).columns} == {
         "id", "title", "notes"
     }
+
     entries = list_additive_history(conn)
     assert len(entries) == 2
+
     assert {entry.status for entry in entries} == {"applied"}
+
     assert {entry.migration_id for entry in entries} == {
         f"a7_title_{suffix}", f"a7_notes_{suffix}"
     }
+
     before = schema_snapshot(original, dialect=dialect)
     after = schema_snapshot(titled, dialect=dialect)
     plan = migration_plan(before, after, migration_id=f"a7_title_{suffix}")
@@ -75,8 +82,10 @@ def _exercise(conn, dialect, table, suffix):
     # even if the source schema no longer matches the live table.
     from aurora.database import AddColumnReview
     approval = AddColumnReview(plan["id"], dialect, table, "title", "0" * 64, "", False)
+
     with pytest.raises(RuntimeError, match="already recorded"):
         execute_add_column_recorded(conn, before, after, plan, approval, confirm=True)
+
     assert len(list_additive_history(conn)) == 2
 
 
@@ -91,15 +100,20 @@ def test_sqlite_two_sequential_aio_style_changes_preserve_data():
 ])
 def test_live_two_sequential_aio_style_changes_preserve_data(dialect, env):
     url = os.getenv(env)
+
     if not url or os.getenv("AURORASQL_TEST_ALLOW_DDL") != "YES_DISPOSABLE_DB":
         pytest.skip("Requires disposable database URL and explicit DDL opt-in")
+
     suffix = uuid4().hex[:12]
     table = f"a7_integration_{suffix}"
+
     with connect(url) as conn:
         # The journal is shared across tests. Never modify an existing journal.
         if inspect_table(conn, JOURNAL).exists:
             pytest.skip("Additive journal exists: use a fresh disposable database")
+
         created_journal = False
+
         try:
             # Mark test-owned journal before exercising; clean only what we own.
             # _exercise creates the journal after creating its test table.

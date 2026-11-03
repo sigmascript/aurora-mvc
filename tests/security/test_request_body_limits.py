@@ -38,8 +38,10 @@ class RequestBodyLimitTests(unittest.IsolatedAsyncioTestCase):
             ]),
             max_body_bytes=5,
         )
+
         with self.assertRaises(HTTPException) as caught:
             await request.body()
+
         self.assertEqual(caught.exception.status_code, 413)
         self.assertIsNone(request._body)
 
@@ -51,8 +53,10 @@ class RequestBodyLimitTests(unittest.IsolatedAsyncioTestCase):
         request = Request({"type": "http"}, self.make_receive([
             {"type": "http.request", "body": b"x", "more_body": False},
         ]), max_body_bytes=0)
+
         with self.assertRaises(HTTPException) as caught:
             await request.body()
+
         self.assertEqual(caught.exception.status_code, 413)
 
     async def test_cancellation_propagates_and_does_not_cache(self):
@@ -60,8 +64,10 @@ class RequestBodyLimitTests(unittest.IsolatedAsyncioTestCase):
             raise asyncio.CancelledError()
 
         request = Request({"type": "http"}, receive, max_body_bytes=10)
+
         with self.assertRaises(asyncio.CancelledError):
             await request.body()
+
         self.assertIsNone(request._body)
 
     async def test_application_returns_413_when_limit_exceeded(self):
@@ -92,5 +98,6 @@ class RequestBodyLimitTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):
                     Request({"type": "http"}, max_body_bytes=value)
+
                 with self.assertRaises(ValueError):
                     Application(max_request_body_bytes=value)

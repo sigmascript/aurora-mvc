@@ -33,8 +33,10 @@ class AsyncRoutedTests(unittest.IsolatedAsyncioTestCase):
         def fail(db):
             db.execute("INSERT INTO events VALUES (2)")
             raise ValueError("abort")
+
         with self.assertRaisesRegex(ValueError, "abort"):
             await self.manager.run_transaction("analytics", fail)
+
         rows = await self.manager.run("analytics", lambda db: db.execute("SELECT id FROM events"))
         self.assertEqual(rows, [])
 
@@ -51,6 +53,7 @@ class AsyncRoutedTests(unittest.IsolatedAsyncioTestCase):
     async def test_async_callback_rejected(self):
         async def callback(db):
             return None
+
         with self.assertRaisesRegex(TypeError, "synchronous"):
             await self.manager.run_transaction("default", callback)
 

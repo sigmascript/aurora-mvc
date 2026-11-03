@@ -81,6 +81,7 @@ class SimpleViewAPITests(unittest.TestCase):
             status, _, body = request_app(app)
             self.assertEqual(status, 200)
             self.assertEqual(body, "/destination")
+
             with self.assertRaises(RuntimeError):
                 url_for("destination")
 

@@ -39,7 +39,9 @@ def test_init_check_uses_config_directory_for_manifest_and_imports(tmp_path):
     root = _project(tmp_path)
     result = _run(tmp_path, "init", "--check", "--config", str(root / "aurora_databases.json"))
     assert result.returncode == 0, result.stderr
+
     assert json.loads(result.stdout)["status"] == "MISSING_DATABASE"
+
     assert not (root / "test.sqlite3").exists()
 
 
@@ -49,7 +51,9 @@ def test_init_preflight_does_not_create_database_or_manifest(tmp_path):
     before = manifest.read_bytes()
     result = _run(tmp_path, "init", "--check", "--config", str(root / "aurora_databases.json"))
     assert result.returncode == 0, result.stderr
+
     assert manifest.read_bytes() == before
+
     assert not (root / "test.sqlite3").exists()
 
 
@@ -61,4 +65,5 @@ def test_missing_manifest_does_not_fallback_to_cwd(tmp_path):
     }), encoding="utf-8")
     result = _run(tmp_path, "init", "--check", "--config", str(root / "aurora_databases.json"))
     assert result.returncode != 0
+
     assert not (root / "test.sqlite3").exists()

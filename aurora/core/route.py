@@ -22,10 +22,12 @@ class Route:
 
         # Reject malformed placeholders before compiling a route pattern.
         literal_parts = _ROUTE_PLACEHOLDER.split(path)
+
         if any("{" in part or "}" in part for part in literal_parts[::2]):
             raise ValueError("Invalid route parameter placeholder")
 
         parameter_names = literal_parts[1::2]
+
         if len(parameter_names) != len(set(parameter_names)):
             raise ValueError("Duplicate route parameter name")
 
@@ -39,8 +41,10 @@ class Route:
     @staticmethod
     def _normalize_methods(methods) -> set[str]:
         """Validate explicit HTTP methods; None alone selects GET."""
+
         if methods is None:
             return {"GET"}
+
         if isinstance(methods, (str, bytes)):
             raise TypeError("Route methods must be an iterable of method strings")
 
@@ -50,13 +54,16 @@ class Route:
             raise TypeError("Route methods must be an iterable of method strings") from None
 
         normalized = set()
+
         for method in iterator:
             if not isinstance(method, str) or _METHOD_TOKEN.fullmatch(method) is None:
                 raise ValueError("Route methods must contain valid HTTP method strings")
+
             normalized.add(method.upper())
 
         if not normalized:
             raise ValueError("Route methods cannot be empty")
+
         return normalized
 
     def _compile_path(self, path: str) -> re.Pattern[str]:
@@ -77,12 +84,15 @@ class Route:
 
         A matching path without parameters returns an empty dictionary.
         """
+
         if request.method not in self.methods:
             return None
 
         routing_path = request.routing_path
+
         if routing_path is None:
             return None
+
         match = self.pattern.match(routing_path)
 
         if match is None:
@@ -94,16 +104,21 @@ class Route:
         """Build a relative URL, escaping values as individual path segments."""
         required = set(self.parameters)
         provided = set(params)
+
         if required != provided:
             missing = sorted(required - provided)
             extra = sorted(provided - required)
             raise ValueError(f"Route parameters mismatch: missing={missing}, unexpected={extra}")
+
         result = self.path
 
         # Encode each value as one segment; never interpret its URL syntax.
         for key in self.parameters:
             value = str(params[key])
+
             if not value or value in {".", ".."} or "/" in value or "\\" in value:
                 raise ValueError(f"Invalid path segment for {key}")
+
             result = result.replace("{" + key + "}", quote(value, safe=""))
+
         return result

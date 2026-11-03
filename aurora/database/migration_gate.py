@@ -36,6 +36,7 @@ def inspect_migration_gate(connection, review, *, reviewed_sha256,
     administrators can still change schema after this function returns.
     """
     scope = assess_execution_scope(review, reviewed_sha256=reviewed_sha256)
+
     if connection.dialect != scope.dialect:
         raise ValueError("Connection and migration review dialect differ")
 
@@ -43,12 +44,14 @@ def inspect_migration_gate(connection, review, *, reviewed_sha256,
     coordinated = inspect_coordinated_readiness(
         connection, review, reviewed_sha256=reviewed_sha256,
     )
+
     if coordinated.migration_id != scope.migration_id:
         raise RuntimeError("Migration evidence identity mismatch")
 
     blockers = list(scope.blockers)
     blockers.extend(backend.blockers)
     blockers.extend(coordinated.findings)
+
     if scope.dialect == "sqlite":
         if sqlite_intent_connection is None:
             blockers.append("SQLite v2 migration intent journal was not inspected")
@@ -56,12 +59,15 @@ def inspect_migration_gate(connection, review, *, reviewed_sha256,
             journal = assess_sqlite_migration_readiness(
                 sqlite_intent_connection, review, reviewed_sha256=reviewed_sha256,
             )
+
             if journal.migration_id != scope.migration_id:
                 raise RuntimeError("SQLite journal assessment identity mismatch")
+
             blockers.extend(journal.blockers)
     else:
         if sqlite_intent_connection is not None:
             raise ValueError("SQLite journal connection is invalid for this dialect")
+
         blockers.append(f"{scope.dialect} durable migration journal is not implemented")
 
     blockers.append("No execution-time schema lock or full catalog equivalence certificate")

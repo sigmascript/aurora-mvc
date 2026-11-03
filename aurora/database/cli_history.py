@@ -28,26 +28,34 @@ def _read_history(connection, alias):
 
 
 def run_history(args):
+    """Inspect migration history without changing database state."""
     config, base_dir = _load_config(args.config)
     url = config.resolve(args.database)
     parsed = urlsplit(url)
+
     if parsed.scheme in ("sqlite", "sqlite+pysqlite"):
         db_file = _existing_sqlite_path(url, base_dir)
         raw = sqlite3.connect(db_file.resolve().as_uri() + "?mode=ro", uri=True,
                               isolation_level=None)
+
         with Connection(raw, "sqlite") as connection:
             report = _read_history(connection, args.database)
     else:
         with config.connect(args.database) as connection:
             report = _read_history(connection, args.database)
+
     if args.format == "json":
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
         print(f"Database: {args.database} (AuroraSQL journal; read-only)")
         print(f"History entries: {len(report['entries'])}")
+
         for entry in report["entries"]:
             print(f"  {entry['operation_id']} {entry['table']} {entry['status']}")
+
         print(f"Findings requiring review: {len(report['findings'])}")
+
         for finding in report["findings"]:
             print(f"  [{finding['kind']}] {finding['table']}: {finding['detail']}")
+
     return 3 if report["findings"] else 0

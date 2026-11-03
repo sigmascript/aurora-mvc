@@ -8,25 +8,32 @@ _HEADER_NAME = re.compile(rb"[!#$%&'*+.^_`|~0-9A-Za-z-]+\Z")
 
 def _header_name(value: str) -> bytes:
     """Encode an HTTP field name, rejecting invalid token characters."""
+
     if not isinstance(value, str):
         raise ValueError("HTTP header names must be strings")
+
     try:
         encoded = value.encode("ascii")
     except UnicodeEncodeError as exc:
         raise ValueError("Invalid HTTP header name") from exc
+
     if _HEADER_NAME.fullmatch(encoded) is None:
         raise ValueError("Invalid HTTP header name")
+
     return encoded.lower()
 
 
 def _header_value(value: str) -> bytes:
     """Encode a field value without allowing control-character injection."""
+
     try:
         encoded = value.encode("latin-1")
     except UnicodeEncodeError as exc:
         raise ValueError("Invalid HTTP header value") from exc
+
     if any(byte < 32 and byte != 9 or byte == 127 for byte in encoded):
         raise ValueError("Invalid HTTP header value")
+
     return encoded
 
 
@@ -69,11 +76,13 @@ class Response:
         SameSite=None requires Secure. Reusing a name/path replaces its
         pending header. Omit max_age for a browser-session cookie.
         """
+
         if not isinstance(value, str) or not value.isascii():
             raise ValueError("Cookie values must be ASCII strings")
 
         if any(ord(char) < 32 or ord(char) == 127 for char in value):
             raise ValueError("Cookie values cannot contain control characters")
+
         if not path or not path.isascii() or any(
             ord(char) < 32 or ord(char) == 127 or char == ";" for char in path
         ):
@@ -88,6 +97,7 @@ class Response:
             "lax", "strict", "none"
         }:
             raise ValueError("Invalid cookie SameSite value")
+
         if samesite.lower() == "none" and not secure:
             raise ValueError("SameSite=None requires Secure")
 
@@ -98,6 +108,7 @@ class Response:
         cookie["secure"] = secure
         cookie["httponly"] = httponly
         cookie["samesite"] = samesite.capitalize()
+
         if max_age is not None:
             cookie["max-age"] = max_age
 
@@ -129,6 +140,7 @@ class Response:
         # Bodyless status codes must not emit a payload or misleading entity
         # headers. HEAD is handled by Application at the ASGI boundary.
         headers = []
+
         if not body_forbidden:
             headers.extend([
                 [b"content-type", _header_value(self.content_type)],

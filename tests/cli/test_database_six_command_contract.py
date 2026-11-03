@@ -11,6 +11,7 @@ class DatabaseSixCommandContractTests(unittest.TestCase):
     def test_only_six_database_commands_are_registered(self):
         with contextlib.redirect_stdout(io.StringIO()) as output, self.assertRaises(SystemExit) as result:
             main(['db', '--help'])
+
         self.assertEqual(result.exception.code, 0)
         self.assertIn('{plan,history,backup,restore,init,migrate}', output.getvalue())
 
@@ -18,10 +19,12 @@ class DatabaseSixCommandContractTests(unittest.TestCase):
         obsolete = ('sync', 's', 'check', 'inspect', 'list', 'show', 'status',
                     'validate', 'compat', 'policy', 'readiness', 'migration',
                     'mysql-create-table', 'mysql-add-column')
+
         for command in obsolete:
             with self.subTest(command=command):
                 with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as result:
                     main(['db', command])
+
                 self.assertEqual(result.exception.code, 2)
 
     def test_plan_and_migrate_help_remain_available(self):
@@ -29,6 +32,7 @@ class DatabaseSixCommandContractTests(unittest.TestCase):
             with self.subTest(command=command):
                 with contextlib.redirect_stdout(io.StringIO()) as output, self.assertRaises(SystemExit) as result:
                     main(['db', command, '--help'])
+
                 self.assertEqual(result.exception.code, 0)
                 self.assertIn('--database', output.getvalue())
 
@@ -38,6 +42,7 @@ class DatabaseSixCommandContractTests(unittest.TestCase):
              self.assertRaises(SystemExit) as result:
             main(['db', 'migrate', '--model', 'models:User', '--schema', 'staging',
                   '--table', 'users', '--approve', '0' * 64])
+
         self.assertEqual(result.exception.code, 1)
         self.assertIn('migration writes are not yet integrated', error.getvalue())
         self.assertIn('refusing legacy fallback', error.getvalue())

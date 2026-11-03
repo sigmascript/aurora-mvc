@@ -41,6 +41,7 @@ def test_sql_default_refused():
         __table__ = "alpha9_defaulted"
         id = column(int, primary_key=True)
         title = column(str, server_default="test")
+
     with pytest.raises(ValueError, match="server defaults"):
         validate_init_models([Defaulted])
 
@@ -65,5 +66,6 @@ def test_invalid_fk_target_refused():
         __table__ = "alpha9_bad"
         id = column(int, primary_key=True)
         parent_id = column(int, references="alpha9_parent.missing")
+
     with pytest.raises(ValueError, match="target"):
         validate_init_models([Parent, Bad])

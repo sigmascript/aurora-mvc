@@ -25,17 +25,20 @@ class MySQLRestorePreflightTests(unittest.TestCase):
         self.calls.append(command)
         self.assertEqual(command[0], "mysql")
         sql = command[-1]
+
         if "CURRENT_USER()" in sql:
             output = "aurora_restore_test\taurora_test@localhost\n"
         elif "information_schema.TABLES" in sql:
             output = "1\n"
         else:
             output = "0\n"
+
         return subprocess.CompletedProcess(command, 0, output, "")
 
     def test_readonly_report_and_exact_identity(self):
         with patch("aurora.database.cli_mysql_restore_preflight._run", side_effect=self.fake_run):
             report = check_mysql_restore(str(self.config), "default", str(self.dump), "aurora_recovery")
+
         self.assertTrue(report.staging_available)
         self.assertEqual(report.table_count, 1)
         self.assertIn("UNVERIFIED", report.format_text())
@@ -52,6 +55,7 @@ class MySQLRestorePreflightTests(unittest.TestCase):
 
     def test_rejects_incomplete_dump(self):
         self.dump.write_text("-- MySQL dump\nCREATE TABLE t (id int)")
+
         with self.assertRaisesRegex(ValueError, "completed"):
             check_mysql_restore(str(self.config), "default", str(self.dump), "profile")
 
@@ -62,29 +66,38 @@ class MySQLRestorePreflightTests(unittest.TestCase):
     def test_reports_staging_collision(self):
         def collision(command, **kwargs):
             result = self.fake_run(command, **kwargs)
+
             if "information_schema.SCHEMATA" in command[-1]:
                 return subprocess.CompletedProcess(command, 0, "1\n", "")
+
             return result
+
         with patch("aurora.database.cli_mysql_restore_preflight._run", side_effect=collision):
             report = check_mysql_restore(str(self.config), "default", str(self.dump), "profile")
+
         self.assertFalse(report.staging_available)
         self.assertIn("BLOCKED", report.format_text())
 
     def test_rejects_mismatched_account(self):
         def mismatch(command, **kwargs):
             result = self.fake_run(command, **kwargs)
+
             if "CURRENT_USER()" in command[-1]:
                 return subprocess.CompletedProcess(command, 0, "aurora_restore_test\tother@localhost\n", "")
+
             return result
+
         with patch("aurora.database.cli_mysql_restore_preflight._run", side_effect=mismatch):
             with self.assertRaisesRegex(ValueError, "does not match"):
                 check_mysql_restore(str(self.config), "default", str(self.dump), "profile")
 
     def test_rejects_symlink(self):
         link = self.root / "link.sql"
+
         try:
             link.symlink_to(self.dump)
         except (OSError, NotImplementedError):
             self.skipTest("Symlinks unavailable")
+
         with self.assertRaisesRegex(ValueError, "symlinks"):
             check_mysql_restore(str(self.config), "default", str(link), "profile")

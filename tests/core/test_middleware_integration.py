@@ -58,6 +58,7 @@ class MiddlewareTests(unittest.TestCase):
 
     def test_rejects_non_async_registration(self):
         app = Application()
+
         with self.assertRaises(TypeError):
             app.add_middleware(lambda request, call_next: None)
 

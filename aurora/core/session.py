@@ -22,6 +22,7 @@ class Session(MutableMapping):
         self._changed = False
         self._rotation_requested = False
         self._invalidated = False
+
         for key, value in (data or {}).items():
             self._validate(key, value)
             self._data[key] = value
@@ -30,6 +31,7 @@ class Session(MutableMapping):
     def _validate(key, value):
         if not isinstance(key, str):
             raise TypeError("Session keys must be strings")
+
         try:
             json.dumps(value, allow_nan=False)
         except (TypeError, ValueError, OverflowError) as exc:

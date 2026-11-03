@@ -15,15 +15,19 @@ class ASGILifespanTests(unittest.TestCase):
     def test_pair_required(self):
         with self.assertRaises(ValueError):
             Aurora(database_work=object())
+
         with self.assertRaises(ValueError):
             Aurora(database_registry=object())
 
     def test_type_checks(self):
         registry = DatabaseRegistry(DatabaseConfiguration({'default': {'url': 'sqlite:///:memory:'}}))
+
         with self.assertRaises(TypeError):
             Aurora(database_work=object(), database_registry=registry)
+
         with self.assertRaises(TypeError):
             Aurora(database_work=RoutedWorkManager(DatabaseConfiguration({"default": {"url": "sqlite:///:memory:"}})), database_registry=object())
+
         registry.close()
 
     def test_lifespan_no_database(self):
@@ -48,8 +52,11 @@ class ASGILifespanTests(unittest.TestCase):
             async def receive(): return next(events)
             async def send(message): sent.append(message)
             await app({'type': 'lifespan'}, receive, send)
+
             with self.assertRaises(RuntimeError): registry.get()
+
             with self.assertRaises(RuntimeError): await manager.run("default", lambda connection: 1)
+
             return sent
         self.assertEqual([x['type'] for x in asyncio.run(scenario())],
                          ['lifespan.startup.complete', 'lifespan.shutdown.complete'])

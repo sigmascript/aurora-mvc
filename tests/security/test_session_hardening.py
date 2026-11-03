@@ -61,6 +61,7 @@ class TestSessionHardening(unittest.IsolatedAsyncioTestCase):
                     'INSERT INTO aurora_sessions VALUES (?, ?, ?, ?)',
                     (store._hash(token), '{bad json', 99999999999, 1),
                 )
+
         self.app.add_route('/test', lambda request: 'ok')
         self.assertEqual((await self.call('/test', cookie=token))[0], 503)
 
@@ -76,5 +77,6 @@ class TestSessionHardening(unittest.IsolatedAsyncioTestCase):
     def test_invalid_settings_rejected(self):
         with self.assertRaises(ValueError):
             SessionSettings(database_path=self.path, secure=False, cookie_name='__Host-session')
+
         with self.assertRaises(ValueError):
             SessionSettings(database_path=self.path, max_data_bytes=0)

@@ -32,8 +32,10 @@ class RouteMethodValidationTests(unittest.TestCase):
 
     def test_failed_registration_does_not_modify_router(self):
         router = Router()
+
         with self.assertRaises(ValueError):
             router.add("/items", lambda request: None, methods=[], name="items")
+
         self.assertEqual(router.routes, [])
         self.assertEqual(router.named_routes, {})
 

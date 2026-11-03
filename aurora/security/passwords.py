@@ -34,8 +34,10 @@ def _derive(password, salt):
 
 def hash_password(password: str) -> str:
     """Hash a password with a fresh salt; raises ValueError for invalid input."""
+
     if not _valid_password(password):
         raise ValueError("Password must contain 1 to 128 characters")
+
     salt = secrets.token_bytes(_SALT_BYTES)
     digest = _derive(password, salt)
     return f"scrypt${SCRYPT_N}${SCRYPT_R}${SCRYPT_P}${salt.hex()}${digest.hex()}"
@@ -46,6 +48,7 @@ def verify_password(password: str, stored: str) -> bool:
 
     Work factors are fixed to prevent attacker-supplied hashes from raising cost.
     """
+
     if not _valid_password(password) or not isinstance(stored, str):
         return False
     # Bound parsing before any costly password derivation.
@@ -56,16 +59,21 @@ def verify_password(password: str, stored: str) -> bool:
         + 1
     ):
         return False
+
     try:
         algorithm, n, r, p, salt_hex, digest_hex = stored.split("$")
+
         if (algorithm, n, r, p) != ("scrypt", str(SCRYPT_N), str(SCRYPT_R), str(SCRYPT_P)):
             return False
+
         salt = bytes.fromhex(salt_hex)
         expected = bytes.fromhex(digest_hex)
+
         if len(salt) != _SALT_BYTES or len(expected) != _HASH_BYTES:
             return False
     except ValueError:
         return False
+
     return secrets.compare_digest(_derive(password, salt), expected)
 
 

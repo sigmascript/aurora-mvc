@@ -94,6 +94,7 @@ class TestSessionLifecycleIntegration(unittest.IsolatedAsyncioTestCase):
                 request.session
             except RuntimeError:
                 return 'not configured'
+
             return 'unexpected'
         plain.add_route('/', handler)
         messages = []

@@ -30,6 +30,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         work = self.manager()
         await work.aclose()
         await work.aclose()
+
         with self.assertRaisesRegex(RuntimeError, "closed"):
             await work.run("default", lambda db: None)
 
@@ -47,6 +48,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_async_context(self):
         async with self.manager() as work:
             self.assertEqual(work.pending_count, 0)
+
         self.assertTrue(work._closed)
 
     async def test_shutdown_drains_cancelled_waiter(self):
@@ -55,17 +57,22 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         def worker(db):
             started.set()
+
             if not release.wait(5):
                 raise TimeoutError("worker was not released")
+
             return 42
 
         work = self.manager()
         waiter = asyncio.create_task(work.run("default", worker))
+
         try:
             self.assertTrue(await asyncio.to_thread(started.wait, 3))
             waiter.cancel()
+
             with self.assertRaises(asyncio.CancelledError):
                 await waiter
+
             self.assertEqual(work.pending_count, 1)
             shutdown = asyncio.create_task(work.aclose())
             await asyncio.sleep(0.02)
@@ -73,6 +80,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         finally:
             release.set()
             await work.aclose()
+
         self.assertEqual(work.pending_count, 0)
 
     async def test_bounded_parallelism(self):
@@ -84,16 +92,21 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         def worker(db):
             nonlocal active, peak
+
             with lock:
                 active += 1
                 peak = max(peak, active)
+
             time.sleep(0.03)
+
             with lock:
                 active -= 1
+
             return 1
 
         async with self.manager(max_concurrent=2) as work:
             result = await asyncio.gather(*(work.run("default", worker) for _ in range(7)))
+
         self.assertEqual(result, [1] * 7)
         self.assertLessEqual(peak, 2)
         self.assertGreaterEqual(peak, 1)
@@ -109,6 +122,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_shutdown_rejects_new_work(self):
         work = self.manager()
         await work.aclose()
+
         with self.assertRaises(RuntimeError):
             async with work:
                 pass

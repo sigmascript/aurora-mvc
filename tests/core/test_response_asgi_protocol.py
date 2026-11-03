@@ -72,12 +72,14 @@ class ResponseProtocolTests(unittest.TestCase):
 
             async def send(message):
                 calls.append(message["type"])
+
                 if message["type"] == "http.response.body":
                     raise RuntimeError("transport failure")
 
             with self.assertRaisesRegex(RuntimeError, "transport failure"):
                 await app({"type": "http", "method": "HEAD", "path": "/",
                            "headers": []}, receive, send)
+
             return calls
 
         self.assertEqual(asyncio.run(run()), ["http.response.start", "http.response.body"])

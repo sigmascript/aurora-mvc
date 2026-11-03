@@ -18,14 +18,19 @@ def _validate_callback(callback):
 
 def _reject_escaping_handle(result, connection):
     """Reject known live database handles before the worker closes them."""
+
     if inspect.isawaitable(result):
         if inspect.iscoroutine(result):
             result.close()
+
         raise TypeError("Database callback must not return awaitable work")
+
     if isinstance(result, (Connection, ModelOperations, Query)) or result is connection:
         raise TypeError("Database callback must not return a connection-bound handle")
+
     if getattr(result, "connection", None) is connection:
         raise TypeError("Database callback must not return a connection-bound handle")
+
     return result
 
 
@@ -35,6 +40,7 @@ def _run_work(url, callback, transactional=False):
             if transactional:
                 with connection.transaction():
                     return _reject_escaping_handle(callback(connection), connection)
+
             return _reject_escaping_handle(callback(connection), connection)
 
 
@@ -44,7 +50,9 @@ async def run_database_work(url, callback):
     The callback must finish database operations before returning. Use
     ``with connection.transaction():`` for an atomic unit of work.
     """
+
     if not isinstance(url, str) or not url.strip():
         raise ValueError("Database URL must be a nonempty string")
+
     _validate_callback(callback)
     return await asyncio.to_thread(_run_work, url, callback)

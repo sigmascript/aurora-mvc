@@ -28,21 +28,26 @@ class TestFrameworkCSRF(unittest.IsolatedAsyncioTestCase):
         req = request()
         token = csrf_token(req)
         self.assertTrue(validate_csrf(req, token))
+
         for candidate in (None, "", "incorrect", 123, "a" * 300, "é"):
             with self.subTest(candidate=candidate), self.assertRaises(HTTPException) as caught:
                 validate_csrf(req, candidate)
+
             self.assertEqual(caught.exception.status_code, 403)
 
     def test_validation_does_not_create_session(self):
         req = request()
+
         with self.assertRaises(HTTPException):
             validate_csrf(req, "some-token")
+
         self.assertFalse(req.session.changed)
 
     def test_other_session_cannot_reuse_token(self):
         token = csrf_token(request())
         second = request()
         csrf_token(second)
+
         with self.assertRaises(HTTPException):
             validate_csrf(second, token)
 
@@ -52,8 +57,10 @@ class TestFrameworkCSRF(unittest.IsolatedAsyncioTestCase):
         await req.session.regenerate()
         new = csrf_token(req)
         self.assertNotEqual(old, new)
+
         with self.assertRaises(HTTPException):
             validate_csrf(req, old)
+
         self.assertTrue(validate_csrf(req, new))
 
     async def test_protected_form(self):
@@ -65,13 +72,17 @@ class TestFrameworkCSRF(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["title"], "hello")
         bad = request(data="title=hello")
         bad._session = Session({"_aurora_csrf_token": token})
+
         with self.assertRaises(HTTPException) as caught:
             await protected_form(bad)
+
         self.assertEqual(caught.exception.status_code, 403)
 
     def test_safe_method_rejected(self):
         req = request("GET")
         token = csrf_token(req)
+
         with self.assertRaises(HTTPException) as caught:
             validate_csrf(req, token)
+
         self.assertEqual(caught.exception.status_code, 405)

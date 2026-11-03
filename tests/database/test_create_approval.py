@@ -22,13 +22,18 @@ def test_explicit_create_requires_approval_and_refuses_existing_table():
     with connect("sqlite:///:memory:") as db:
         approval = prepare_create(db, Note)
         assert not inspect_table(db, "note").exists
+
         with pytest.raises(PermissionError):
             execute_create(db, Note, approval)
+
         assert not inspect_table(db, "note").exists
+
         execute_create(db, Note, approval, confirm=True)
         assert inspect_table(db, "note").exists
+
         with pytest.raises(ValueError):
             prepare_create(db, Note)
+
         with pytest.raises(RuntimeError):
             execute_create(db, Note, approval, confirm=True)
 
@@ -36,9 +41,13 @@ def test_explicit_create_requires_approval_and_refuses_existing_table():
 def test_approval_cannot_authorize_changed_model_or_dialect():
     with connect("sqlite:///:memory:") as db:
         approval = prepare_create(db, Note)
+
         with pytest.raises(ValueError):
             execute_create(db, ChangedNote, approval, confirm=True)
+
         assert not inspect_table(db, "note").exists
+
         with pytest.raises(ValueError):
             execute_create(db, Note, type(approval)(approval.table, "mysql", approval.fingerprint), confirm=True)
+
         assert not inspect_table(db, "note").exists

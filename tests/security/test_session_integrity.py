@@ -21,16 +21,20 @@ class SessionIntegrityTests(unittest.TestCase):
         token = self.store.commit(None, None, {'value': 'original'})
         _, version = self.store.load(token)
         self.store.commit(token, version, {'value': 'newer'})
+
         with self.assertRaises(SessionConflict):
             self.store.commit(token, version, {'value': 'stale'})
+
         self.assertEqual(self.store.load(token)[0], {'value': 'newer'})
 
     def test_logout_revocation_blocks_inflight_writer(self):
         token = self.store.commit(None, None, {'user': 1})
         _, version = self.store.load(token)
         self.store.commit(token, version, {}, invalidate=True)
+
         with self.assertRaises(SessionConflict):
             self.store.commit(token, version, {'user': 1})
+
         self.assertIsNone(self.store.load(token))
 
     def test_rotation_invalidates_old_token(self):
@@ -44,6 +48,7 @@ class SessionIntegrityTests(unittest.TestCase):
     def test_expired_token_cannot_be_updated(self):
         with patch('aurora.security.sessions.time.time', return_value=100):
             token = self.store.commit(None, None, {'user': 1}, lifetime=10)
+
         with patch('aurora.security.sessions.time.time', return_value=110):
             with self.assertRaises(SessionConflict):
                 self.store.commit(token, 1, {'user': 2})
@@ -56,16 +61,22 @@ class CsrfIntegrityTests(unittest.TestCase):
         token = csrf_token(request)
         self.assertEqual(token, csrf_token(request))
         self.assertTrue(validate_csrf(request, token))
+
         with self.assertRaises(HTTPException) as wrong:
             validate_csrf(request, 'incorrect')
+
         self.assertEqual(wrong.exception.status_code, 403)
         other = Request({'type': 'http', 'method': 'POST', 'headers': []})
         other._session = Session()
+
         with self.assertRaises(HTTPException) as missing:
             validate_csrf(other, token)
+
         self.assertEqual(missing.exception.status_code, 403)
         get_request = Request({'type': 'http', 'method': 'GET', 'headers': []})
         get_request._session = request.session
+
         with self.assertRaises(HTTPException) as wrong_method:
             validate_csrf(get_request, token)
+
         self.assertEqual(wrong_method.exception.status_code, 405)

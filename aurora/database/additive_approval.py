@@ -28,11 +28,14 @@ class AddColumnReview:
 
 def _column_sql(field, dialect):
     """Render a deliberately restricted nullable-column declaration."""
+
     if (field["primary_key"] or not field["nullable"] or field["unique"]
             or field["references"] is not None or field["server_default"] is not None):
         raise ValueError("Only plain nullable columns without constraints are reviewable")
+
     kind = field["type"]
     length = field["length"]
+
     if kind == "str":
         sql_type = f"VARCHAR({length})" if length is not None else "TEXT"
     elif kind == "int":
@@ -47,8 +50,10 @@ def _column_sql(field, dialect):
         sql_type = "DATETIME" if dialect == "mysql" else "TIMESTAMP"
     else:
         raise ValueError("Unsupported column type")
+
     if kind != "str" and length is not None:
         raise ValueError("Unexpected length on non-string column")
+
     return sql_type
 
 
@@ -60,17 +65,24 @@ def review_add_column(connection, before, after, plan):
     """
     validate_migration_plan(plan)
     expected = migration_plan(before, after, migration_id=plan["id"])
+
     if expected != plan:
         raise ValueError("Migration plan does not match supplied snapshots")
+
     if len(plan["operations"]) != 1:
         raise ValueError("Review requires exactly one operation")
+
     operation = plan["operations"][0]
+
     if operation["kind"] != "added_column" or operation["risk"] != "additive":
         raise ValueError("Only additive column changes can be reviewed")
+
     preflight = preflight_migration(connection, before, after, plan)
     blockers = [item for item in preflight.findings if not item.startswith("Read-only preflight:")]
+
     if blockers:
         raise RuntimeError("Migration preflight findings: " + "; ".join(blockers))
+
     table = next(item for item in after["tables"] if item["name"] == operation["table"])
     field = next(item for item in table["columns"] if item["name"] == operation["column"])
     sql_type = _column_sql(field, connection.dialect)
