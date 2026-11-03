@@ -221,7 +221,7 @@ def main(argv: list[str] | None = None) -> int:
     # through a public engine flag or silently receive database operations.
     if args.command == "db" or (args.command == "model" and args.action == "add"):
         args.backend = "aurorasql"
-    
+
     # Installed console scripts may omit the project directory from sys.path.
     # Explicit database model references must resolve like `python -m aurora`.
     # Restrict this to commands that load project models; help and read-only
@@ -373,7 +373,7 @@ def main(argv: list[str] | None = None) -> int:
             parser.exit(1, f"aurora: {exc}\n")
 
         return 0
-    
+
     # Normalize grouped commands to the established, tested handlers.
     # No duplication of project modification logic.
     if args.command == "app":
@@ -500,7 +500,7 @@ def main(argv: list[str] | None = None) -> int:
         import uvicorn
     except ImportError:
         parser.exit(1, "aurora: Uvicorn is required to run the development server. Install with: pip install 'aurora-mvc[dev]'\n")
-    
+
     # Console-script launchers do not necessarily include the working directory
     # in sys.path. Uvicorn must be able to import app:app from the project.
     cwd = str(Path.cwd().resolve())
