@@ -1,4 +1,4 @@
-"""Phase 5.9: readable, inherited starter views."""
+"""Readable inherited starter views and template resolution."""
 from pathlib import Path
 import tempfile
 import unittest

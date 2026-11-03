@@ -1,4 +1,4 @@
-"""Phase 5.11: compact app views, real macros, and backward compatibility."""
+"""Modular view namespaces, reusable macros, and backward compatibility."""
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest

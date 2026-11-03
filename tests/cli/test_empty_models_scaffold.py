@@ -1,4 +1,4 @@
-"""Alpha 3: optional MVC model packages do not register or initialize databases."""
+"""Optional MVC model packages do not register or initialize databases."""
 
 import json
 from pathlib import Path

@@ -1,4 +1,4 @@
-"""Stage C: preserve safe CRUD behavior while the public return API is reviewed."""
+"""Safe CRUD behavior and public result compatibility."""
 
 import pytest
 

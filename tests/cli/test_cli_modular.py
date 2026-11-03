@@ -1,4 +1,4 @@
-"""Phase 5.3: optional modular MVC starter."""
+"""Optional modular MVC project scaffolding."""
 import os
 from pathlib import Path
 import subprocess

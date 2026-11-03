@@ -1,4 +1,4 @@
-"""Batch 2B: safe CLI review export and migration-journal gate."""
+"""Safe CLI review export and migration journal approval gates."""
 
 import json
 import sqlite3

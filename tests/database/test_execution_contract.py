@@ -1,4 +1,4 @@
-"""Tests for Batch 3B-1's non-executable backend and journal contracts."""
+"""Non-executable backend and durable journal safety contracts."""
 
 from dataclasses import replace
 from types import SimpleNamespace

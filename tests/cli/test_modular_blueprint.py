@@ -1,4 +1,4 @@
-"""Alpha 3 modular starter: accessible views, isolation, and inert models."""
+"""Modular starter accessibility, application isolation, and inert models."""
 import json
 from pathlib import Path
 

@@ -9,7 +9,7 @@ class Entry(Model):
     title = column(str, length=50)
 
 
-def test_read_is_lazy_and_supports_alpha4_query_shape():
+def test_read_is_lazy_and_preserves_query_compatibility():
     with connect("sqlite:///:memory:") as db:
         create_table(db, Entry)
         operations = Entry.using(db)

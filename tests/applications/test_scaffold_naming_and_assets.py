@@ -1,4 +1,4 @@
-"""Phase 5.7 regression tests for scaffold naming and public assets."""
+"""Scaffold naming and public asset delivery."""
 import asyncio
 import os
 import tempfile

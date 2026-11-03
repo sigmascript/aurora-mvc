@@ -1,4 +1,4 @@
-"""Alpha 6 Batch C: SQLite runtime, ownership and transaction contracts."""
+"""SQLite runtime ownership, connection lifecycle, and transaction safety."""
 
 import asyncio
 import sqlite3

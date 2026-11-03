@@ -1,4 +1,4 @@
-"""Phase 5.11.1 generated-code and preservation contract."""
+"""Generated modular code and preservation of developer-owned files."""
 import tempfile
 import unittest
 from pathlib import Path

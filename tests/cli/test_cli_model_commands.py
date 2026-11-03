@@ -1,4 +1,4 @@
-"""Phase 6.9: model scaffolding is isolated, explicit and non-destructive."""
+"""Explicit, isolated, and non-destructive model scaffolding."""
 import contextlib
 import io
 import os

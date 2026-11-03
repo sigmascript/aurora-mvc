@@ -1,4 +1,4 @@
-"""Alpha 4 public database command contract (no deprecated aliases)."""
+"""Public database CLI commands and rejection of deprecated aliases."""
 import contextlib
 import io
 import unittest

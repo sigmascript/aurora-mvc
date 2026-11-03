@@ -1,4 +1,4 @@
-"""Alpha 7 read-only migration format contract."""
+"""Read-only migration proposal format and validation."""
 import json
 
 import pytest

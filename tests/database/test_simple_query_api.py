@@ -1,4 +1,4 @@
-"""Focused Alpha 4-style model API compatibility tests."""
+"""Compatibility of model read, query, and result APIs."""
 
 import pytest
 

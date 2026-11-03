@@ -1,4 +1,4 @@
-"""Alpha 4 naming, route, compatibility and non-destructive scaffolding contracts."""
+"""Controller, model, and route naming with non-destructive scaffolding."""
 
 from pathlib import Path
 import tempfile
@@ -11,7 +11,7 @@ from aurora.cli import (
 )
 
 
-class Alpha4ScaffoldingContractTests(unittest.TestCase):
+class ScaffoldingContractTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

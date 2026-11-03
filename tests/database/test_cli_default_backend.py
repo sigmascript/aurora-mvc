@@ -1,4 +1,4 @@
-"""Batch 1 public CLI default and removed backend flag acceptance."""
+"""Default AuroraSQL CLI routing and rejection of retired backend flags."""
 
 import os
 import subprocess

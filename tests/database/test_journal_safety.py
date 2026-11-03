@@ -1,4 +1,4 @@
-"""Batch 2C: reject malformed snapshot and journal evidence before review export."""
+"""Reject malformed snapshot and journal evidence before review export."""
 
 import json
 import sqlite3

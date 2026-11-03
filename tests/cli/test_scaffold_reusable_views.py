@@ -1,4 +1,4 @@
-"""Phase 5.10: Jinja includes/macros and ownership of shared files."""
+"""Jinja includes, macros, and ownership of shared template files."""
 from pathlib import Path
 import tempfile
 import unittest

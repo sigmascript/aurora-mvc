@@ -1,4 +1,4 @@
-"""Batch 2: immutable migration review identity without database writes."""
+"""Immutable migration review identity without database writes."""
 
 import copy
 import json

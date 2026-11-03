@@ -1,4 +1,4 @@
-"""Alpha 3 MVC starter contract: readable, runnable, and isolated."""
+"""Runnable and isolated MVC starter application contract."""
 from pathlib import Path
 
 from aurora.cli import create_project

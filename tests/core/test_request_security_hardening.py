@@ -1,4 +1,4 @@
-"""Phase 5.12: consistent scaffolding and safe static delivery."""
+"""Consistent scaffold naming and safe static-file delivery."""
 import asyncio
 import tempfile
 import unittest

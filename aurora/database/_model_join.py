@@ -134,4 +134,3 @@ def execute_model_join(operations, models, *, cols=None, where=None, order_by=No
             for prefix in (model.__name__, model.__table_name__):
                 columns[f"{prefix}.{field}"] = key
     return ModelResult(rows, columns=columns)
-

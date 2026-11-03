@@ -1,4 +1,4 @@
-"""Batch 1C: project-relative and absolute SQLite read-only CLI inspection."""
+"""Read-only database inspection with project-relative and absolute SQLite paths."""
 import json
 import os
 import sqlite3

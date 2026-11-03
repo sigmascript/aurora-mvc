@@ -1,4 +1,4 @@
-"""Alpha 9 additive configuration and generator compatibility tests."""
+"""Database configuration and generated model compatibility."""
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory

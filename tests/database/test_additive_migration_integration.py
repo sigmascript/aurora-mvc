@@ -1,4 +1,4 @@
-"""Alpha 7 integration: sequential additive migrations and data preservation.
+"""Sequential additive migrations and preservation of existing data.
 
 Live backends are opt-in and MUST be disposable. No production connections.
 """
