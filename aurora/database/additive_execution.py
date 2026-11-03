@@ -5,7 +5,8 @@ engine: unresolved outcomes always require manual investigation.
 """
 
 from dataclasses import dataclass
-from uuid import uuid4
+import re
+from uuid import UUID, uuid4
 
 from .additive_approval import AddColumnReview, review_add_column, _column_sql
 from .coordination import migration_lock
@@ -29,6 +30,67 @@ class AdditiveEntry:
     status: str
 
 
+def _verify_additive_journal(connection):
+    """Reject a missing or structurally altered audit journal before use."""
+    observed = inspect_table(connection, _JOURNAL)
+    required = {
+        "operation_id", "migration_id", "table_name", "column_name",
+        "fingerprint", "status",
+    }
+    columns = {item.name: item for item in observed.columns}
+
+    if not observed.exists:
+        raise RuntimeError("Additive journal missing; initialize explicitly")
+
+    expected_types = {
+        "operation_id": "varchar(36)",
+        "migration_id": "varchar(80)",
+        "table_name": "varchar(128)",
+        "column_name": "varchar(128)",
+        "fingerprint": "varchar(64)",
+        "status": "varchar(16)",
+    }
+
+    if (set(columns) != required
+            or not columns["operation_id"].primary_key
+            or any(columns[name].primary_key for name in required - {"operation_id"})
+            or any(columns[name].nullable for name in required)
+            or any(columns[name].default_sql is not None for name in required)
+            or any(_reflected_type_name(columns[name].sql_type, connection.dialect)
+                   != _reflected_type_name(sql_type, connection.dialect)
+                   for name, sql_type in expected_types.items())
+            or not observed.uniqueness_verified
+            or "migration_id" not in observed.unique_columns
+            or set(observed.unique_columns) - {"operation_id", "migration_id"}
+            or len(observed.indexes) != 2):
+        raise RuntimeError("Additive journal structure mismatch; migration blocked")
+
+    # Column reflection alone cannot reveal triggers or table-level CHECK/FK
+    # clauses. Never trust an audit journal with executable side effects.
+    if connection.dialect == "sqlite":
+        ddl = connection.fetch_first(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=:name",
+            {"name": _JOURNAL},
+        )
+        trigger = connection.fetch_first(
+            "SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name=:name",
+            {"name": _JOURNAL},
+        )
+        temporary_trigger = connection.fetch_first(
+            "SELECT name FROM sqlite_temp_master WHERE type='trigger' AND tbl_name=:name",
+            {"name": _JOURNAL},
+        )
+        foreign_keys = connection.fetch_all(f'PRAGMA foreign_key_list("{_JOURNAL}")')
+
+        if (ddl is None or not isinstance(ddl["sql"], str)
+                or trigger is not None or temporary_trigger is not None or foreign_keys):
+            raise RuntimeError("Additive journal has unsupported schema features")
+
+        if re.search(r"\b(CHECK|REFERENCES|GENERATED|COLLATE|ON\s+CONFLICT|WITHOUT\s+ROWID|STRICT)\b",
+                     ddl["sql"], re.I):
+            raise RuntimeError("Additive journal has unsupported schema features")
+
+
 def initialize_additive_history(connection, *, confirm=False):
     """Explicitly create a separate journal; never alter legacy history."""
 
@@ -50,21 +112,57 @@ def initialize_additive_history(connection, *, confirm=False):
             "status VARCHAR(16) NOT NULL)"
         )
 
+        # Verify that the durable audit structure is actually observable.
+        try:
+            _verify_additive_journal(connection)
+        except RuntimeError as exc:
+            raise RuntimeError(
+                "Additive journal creation could not be verified: structure mismatch"
+            ) from exc
+
 
 def list_additive_history(connection):
     """Read history without creating or repairing any tables."""
 
-    if not inspect_table(connection, _JOURNAL).exists:
-        raise RuntimeError("Additive journal missing; initialize explicitly")
+    _verify_additive_journal(connection)
 
     journal = _quote(_JOURNAL, connection.dialect)
     rows = connection.fetch_all(
         "SELECT operation_id, migration_id, table_name, column_name, "
         f"fingerprint, status FROM {journal} ORDER BY operation_id"
     )
-    return tuple(AdditiveEntry(row["operation_id"], row["migration_id"],
-                               row["table_name"], row["column_name"],
-                               row["fingerprint"], row["status"]) for row in rows)
+    entries = tuple(AdditiveEntry(row["operation_id"], row["migration_id"],
+                                  row["table_name"], row["column_name"],
+                                  row["fingerprint"], row["status"]) for row in rows)
+
+    # A manually modified journal row must not be treated as proof of success.
+    # Preserve unresolved entries for inspection, even if their data is damaged.
+    for entry in entries:
+        if entry.status == "applied":
+            try:
+                valid_id = str(UUID(entry.operation_id)) == entry.operation_id
+            except (ValueError, TypeError, AttributeError):
+                valid_id = False
+
+            fingerprint = entry.fingerprint
+            valid_migration = (isinstance(entry.migration_id, str)
+                               and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,79}",
+                                                entry.migration_id) is not None)
+
+            try:
+                _identifier(entry.table)
+                _identifier(entry.column)
+                valid_columns = True
+            except (TypeError, ValueError):
+                valid_columns = False
+
+            if (not valid_id or not valid_migration or not valid_columns
+                    or not isinstance(fingerprint, str)
+                    or len(fingerprint) != 64
+                    or any(char not in "0123456789abcdef" for char in fingerprint)):
+                raise RuntimeError("Applied migration journal evidence is invalid")
+
+    return entries
 
 
 def _source_columns(before, table):
@@ -93,11 +191,12 @@ def _verify_sqlite_source(connection, before, table):
     if connection.fetch_all(f'PRAGMA foreign_key_list("{table}")'):
         raise RuntimeError("Foreign keys require separate verification")
 
-    if connection.fetch_first(
-        "SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name=:name",
-        {"name": table},
-    ) is not None:
-        raise RuntimeError("Tables with triggers require separate verification")
+    for catalog in ("sqlite_master", "sqlite_temp_master"):
+        if connection.fetch_first(
+            f"SELECT name FROM {catalog} WHERE type='trigger' AND tbl_name=:name",
+            {"name": table},
+        ) is not None:
+            raise RuntimeError("Tables with triggers require separate verification")
 
     row = connection.fetch_first(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name=:name",
@@ -107,9 +206,7 @@ def _verify_sqlite_source(connection, before, table):
     if row is None or not isinstance(row["sql"], str):
         raise RuntimeError("Missing table DDL")
 
-    import re
-
-    if re.search(r'\b(CHECK|REFERENCES|GENERATED|COLLATE|WITHOUT\s+ROWID|STRICT)\b',
+    if re.search(r'\b(CHECK|REFERENCES|GENERATED|COLLATE|ON\s+CONFLICT|WITHOUT\s+ROWID|STRICT)\b',
                  row["sql"], re.I):
         raise RuntimeError("Advanced schema constraints require separate verification")
 
@@ -135,6 +232,20 @@ def _verify_sqlite_source(connection, before, table):
 
         if observed.sql_type.upper() != expected:
             raise RuntimeError("Live SQL type differs from source snapshot")
+
+
+def _reflected_type_name(sql_type, dialect):
+    """Normalize only documented PostgreSQL spellings of supported SQL types."""
+    name = sql_type.lower()
+
+    if dialect == "postgresql":
+        if name.startswith("varchar("):
+            return name.replace("varchar(", "character varying(", 1)
+
+        if name.startswith("decimal("):
+            return name.replace("decimal(", "numeric(", 1)
+
+    return name
 
 
 def _verify_remote_source(connection, before, table):
@@ -257,8 +368,62 @@ def _verify_remote_source(connection, before, table):
         expected = "BIGINT" if field["primary_key"] else _column_sql(field, dialect)
         expected = aliases.get(expected, expected.lower())
 
-        if observed.sql_type.lower() != expected.lower():
+        if observed.sql_type.lower() != _reflected_type_name(expected, dialect):
             raise RuntimeError("Live SQL type differs from source snapshot")
+
+
+
+def _verify_added_column(connection, before, after, table, column, original):
+    """Require the reviewed column to be visible before recording success.
+
+    Reflection failures leave the durable journal unresolved. They must not
+    trigger an automatic DDL retry, especially on nontransactional backends.
+    """
+    live = inspect_table(connection, table)
+
+    if (not live.exists or not live.uniqueness_verified
+            or live.constraints_verified != original.constraints_verified):
+        raise RuntimeError("Post-migration table cannot be verified")
+
+    if live.indexes != original.indexes or live.unique_columns != original.unique_columns:
+        raise RuntimeError("Post-migration indexes or uniqueness differ from source")
+
+    previous = _source_columns(before, table)
+    expected_table = next(item for item in after["tables"] if item["name"] == table)
+    expected_field = next(item for item in expected_table["columns"] if item["name"] == column)
+    actual = {item.name: item for item in live.columns}
+
+    if set(actual) != set(previous) | {column}:
+        raise RuntimeError("Post-migration column inventory differs from review")
+
+    # An ADD COLUMN must not silently change existing column definitions.
+    old_columns = {item.name: item for item in original.columns}
+
+    if any(actual.get(name) != field for name, field in old_columns.items()):
+        raise RuntimeError("Post-migration existing columns differ from source")
+
+    observed = actual[column]
+    expected_type = _column_sql(expected_field, connection.dialect).lower()
+    reflected_type = _reflected_type_name(observed.sql_type, connection.dialect)
+
+    # These are dialect spellings of the same restricted column declarations.
+    aliases = {
+        "mysql": {"boolean": "tinyint(1)"},
+        "postgresql": {
+            "boolean": "boolean",
+            "timestamp": "timestamp without time zone",
+        },
+    }
+    expected_type = aliases.get(connection.dialect, {}).get(expected_type, expected_type)
+
+    expected_type = _reflected_type_name(expected_type, connection.dialect)
+
+    if (observed.primary_key or not observed.nullable
+            or observed.default_sql is not None or reflected_type != expected_type):
+        raise RuntimeError("Post-migration column differs from approved declaration")
+
+    if column in live.unique_columns:
+        raise RuntimeError("Post-migration column has an unexpected unique constraint")
 
 
 def execute_add_column_recorded(connection, before, after, plan, approval, *, confirm=False):
@@ -271,8 +436,7 @@ def execute_add_column_recorded(connection, before, after, plan, approval, *, co
         raise ValueError("Expected exact non-executable review token")
 
     with migration_lock(connection):
-        if not inspect_table(connection, _JOURNAL).exists:
-            raise RuntimeError("Additive journal missing")
+        _verify_additive_journal(connection)
 
         if inspect_table(connection, _CREATE_JOURNAL).exists and review_history(connection):
             raise RuntimeError("Unresolved legacy create history")
@@ -298,6 +462,7 @@ def execute_add_column_recorded(connection, before, after, plan, approval, *, co
         else:
             _verify_remote_source(connection, before, approval.table)
 
+        original = inspect_table(connection, approval.table)
         op_id = str(uuid4())
         journal = _quote(_JOURNAL, connection.dialect)
         connection.execute_write(
@@ -308,22 +473,71 @@ def execute_add_column_recorded(connection, before, after, plan, approval, *, co
              "status": "started"},
         )
 
+        # Do not run irreversible DDL until the intent record is observable.
+        # A successful DB-API write call alone does not prove the audit row exists.
+        recorded = connection.fetch_first(
+            f"SELECT migration_id, table_name, column_name, fingerprint, status "
+            f"FROM {journal} WHERE operation_id=:oid",
+            {"oid": op_id},
+        )
+
+        if recorded != {
+            "migration_id": approval.migration_id,
+            "table_name": approval.table,
+            "column_name": approval.column,
+            "fingerprint": approval.plan_fingerprint,
+            "status": "started",
+        }:
+            raise RuntimeError("Migration intent journal could not be verified; DDL blocked")
+
         try:
             connection.execute_write(approval.sql_preview)
         except BaseException:
             try:
                 connection.execute_write(
-                    f"UPDATE {journal} SET status=:status WHERE operation_id=:oid",
+                    f"UPDATE {journal} SET status=:status "
+                    "WHERE operation_id=:oid AND status='started'",
                     {"status": "uncertain", "oid": op_id},
                 )
             except BaseException:
                 pass
 
             raise
+        # A successful DDL call alone does not establish schema equivalence.
+        # A reflection failure preserves 'started' for manual investigation.
+        _verify_added_column(connection, before, after, approval.table, approval.column, original)
+
+        # Reapply the strict backend-specific table gate to the resulting schema.
+        # Column/index comparisons alone cannot detect newly introduced triggers,
+        # foreign keys, or other features outside the supported migration subset.
+        if connection.dialect == "sqlite":
+            _verify_sqlite_source(connection, after, approval.table)
+        else:
+            _verify_remote_source(connection, after, approval.table)
+
         # An audit failure is deliberately not retried: the 'started' record
         # remains as evidence for manual investigation.
         connection.execute_write(
-            f"UPDATE {journal} SET status=:status WHERE operation_id=:oid",
+            f"UPDATE {journal} SET status=:status "
+            "WHERE operation_id=:oid AND status='started'",
             {"status": "applied", "oid": op_id},
         )
+
+        # A write that returns without error can still affect zero rows.
+        # Never report success unless the final journal state is observable.
+        finalized = connection.fetch_first(
+            f"SELECT migration_id, table_name, column_name, fingerprint, status "
+            f"FROM {journal} WHERE operation_id=:oid",
+            {"oid": op_id},
+        )
+
+        if finalized != {
+            "migration_id": approval.migration_id,
+            "table_name": approval.table,
+            "column_name": approval.column,
+            "fingerprint": approval.plan_fingerprint,
+            "status": "applied",
+        }:
+            raise RuntimeError("Final migration journal could not be verified; outcome unresolved")
+
         return op_id
