@@ -26,6 +26,7 @@ def test_live_database_workflow(dialect, environment):
         pytest.skip(f"{environment} not configured")
 
     table_name = "aurorasql_probe_" + uuid4().hex[:16]
+
     # The model is generated only to obtain a collision-resistant table name.
     Probe = type("Probe", (Model,), {
         "__table__": table_name,

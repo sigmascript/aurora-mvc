@@ -9,6 +9,7 @@ from ._model_filters import _normalize_ordering
 def execute_model_join(operations, models, *, cols=None, where=None, order_by=None,
                        limit=None, offset=0, on=None):
     """Execute a direct JOIN with model-aware column names and safe filters."""
+
     # Keep public model classes in models.py to preserve their import identities.
     from .models import Model, ModelResult, Query
 

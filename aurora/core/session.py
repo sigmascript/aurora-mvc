@@ -85,6 +85,7 @@ class Session(MutableMapping):
         The session manager performs the actual secure rotation at commit.
         """
         self._ensure_active()
+
         # CSRF tokens must not survive an authentication boundary.
         self._data.pop("_aurora_csrf_token", None)
         self._changed = True

@@ -136,6 +136,7 @@ def test_worker_cancel_does_not_interrupt_thread_or_leak_connection():
                 release.set()
 
             assert await asyncio.to_thread(finished.wait, 3)
+
             # The worker finishes independently of its cancelled awaiter.
             # Wait for the context manager's close to become observable.
             for _ in range(100):

@@ -33,6 +33,7 @@ def _preflight(connection, models, alias):
     missing = [p.table for p in plans if not p.exists]
     warnings = [warning for p in plans for warning in p.warnings]
     drift = [p.table for p in plans if p.exists and (p.changes or p.warnings)]
+
     # Even an apparently matching existing schema cannot be certified by this preflight.
     status = "REFUSED" if unexpected or (existing and missing) or drift else (
         "EMPTY" if not existing else "EXISTING_UNVERIFIED")

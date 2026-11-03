@@ -184,6 +184,7 @@ class SessionManager:
         session = Session(record[0] if record else None)
         session._token = token if record else None
         session._version = record[1] if record else None
+
         # Unknown/expired cookies should be cleared even on read-only requests.
         session._stale_cookie = bool(token and not record)
         request._session = session

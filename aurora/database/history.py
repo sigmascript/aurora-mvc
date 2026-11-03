@@ -35,6 +35,7 @@ def initialize_history(connection, *, confirm=False):
         raise RuntimeError("History table already exists; refusing to recreate it")
 
     table = _quote(_HISTORY_TABLE, connection.dialect)
+
     # Portable across SQLite, MySQL and PostgreSQL; IDs are application generated.
     connection.execute_write(
         f"CREATE TABLE {table} ("
@@ -400,6 +401,7 @@ def preflight_recovery(connection, operation_id, model):
         assessment = assess_recovery(connection, operation_id, model)
         schema_findings = review_recovery_schema(connection, operation_id, model)
         history_findings = review_history(connection)
+
         # A migration's unresolved entry is expected, but every other finding
         # remains visible for manual investigation. Do not filter evidence.
         return RecoveryPreflight(operation_id, assessment, tuple(schema_findings),

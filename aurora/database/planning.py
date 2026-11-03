@@ -113,6 +113,7 @@ def plan_schema(connection, model):
             expected_type = "date" if field.python_type.__name__ == "date" else "datetime"
 
         actual_type = _type_family(observed.sql_type)
+
         # SQLite stores booleans as INTEGER; this is expected for our DDL.
         if connection.dialect == "sqlite" and expected_type == "bool" and actual_type == "int":
             actual_type = "bool"

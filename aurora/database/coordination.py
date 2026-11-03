@@ -9,6 +9,7 @@ from hashlib import sha256
 
 
 _LOCK_NAME = "aurorasql:migration:history:v1"
+
 # Stable signed 63-bit key, independent of Python's randomized hash().
 _PG_LOCK_KEY = int.from_bytes(sha256(_LOCK_NAME.encode()).digest()[:8], "big") & ((1 << 63) - 1)
 

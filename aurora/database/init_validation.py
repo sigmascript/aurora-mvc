@@ -29,6 +29,7 @@ def validate_init_models(models, dialect="sqlite"):
             raise ValueError("Duplicate model table names")
 
         tables[table] = model
+
         # Validate full dialect-specific DDL before any future write.
         create_table_sql(model, dialect)
 

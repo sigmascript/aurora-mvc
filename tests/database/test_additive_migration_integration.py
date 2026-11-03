@@ -78,6 +78,7 @@ def _exercise(conn, dialect, table, suffix):
     before = schema_snapshot(original, dialect=dialect)
     after = schema_snapshot(titled, dialect=dialect)
     plan = migration_plan(before, after, migration_id=f"a7_title_{suffix}")
+
     # Reusing an already reviewed operation must be refused by the journal,
     # even if the source schema no longer matches the live table.
     from aurora.database import AddColumnReview
@@ -121,6 +122,7 @@ def test_live_two_sequential_aio_style_changes_preserve_data(dialect, env):
             created_journal = True
         finally:
             conn.execute_write(f"DROP TABLE IF EXISTS {_quote(table, dialect)}")
+
             # If _exercise failed after creating the journal, it is intentionally
             # preserved as recovery evidence rather than silently deleted.
             if created_journal:

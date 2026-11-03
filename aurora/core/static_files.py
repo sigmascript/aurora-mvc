@@ -96,6 +96,7 @@ def _open_windows_file(root: Path, parts: list[str]):
 async def serve_static_file(scope, send, *, root: Path, url_prefix: str):
     """Serve configured public files in bounded chunks, never outside root."""
     method = scope.get("method", "GET")
+
     # ASGI scope["path"] is already percent-decoded by the server.
     path = scope["path"][len(url_prefix) + 1:]
     parts = path.split("/")

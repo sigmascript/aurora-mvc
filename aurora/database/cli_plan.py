@@ -151,6 +151,7 @@ def run_plan(args):
 
     if parsed.scheme in ("sqlite", "sqlite+pysqlite"):
         db_file = _existing_sqlite_path(url, base_dir)
+
         # Read-only SQLite URI guarantees that planning cannot create or write a DB.
         raw = sqlite3.connect(db_file.resolve().as_uri() + "?mode=ro", uri=True,
                               isolation_level=None)

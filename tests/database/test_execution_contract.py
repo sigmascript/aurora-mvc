@@ -76,6 +76,7 @@ def test_journal_rejects_unknown_backend():
 
 def test_review_requires_exact_acknowledgment():
     from aurora.database.snapshots import schema_snapshot
+
     # Use a minimal canonical snapshot with no model tables.
     before = {"format": "aurorasql.schema.v1", "dialect": "sqlite", "tables": []}
     review = create_review(before, before, migration_id="MigrationOne")

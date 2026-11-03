@@ -92,6 +92,7 @@ def register_model(reference, *, database="default", manifest="aurora_models.jso
 
     data = _load_manifest(location)
     refs = data["databases"].setdefault(database, [])
+
     # Do not silently rewrite existing manifests or collapse unrelated refs.
     existing = [canonical_model_reference(ref, project=root) for ref in refs]
 

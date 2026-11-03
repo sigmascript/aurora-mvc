@@ -55,6 +55,7 @@ def inspect_table(connection, table_name):
             index_name = index["name"]
             _identifier(index_name)
             index_names.append(index_name)
+
             # A unique composite index does not imply each member is unique.
             if index["unique"] and not index["partial"]:
                 members = connection.fetch_all(f'PRAGMA index_xinfo("{index_name}")')
@@ -141,6 +142,7 @@ def inspect_table(connection, table_name):
             "ORDER BY a.attnum",
             {"name": table_name},
         )
+
         # Inventory all indexes separately from the strict single-column
         # uniqueness classification. Constraint-backed and composite indexes
         # must remain visible for conservative schema review.

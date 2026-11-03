@@ -164,6 +164,7 @@ def add_app(name: str, *, directory: Path | None = None) -> Path:
     updated = source.replace("# aurora:imports", f"from apps.{name}.controllers.{class_name} import {class_name}\n# aurora:imports")
     updated = updated.replace("        # aurora:views", f'        "{name}": ROOT / "apps" / "{name}" / "views",\n        # aurora:views')
     updated = updated.replace("# aurora:routes", f'app.route("/{name}/", {class_name})\n# aurora:routes')
+
     # Prepare the new app in a sibling staging directory. No developer file is
     # changed until all scaffold files have been written successfully.
     import shutil
@@ -197,6 +198,7 @@ def add_app(name: str, *, directory: Path | None = None) -> Path:
             '    {{ action_link("Back to home", "/") }}\n'
             '{% endblock %}\n', encoding="utf-8",
         )
+
         # Write the replacement first, then atomically swap app.py on the
         # same filesystem. A failure here leaves the original untouched.
         temp_app = None
@@ -432,6 +434,7 @@ def create_controller(app_name: str, name: str, *,
     destination = root / "controllers" / f"{module}.py"
     _reject_component_collision(root / "controllers", name, "controller")
     route = f"/{app_name}/{_controller_slug(name)}/"
+
     # Keep the existing app's base route untouched and avoid duplicate registrations.
     if re.search(r"app\.route\(\s*[\'\"]" + re.escape(route) + r"[\'\"]", source):
         raise ValueError(f"Route already registered: {route}")
@@ -502,6 +505,7 @@ def create_standalone_controller(name: str, *, directory: Path | None = None) ->
     root = _standalone_controller_root(directory)
     app_file = root / "app.py"
     source = app_file.read_text(encoding="utf-8")
+
     # The original standalone scaffold has no anchors. Require a recognizable
     # Aurora application before appending the registration.
     if not re.search(r"(?m)^app\s*=\s*Aurora\(", source):

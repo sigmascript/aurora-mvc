@@ -128,6 +128,7 @@ def test_model_mismatch_rejected(setup):
 
 def test_ddl_failure_rolls_back_journal_and_tables(setup):
     conn, _, review = setup
+
     # Force a DDL error after BEGIN without modifying application tables.
     conn.set_authorizer(lambda action, p1, p2, db, trigger:
                         sqlite3.SQLITE_DENY if action == sqlite3.SQLITE_CREATE_TABLE and p1 == 'notes'

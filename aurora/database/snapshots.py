@@ -176,6 +176,7 @@ def compare_snapshots(before, after):
             if column not in old[table]:
                 field = new[table][column]
                 kind = "added_column"
+
                 # NOT NULL without a server default may be impossible to add
                 # safely to a populated table; Python defaults do not count.
                 risk = "additive" if field["nullable"] or field["server_default"] is not None else "requires_data_strategy"

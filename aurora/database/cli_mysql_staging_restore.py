@@ -282,6 +282,7 @@ def _stage_grants(connection: list[str], stage: str, account: str) -> None:
     allowed = {'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'DROP', 'INDEX',
                'ALTER', 'CREATE VIEW', 'SHOW VIEW', 'TRIGGER'}
     present: set[str] = set()
+
     # SHOW GRANTS is security-sensitive: accept only the exact authenticated
     # account and simple database-scoped privileges. Reject grant options,
     # roles, partial grants, unexpected clauses, and other schemas.
@@ -342,6 +343,7 @@ def staging_restore(config_path: str, alias: str, source: str, login_path: str |
     server = ['--protocol=TCP', f'--host={url.hostname}', f'--port={url.port or 3306}']
     source_conn = [f'--login-path={login_path}', *server, f'--user={unquote(url.username)}']
     source_identity = _identity(source_conn, target, unquote(url.username), 'source identity inspection')
+
     # Staging profile supplies its own username; do not force source username.
     stage_conn = [f'--login-path={staging_login_path}', *server]
     stage_probe = _run(['mysql', *stage_conn, '--batch', '--skip-column-names', stage,
@@ -378,6 +380,7 @@ def staging_restore(config_path: str, alias: str, source: str, login_path: str |
         raise ValueError('Staging restore cancelled; no SQL imported')
 
     verify_empty()
+
     # Refuse a changed file after approval; do not open arbitrary new content.
     if backup.read_bytes() != data:
         raise ValueError('Backup changed during staging restore approval')

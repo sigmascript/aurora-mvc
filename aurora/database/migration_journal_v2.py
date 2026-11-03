@@ -106,6 +106,7 @@ def record_prepared_intent(connection, *, migration_id, review_sha256,
 
     _check_connection(connection)
     _validate_intent(migration_id, review_sha256, before_sha256, after_sha256)
+
     # Serialize participating SQLite writers across the check-and-insert window.
     # This is journal coordination only, not a migration execution lock.
     try:

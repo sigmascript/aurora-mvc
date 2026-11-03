@@ -18,6 +18,7 @@ def test_inspect_and_plan_existing_sqlite_table():
         assert preview.changes[0].kind == "create_table"
 
         assert preview.create_sql_preview.startswith("CREATE TABLE")
+
         # Planning did not create the table.
         assert not inspect_table(db, "note").exists
 

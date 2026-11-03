@@ -51,6 +51,7 @@ def backup_mysql_database(config_path: str, alias: str, destination: str | None,
 
     host = url.hostname
     port = url.port or 3306
+
     # Explicit host/user/port ensure a login profile cannot silently redirect
     # a backup to a different account or server. Password remains in the profile.
     connection = [f"--login-path={login_path}", "--protocol=TCP",

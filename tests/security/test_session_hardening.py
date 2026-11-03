@@ -53,6 +53,7 @@ class TestSessionHardening(unittest.IsolatedAsyncioTestCase):
     async def test_corrupt_stored_session_fails_closed(self):
         token = 'testtoken'
         store = self.app.session_manager.store
+
         # sqlite3's context manager commits but does not close the connection.
         # Explicit closing is required so Windows can remove the temporary DB.
         with closing(sqlite3.connect(self.path)) as db:

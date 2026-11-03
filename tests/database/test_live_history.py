@@ -44,6 +44,7 @@ def test_live_recorded_history_and_recovery_readonly(dialect, environment, monke
         "id": column(int, primary_key=True),
         "title": column(str, length=100),
     })
+
     # Isolate the test journal from real migration history, including other tests.
     monkeypatch.setattr(history_module, "_HISTORY_TABLE", journal_name)
     quote = "`" if dialect == "mysql" else '"'
