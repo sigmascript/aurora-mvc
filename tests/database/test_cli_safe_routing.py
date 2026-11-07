@@ -19,14 +19,14 @@ def test_aurorasql_migrate_write_refused_without_legacy_fallback():
     result = _cli("migrate", "--apply", "--confirm", "APPLY")
     assert result.returncode != 0
 
-    assert "refusing legacy fallback" in result.stderr
+    assert "Model-driven migration refused" in result.stderr
 
 
-def test_aurorasql_migrate_requires_dry_run():
+def test_aurorasql_migrate_without_models_refuses():
     result = _cli("migrate")
     assert result.returncode != 0
 
-    assert "not yet integrated" in result.stderr
+    assert "Model-driven migration refused" in result.stderr
 
 
 def test_aurorasql_backup_refuses_legacy_fallback():
@@ -76,7 +76,7 @@ def test_migrate_write_flags_never_fall_through_to_read_only_preview():
     result = _cli("migrate", "--dry-run", "--apply")
     assert result.returncode == 1
 
-    assert "refusing legacy fallback" in result.stderr
+    assert "Model-driven migration refused" in result.stderr
 
 
 def test_public_cli_uses_only_the_retained_database_namespace():

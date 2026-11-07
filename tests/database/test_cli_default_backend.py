@@ -37,4 +37,4 @@ def test_no_manifest_does_not_fall_back_to_legacy(tmp_path):
     result = _run("db", "migrate", cwd=tmp_path)
     assert result.returncode != 0
 
-    assert "refusing legacy fallback" in result.stderr
+    assert "Model-driven migration refused" in result.stderr

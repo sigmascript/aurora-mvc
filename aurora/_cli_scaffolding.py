@@ -92,6 +92,14 @@ def create_project(name: str, *, directory: Path | None = None, mvc: bool = Fals
             json.dumps({"databases": {"default": {"url": "sqlite:///data.sqlite3"}}}, indent=2) + "\n",
             encoding="utf-8",
         )
+        (root / "aurora_config.json").write_text(
+            json.dumps({
+                "format": "aurora.application.v1",
+                "application": {"name": name, "timezone": "UTC"},
+                "limits": {},
+                "constants": {},
+            }, indent=2) + "\n", encoding="utf-8",
+        )
         (root / "aurora_models.json").write_text(
             json.dumps({"databases": {}}, indent=2) + "\n", encoding="utf-8",
         )
@@ -100,16 +108,20 @@ def create_project(name: str, *, directory: Path | None = None, mvc: bool = Fals
         (root / "README.md").write_text(
             f"# {name}\n\nRun from the parent directory: "
             f"`aurora run {name}.app:app`\n\n"
+            "## Application settings\n\n"
+            "- `aurora_config.json` holds validated, nonsecret application defaults.\n"
+            "- Do not place user preferences or credentials in this file.\n"
+            "- `app.py` loads it explicitly with `Aurora.from_config`.\n\n"
             "## Database setup\n\n"
             "- `aurora_databases.json` configures the `default` SQLite alias.\n"
-            "- MVC and modular starters include an empty `models/` package; no model is registered automatically.\n"
-            "- `aurora_models.json` intentionally starts empty. Register trusted "
-            "`MODULE:CLASS` model references under `databases.default` before using "
-            "model-aware migration commands.\n"
+            "- AuroraSQL discovers one CamelCase model per file from shared `models/` "
+            "and modular `apps/*/models/` directories.\n"
+            "- `aurora_models.json` optionally assigns models to named databases; "
+            "unassigned discovered models use `default`.\n"
             "- No SQLite file or tables are created by scaffolding. Initialize "
             "your database explicitly before inspection or migrations.\n"
-            "- `aurora db plan --database default` inspects the configured schema; "
-            "`aurora db migrate --dry-run` previews changes after setup.\n"
+            "- `aurora db plan` previews changes without writes; `aurora db migrate` "
+            "interactively reviews supported changes.\n"
             "- `migrations/` and `backups/` are prepared for reviewed operations.\n",
             encoding="utf-8",
         )
@@ -508,7 +520,7 @@ def create_standalone_controller(name: str, *, directory: Path | None = None) ->
 
     # The original standalone scaffold has no anchors. Require a recognizable
     # Aurora application before appending the registration.
-    if not re.search(r"(?m)^app\s*=\s*Aurora\(", source):
+    if not re.search(r"(?m)^app\s*=\s*Aurora(?:\.from_config)?\(", source):
         raise ValueError("Cannot safely register controller: app.py has no standard Aurora app assignment.")
 
     module = name

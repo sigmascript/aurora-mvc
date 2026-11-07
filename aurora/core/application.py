@@ -1,5 +1,7 @@
 import inspect
 import sqlite3
+from datetime import timezone
+from types import MappingProxyType
 
 from aurora.core.configuration import (
     validate_locale_cookie,
@@ -68,6 +70,10 @@ class Application:
         self._lifespan_started = False
         self._lifespan_stopped = False
         self.environment = environment
+        # Defaults are inert; only from_config opts into project JSON settings.
+        self.settings = MappingProxyType({})
+        self.constants = MappingProxyType({})
+        self.timezone = timezone.utc
         self.static_url, self.static_directory = validate_static_settings(
             static_directory, statics_directory, static_url
         )
@@ -86,6 +92,33 @@ class Application:
         if views_directory is not None:
             self.renderer = ViewRenderer(views_directory, view_namespaces=view_namespaces)
             self.renderer.environment.globals["url_for"] = self.url_for
+
+    @classmethod
+    def from_config(cls, source, **constructor_options):
+        """Create an application from validated JSON and explicit Python options.
+
+        Explicit constructor options cannot override keys also provided by JSON.
+        This prevents silent precedence changes in existing applications.
+        """
+        from aurora.core.app_settings import load_application_settings
+
+        configuration = load_application_settings(source)
+        overlap = set(constructor_options).intersection(configuration.constructor_options)
+
+        if overlap:
+            raise ValueError("Application options supplied in both JSON and Python: "
+                             + ", ".join(sorted(overlap)))
+
+        options = {**configuration.constructor_options, **constructor_options}
+        app = cls(**options)
+        app.constants = configuration.constants
+        app.timezone = configuration.tzinfo
+        app.settings = MappingProxyType({
+            "name": configuration.name,
+            "timezone": configuration.timezone_name,
+            "constants": configuration.constants,
+        })
+        return app
 
     # --- Middleware and route registration ---
 

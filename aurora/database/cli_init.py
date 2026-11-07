@@ -236,7 +236,7 @@ def _foreign_key_violations(connection):
     return connection._raw.execute("PRAGMA foreign_key_check").fetchall()
 
 
-def _execute_batch(connection, models):
+def _execute_batch(connection, models, alias="default", title="Initial migration"):
     """One migration lock, per-table journal entries, no automatic recovery.
 
     Caller must have performed a complete locked preflight before invoking.
@@ -248,6 +248,8 @@ def _execute_batch(connection, models):
     from .execution import CreateApproval, execute_create
     from .history import initialize_history, list_history, review_history
     from .inspection import inspect_table
+    from .migration_journal_v2 import initialize_intent_journal_locked
+    from .migration_timeline import complete_initial, prepare_initial
     from .schema import _quote, create_table_sql
 
     # SQLite PRAGMA foreign_keys cannot be changed inside a transaction.
@@ -271,12 +273,14 @@ def _execute_batch(connection, models):
         if inspect_table(connection, "aurorasql_schema_history").exists:
             raise RuntimeError("Existing migration journal requires manual review")
         # Revalidate under the lock, including any external schema change.
-        report = _preflight(connection, models, "default")
+        report = _preflight(connection, models, alias)
 
         if report["status"] != "EMPTY" or _unsafe_warnings(report):
             raise RuntimeError("Database changed before locked initialization")
 
         initialize_history(connection, confirm=True)
+        prepare_initial(connection._raw, models, alias, title)
+        initialize_intent_journal_locked(connection._raw)
         journal = _quote("aurorasql_schema_history", connection.dialect)
 
         for model in models:
@@ -330,6 +334,8 @@ def _execute_batch(connection, models):
             _mark_batch_uncertain(connection, journal, operation_ids)
             raise RuntimeError("SQLite foreign-key check failed; review migration journal")
 
+        complete_initial(connection._raw)
+
     return operation_ids
 
 
@@ -358,6 +364,9 @@ def run_init_apply(args):
     from .init_validation import validate_init_models
     url = config.resolve(args.database)
     parsed = urlsplit(url)
+
+    if getattr(args, "title", None) is not None and parsed.scheme not in ("sqlite", "sqlite+pysqlite"):
+        raise ValueError("Migration titles require native SQLite history on this backend")
 
     if parsed.scheme == "postgresql+psycopg":
         models = validate_init_models(models, dialect="postgresql")
@@ -436,12 +445,59 @@ def run_init_apply(args):
     if not db_file.is_absolute():
         db_file = base_dir / db_file
 
-    if not db_file.is_file():
-        raise ValueError("Create an empty SQLite database file explicitly before initialization")
+    if db_file.is_symlink() or (db_file.exists() and not db_file.is_file()):
+        raise ValueError("SQLite initialization requires an ordinary database file")
 
     digest = _approval_digest(models, args.database, db_file)
+    interactive = args.approve is None and args.confirm is None
+    create_file = not db_file.exists()
 
-    if args.approve is None and args.confirm is None:
+    if create_file and (not interactive or not db_file.parent.is_dir()):
+        raise ValueError("New SQLite file creation requires interactive approval and an existing directory")
+
+    if create_file:
+        import sys
+
+        if not sys.stdin.isatty():
+            raise ValueError("New SQLite database file requires an interactive terminal")
+
+    if interactive:
+        import sys
+
+        if sys.stdin.isatty():
+            if not create_file:
+                with Connection(sqlite3.connect(db_file.resolve().as_uri() + "?mode=ro",
+                                                uri=True, isolation_level=None), "sqlite") as checked:
+                    preflight = _preflight(checked, models, args.database)
+
+                if preflight["status"] != "EMPTY" or _unsafe_warnings(preflight):
+                    raise RuntimeError("Initialization preflight is not eligible")
+
+            print(f"AuroraSQL initialization — {args.database} (SQLite)")
+
+            if create_file:
+                print(f"  create database file: {db_file.resolve()}")
+
+            for model in models:
+                print(f"  create table: {model.__table_name__}")
+
+            if input("Initialize this database? [y/N]: ").strip().lower() != "y":
+                print("Initialization cancelled; no database changes made.")
+                return 0
+
+            approved_digest = digest
+            approved_confirm = "APPLY"
+        else:
+            if getattr(args, "title", None) is not None:
+                raise ValueError("Noninteractive initialization title requires explicit approval")
+
+            approved_digest = None
+            approved_confirm = None
+    else:
+        approved_digest = args.approve
+        approved_confirm = args.confirm
+
+    if approved_digest is None and approved_confirm is None:
         raw = sqlite3.connect(db_file.resolve().as_uri() + "?mode=ro", uri=True,
                               isolation_level=None)
 
@@ -453,8 +509,17 @@ def run_init_apply(args):
         print(json.dumps(report, indent=2, sort_keys=True))
         return 0 if report["status"] == "EMPTY" else 3
 
-    if args.approve != digest or args.confirm != "APPLY":
+    if approved_digest != digest or approved_confirm != "APPLY":
         raise ValueError("Exact schema approval and --confirm APPLY are required")
+
+    from .migration_titles import migration_title
+    title = migration_title(getattr(args, "title", None), "Initial migration")
+
+    if create_file:
+        # Exclusive creation happens only after the human confirms both path
+        # and schema. Never overwrite or implicitly create parent directories.
+        with db_file.open("xb"):
+            pass
 
     raw = sqlite3.connect(db_file.resolve().as_uri() + "?mode=rw", uri=True,
                           isolation_level=None)
@@ -465,7 +530,7 @@ def run_init_apply(args):
         if report["status"] != "EMPTY" or _unsafe_warnings(report):
             raise RuntimeError("Database changed after review; initialization refused")
 
-        operation_ids = _execute_batch(connection, models)
+        operation_ids = _execute_batch(connection, models, args.database, title)
 
     print(json.dumps({"status": "INITIALIZED", "database_alias": args.database,
                       "tables": [model.__table_name__ for model in models],

@@ -52,7 +52,7 @@ def test_dialect_ddl_and_rejected_unsupported_schema():
 
     assert '"title" VARCHAR(60) NOT NULL UNIQUE' in pg_sql
 
-    assert "DEFAULT" not in sqlite_sql  # Python defaults remain application-side
+    assert '"active" INTEGER NOT NULL DEFAULT 1' in sqlite_sql
 
     with pytest.raises(ValueError, match="dialect"):
         create_table_sql(Entry, "oracle")
@@ -84,3 +84,27 @@ def test_create_tables_explicit_multiple_models():
 
         with pytest.raises(ValueError, match="At least one"):
             create_tables(db)
+
+
+def test_database_supplies_sql_default_even_for_raw_insert():
+    class Article(Model):
+        id = column(int, primary_key=True)
+        title = column(str)
+        status = column(str, default="editor's draft")
+        enabled = column(bool, default=False)
+        note = column(str, nullable=True, default="optional")
+
+    ddl = create_table_sql(Article, "sqlite")
+    assert "DEFAULT 'editor''s draft'" in ddl
+
+    with connect("sqlite:///:memory:") as db:
+        create_table(db, Article)
+        db.execute_write('INSERT INTO "article" ("title") VALUES (:title)', {"title": "Raw"})
+
+        row = db.fetch_first('SELECT status, enabled, note FROM "article" WHERE id=1')
+        assert row == {"status": "editor's draft", "enabled": 0, "note": "optional"}
+
+        created = Article.using(db).create(title="Model", note=None)
+        assert created.status == "editor's draft"
+        assert created.note is None
+        assert db.fetch_first('SELECT note FROM "article" WHERE id=2')["note"] is None

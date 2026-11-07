@@ -18,7 +18,7 @@ def _args(tmp_path, *, approve=None, confirm=None):
 
 
 def test_no_database_is_created(tmp_path):
-    with pytest.raises(ValueError, match="empty SQLite database file"):
+    with pytest.raises(ValueError, match="interactive terminal"):
         run_init_apply(_args(tmp_path))
 
     assert not (tmp_path / "test.sqlite3").exists()

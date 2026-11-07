@@ -9,6 +9,15 @@ Aurora MVC includes four **repository examples** under `examples/`, but the `aur
 | `examples/modular` | `aurora new NAME --modular` | Separate apps and namespaced views |
 | `examples/multilingual` | Adapted from `aurora new NAME` | Locale-aware application settings and routes |
 
+## Generated application settings
+
+New minimal, MVC, and modular projects include `aurora_config.json` for
+nonsecret application defaults, in addition to their separate database and
+model manifests. The generated `app.py` loads this file explicitly using
+`Aurora.from_config(...)`; existing hand-written applications using
+`Aurora(...)` remain valid. Read the [Application configuration guide](application-configuration.md)
+for the versioned JSON format and security rules.
+
 ## Run a repository example
 
 First install Aurora MVC and its development dependencies from the repository root:

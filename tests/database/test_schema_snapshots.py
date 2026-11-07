@@ -75,19 +75,14 @@ def test_snapshot_rejects_duplicates_malformed_inputs_and_dialect_mismatch():
         compare_snapshots({}, {})
 
 
-def test_snapshot_does_not_execute_callable_defaults():
+def test_snapshot_refuses_dynamic_defaults_at_model_declaration():
     def explode():
         raise AssertionError("Default executed during snapshot")
 
-    class Local(Model):
-        id = column(int, primary_key=True)
-        value = column(str, default=explode)
-
-    snapshot = schema_snapshot(Local, dialect="postgresql")
-    default = snapshot["tables"][0]["columns"][1]["python_default"]
-    assert default["kind"] == "callable"
-
-    assert "explode" in default["name"]
+    with pytest.raises(TypeError, match="Dynamic defaults"):
+        class Local(Model):
+            id = column(int, primary_key=True)
+            value = column(str, default=explode)
 
 
 def test_server_default_is_explicitly_flagged_not_silently_assumed():
@@ -105,7 +100,7 @@ def test_server_default_is_explicitly_flagged_not_silently_assumed():
         assert plan.execution_allowed is False
 
 
-def test_added_required_column_needs_data_strategy_even_with_python_default():
+def test_added_required_column_with_sql_default_still_requires_review():
     class RequiredAccount(Model):
         __table__ = "account"
         id = column(int, primary_key=True)
@@ -119,7 +114,7 @@ def test_added_required_column_needs_data_strategy_even_with_python_default():
     )
     assert changes == [{
         "kind": "added_column", "table": "account", "column": "new_value",
-        "risk": "requires_data_strategy", "requires_review": True,
+        "risk": "additive", "requires_review": True,
     }]
 
 

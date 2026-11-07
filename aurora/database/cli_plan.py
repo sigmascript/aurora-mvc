@@ -103,10 +103,14 @@ def _select_models(args, project_root=None):
     # Validate references before importing developer models. An explicit
     # config determines the project root, not the shell's working directory.
     """Resolve only explicitly selected or registered model references."""
+    from .model_discovery import discover_model_refs
     from .model_manifest import select_model_refs
     root = Path(project_root) if project_root is not None else Path.cwd()
-    refs = select_model_refs(explicit=args.model, database=args.database,
-                             manifest=_manifest_path(args, root))
+    manifest = _manifest_path(args, root)
+    explicit_models = getattr(args, "model", ()) or ()
+    refs = (select_model_refs(explicit=explicit_models, database=args.database,
+                              manifest=manifest) if explicit_models else
+            discover_model_refs(root, manifest, args.database))
     models = []
 
     with _project_import_path(root):
@@ -130,7 +134,9 @@ def run_plan(args):
     config, base_dir = _load_config(args.config)
     manifest = _manifest_path(args, base_dir)
 
-    if not args.model and not manifest.exists():
+    refs, models = _select_models(args, base_dir)
+
+    if not refs:
         report = _model_free_report(config.resolve(args.database), base_dir, args.database)
 
         if args.format == "json":
@@ -145,7 +151,6 @@ def run_plan(args):
 
         return 3 if args.check else 0
 
-    refs, models = _select_models(args, base_dir)
     url = config.resolve(args.database)
     parsed = urlsplit(url)
 
@@ -158,16 +163,63 @@ def run_plan(args):
 
         with Connection(raw, "sqlite") as connection:
             plans = [plan_schema(connection, model) for model in models]
+            from .migration_timeline import inspect_native_history
+            from .model_identity import table_rename_candidates
+
+            rename_candidates = []
+            missing_model_identities = []
+            history_verified = None
+            has_native = connection.fetch_first(
+                "SELECT 1 AS present FROM sqlite_master "
+                "WHERE name='aurorasql_migration_timeline'"
+            ) is not None
+
+            if has_native:
+                timeline, _, _ = inspect_native_history(connection, args.database)
+                history_verified = timeline[-1]["physical_history_consistent"]
+                from .model_identity import model_identity_map
+                selected = model_identity_map(models)
+                missing_model_identities = sorted(
+                    reference for reference in timeline[-1]["model_tables"]
+                    if reference not in selected
+                )
+
+                if history_verified:
+                    for reference, old_table, new_table in table_rename_candidates(
+                            timeline[-1]["model_tables"], models):
+                        old_exists = connection.fetch_first(
+                            "SELECT 1 AS present FROM sqlite_master WHERE type='table' AND name=:name",
+                            {"name": old_table},
+                        ) is not None
+                        new_exists = connection.fetch_first(
+                            "SELECT 1 AS present FROM sqlite_master WHERE name=:name",
+                            {"name": new_table},
+                        ) is not None
+
+                        if not old_exists or new_exists:
+                            raise ValueError("Table rename source or destination is ambiguous")
+
+                        rename_candidates.append({
+                            "model": reference, "from": old_table, "to": new_table,
+                            "execution_allowed": False,
+                        })
     else:
         with config.connect(args.database) as connection:
             plans = [plan_schema(connection, model) for model in models]
+        rename_candidates = []
+        missing_model_identities = []
+        history_verified = None
 
     drift = any(plan.changes for plan in plans)
-    uncertain = any(plan.warnings for plan in plans)
+    uncertain = (any(plan.warnings for plan in plans) or
+                 history_verified is False or bool(missing_model_identities))
     report = {
         "backend": "aurorasql", "database_alias": args.database,
         "status": "DRIFT" if drift else "UNVERIFIED" if uncertain else "VERIFIED",
         "advisory_only": True,
+        "native_history_verified": history_verified,
+        "unregistered_history_models": missing_model_identities,
+        "table_rename_candidates": rename_candidates,
         "models": [
             {"reference": ref, "table": plan.table, "exists": plan.exists,
              "changes": [{"kind": c.kind, "column": c.column, "detail": c.detail}
@@ -192,9 +244,19 @@ def run_plan(args):
             for warning in item["warnings"]:
                 print(f"    [REVIEW] {warning}")
 
+        for candidate in rename_candidates:
+            print(f"  [RENAME CANDIDATE] {candidate['from']} -> {candidate['to']} "
+                  "(historical identity; execution disabled)")
+
+        if history_verified is False:
+            print("  [REVIEW] Native migration history is not verified; execution must be refused")
+
+        for reference in missing_model_identities:
+            print(f"  [REVIEW] Model no longer registered: {reference}; physical table retained")
+
         print("No migration has been approved or executed.")
 
     if args.check:
-        return 2 if drift else 3 if uncertain else 0
+        return 3 if uncertain else 2 if drift else 0
 
     return 0

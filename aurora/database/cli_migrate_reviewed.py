@@ -58,10 +58,23 @@ def run_reviewed_migration(args):
     try:
         raw.execute('PRAGMA foreign_keys=ON')
         raw.execute('PRAGMA busy_timeout=5000')
+        native = raw.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='aurorasql_migration_timeline'"
+        ).fetchone() is not None
+
+        if getattr(args, 'title', None) is not None and not native:
+            raise ValueError('Migration titles require native linear history')
+
+        title = 'Untitled'
+
+        if native:
+            from .migration_titles import migration_title
+            title = migration_title(getattr(args, 'title', None), 'Untitled')
 
         if review['before']['tables']:
             result = execute_sqlite_additive_migration(
-                raw, review, models, reviewed_sha256=args.approve, confirm=True)
+                raw, review, models, reviewed_sha256=args.approve,
+                confirm=True, alias=args.database, title=title)
         else:
             result = execute_sqlite_create_tables(
                 raw, review, models, reviewed_sha256=args.approve, confirm=True)

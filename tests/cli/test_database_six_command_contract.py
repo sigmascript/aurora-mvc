@@ -44,8 +44,7 @@ class DatabaseSixCommandContractTests(unittest.TestCase):
                   '--table', 'users', '--approve', '0' * 64])
 
         self.assertEqual(result.exception.code, 1)
-        self.assertIn('migration writes are not yet integrated', error.getvalue())
-        self.assertIn('refusing legacy fallback', error.getvalue())
+        self.assertIn('Model-driven migration refused', error.getvalue())
 
 
 

@@ -26,6 +26,14 @@ Open <http://127.0.0.1:8000/>. The default server imports `app:app` from the cur
 
 For automatic development reloads, use `aurora run` without `--no-reload`.
 
+## Application settings (optional)
+
+Generated projects include `aurora_config.json`, which defines validated,
+nonsecret application defaults such as name and time zone. The generated
+`app.py` loads it using `Aurora.from_config(...)`. Existing applications
+may continue to construct `Aurora(...)` directly. See
+[Application configuration](application-configuration.md).
+
 ## Initialize an MVC project database (optional)
 
 The `--mvc` generator includes `aurora_databases.json` (a default SQLite configuration) and an initially empty `aurora_models.json` manifest. Database initialization requires at least one explicit model. After creating a model class `Users` in `models/users.py`, from the **project root** run:

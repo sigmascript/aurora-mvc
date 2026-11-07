@@ -4,9 +4,12 @@ Keep the generated output stable across CLI organization changes.
 """
 
 _PROJECT = '''"""{name} Aurora application."""
+from pathlib import Path
+
 from aurora import Aurora
 
-app = Aurora()
+ROOT = Path(__file__).resolve().parent
+app = Aurora.from_config(ROOT / "aurora_config.json")
 
 
 def home(request):
@@ -22,8 +25,10 @@ from pathlib import Path
 from aurora import Aurora
 from controllers.Home import Home
 
-app = Aurora(views_directory=Path(__file__).resolve().parent / "views",
-             statics_directory=Path(__file__).resolve().parent / "statics")
+ROOT = Path(__file__).resolve().parent
+app = Aurora.from_config(ROOT / "aurora_config.json",
+                         views_directory=ROOT / "views",
+                         statics_directory=ROOT / "statics")
 app.route("/", Home)
 '''
 
@@ -83,7 +88,8 @@ from apps.blog.controllers.Blog import Blog
 
 ROOT = Path(__file__).resolve().parent
 # Shared templates live in views/; app templates are namespaced logically.
-app = Aurora(
+app = Aurora.from_config(
+    ROOT / "aurora_config.json",
     views_directory=ROOT / "views",
     view_namespaces={{
         "home": ROOT / "apps" / "home" / "views",

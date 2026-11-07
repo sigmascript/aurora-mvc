@@ -9,6 +9,7 @@ The integrated `aurora.database` namespace now uses **AuroraSQL**. The former SQ
 - [Getting started](getting-started.md) — installation, project creation, development server
 - [CLI reference](cli.md) — commands and safety boundaries
 - [Project templates and examples](project-templates.md) — generated layouts and examples
+- [Application configuration](application-configuration.md) — validated defaults, time zones, limits, and read-only constants
 - [Routing and controllers](routing.md) — routes, actions, and handlers
 - [Authentication and safe redirects](security/authentication-redirects.md) — request guards and safe return paths
 - [Database and migrations](database.md) — AuroraSQL, configuration, supported guarded operations

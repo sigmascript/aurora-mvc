@@ -30,12 +30,11 @@ class ProjectScaffoldingTests(unittest.TestCase):
             self.assertEqual(base.resolve(), root.resolve())
             self.assertFalse((root / 'data.sqlite3').exists())
 
-    def test_empty_manifest_requires_explicit_registration(self):
+    def test_empty_manifest_allows_automatic_model_discovery(self):
         with tempfile.TemporaryDirectory() as temp:
             root = create_project('demo', directory=Path(temp))
 
-            with self.assertRaisesRegex(ValueError, 'No models registered'):
-                select_model_refs(manifest=root / 'aurora_models.json')
+            self.assertEqual(select_model_refs(manifest=root / 'aurora_models.json'), ())
 
     def test_scaffold_does_not_overwrite(self):
         with tempfile.TemporaryDirectory() as temp:

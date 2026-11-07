@@ -58,4 +58,4 @@ def test_migration_write_without_review_is_refused_before_database_access(tmp_pa
     result = _cli("migrate", "--apply", "--confirm", "APPLY", "--config", str(tmp_path / "missing.json"))
 
     assert result.returncode != 0
-    assert "refusing legacy fallback" in result.stderr
+    assert "Model-driven migration refused" in result.stderr

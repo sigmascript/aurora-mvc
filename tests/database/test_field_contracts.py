@@ -20,7 +20,7 @@ class Message(Model):
     id = column(int, primary_key=True)
     account_id = column(int, references="field_accounts.id")
     body = column(str, length=120)
-    created = column(datetime, default=lambda: datetime(2026, 1, 1))
+    created = column(datetime, default=datetime(2026, 1, 1))
 
 
 @pytest.mark.parametrize("dialect", ["sqlite", "mysql", "postgresql"])
@@ -32,9 +32,10 @@ def test_declared_field_schema_is_explicit_and_backend_quoted(dialect):
 
     assert f"FOREIGN KEY ({quote}account_id{quote})" in message
 
-    assert f"{quote}enabled{quote} {'INTEGER' if dialect == 'sqlite' else 'BOOLEAN'} NOT NULL" in account  # No SQL default.
+    boolean_default = "TRUE" if dialect == "postgresql" else "1"
+    assert f"{quote}enabled{quote} {'INTEGER' if dialect == 'sqlite' else 'BOOLEAN'} NOT NULL DEFAULT {boolean_default}" in account
 
-    assert f"{quote}created{quote} " in message  # No SQL default.
+    assert "DEFAULT '2026-01-01 00:00:00'" in message
 
 
 def test_field_declaration_rejects_unsupported_types_and_options():
@@ -59,6 +60,9 @@ def test_field_declaration_rejects_unsupported_types_and_options():
     with pytest.raises(TypeError, match="Expected"):
         column(int, default="wrong")
 
+    with pytest.raises(TypeError, match="Dynamic defaults"):
+        column(datetime, default=datetime.now)
+
 
 def test_explicit_null_primary_key_is_rejected_before_insert():
     with connect("sqlite:///:memory:") as db:
@@ -78,6 +82,9 @@ def test_python_defaults_uniqueness_nullability_and_foreign_keys():
         messages = Message.using(db)
         account = accounts.create(username="alice")
         assert account.enabled is True
+
+        # The default belongs to the database, including raw SQL inserts.
+        assert db.fetch_first('SELECT enabled FROM field_accounts WHERE id=1')["enabled"] == 1
 
         assert account.id == 1
 

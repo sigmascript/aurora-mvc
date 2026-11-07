@@ -14,7 +14,8 @@ class TestCLI(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = create_project("myproject", directory=Path(tmp))
             self.assertTrue((root / "__init__.py").exists())
-            self.assertIn("app = Aurora()", (root / "app.py").read_text())
+            self.assertIn('app = Aurora.from_config(ROOT / "aurora_config.json")',
+                          (root / "app.py").read_text())
             spec = importlib.util.spec_from_file_location("generated_app", root / "app.py")
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)

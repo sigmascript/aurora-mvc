@@ -2,7 +2,7 @@
 
 import pytest
 
-from aurora.database import Model, column, connect
+from aurora.database import Model, column, connect, create_table_sql
 
 
 class Task(Model):
@@ -14,8 +14,7 @@ class Task(Model):
 
 def test_generated_ids_defaults_and_scoped_updates():
     with connect("sqlite:///:memory:") as db:
-        db.execute("CREATE TABLE task (id INTEGER PRIMARY KEY, title TEXT NOT NULL, "
-                   "status TEXT NOT NULL, detail TEXT)")
+        db.execute(create_table_sql(Task, "sqlite"))
         tasks = Task.using(db)
 
         with db.transaction():
@@ -34,8 +33,7 @@ def test_generated_ids_defaults_and_scoped_updates():
 
 def test_invalid_values_rejected_before_writes():
     with connect("sqlite:///:memory:") as db:
-        db.execute("CREATE TABLE task (id INTEGER PRIMARY KEY, title TEXT NOT NULL, "
-                   "status TEXT NOT NULL, detail TEXT)")
+        db.execute(create_table_sql(Task, "sqlite"))
         tasks = Task.using(db)
 
         with pytest.raises(ValueError, match="length"):

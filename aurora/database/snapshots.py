@@ -6,7 +6,7 @@ No live database is inspected and Python defaults are never invoked.
 
 from datetime import date, datetime
 
-from .schema import create_table_sql
+from .schema import _default_literal, create_table_sql
 from .sql_types import parse_sql_type
 
 
@@ -59,8 +59,10 @@ def schema_snapshot(*models, dialect):
                 "nullable": field.nullable,
                 "unique": field.unique,
                 "references": field.references,
-                "python_default": _default_description(field.default),
-                "server_default": field.server_default,
+                # Retain the v1 snapshot keys for existing review artifacts,
+                # while representing new constant defaults as SQL-side intent.
+                "python_default": _default_description(None),
+                "server_default": _default_literal(field, dialect) or field.server_default,
             })
 
         tables.append({"name": name, "columns": columns, "create_sql_preview": ddl})

@@ -1,8 +1,12 @@
 """Explicit, create-only table DDL for AuroraSQL models.
 
 No introspection, migration, or implicit schema modifications are performed.
-Python-side model defaults are intentionally not emitted as SQL defaults.
+Validated constant model defaults are emitted as database-side SQL defaults.
 """
+
+from datetime import date, datetime
+from decimal import Decimal
+import math
 
 from .models import Model, _identifier
 
@@ -17,6 +21,43 @@ _SQL_TYPES = {
 def _quote(name, dialect):
     _identifier(name)
     return f"`{name}`" if dialect == "mysql" else f'"{name}"'
+
+
+def _default_literal(field, dialect):
+    """Render a validated constant, never an arbitrary SQL expression."""
+    value = field.default
+
+    if value is None:
+        return None
+
+    field.validate(value)
+
+    if type(value) is bool:
+        if dialect == "postgresql":
+            return "TRUE" if value else "FALSE"
+
+        return "1" if value else "0"
+
+    if type(value) is int:
+        return str(value)
+
+    if type(value) is float:
+        if not math.isfinite(value):
+            raise ValueError("Database default must be finite")
+
+        return repr(value)
+
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValueError("Database default must be finite")
+
+        return format(value, "f")
+
+    if isinstance(value, (str, date, datetime)):
+        literal = value if isinstance(value, str) else value.isoformat(sep=" ") if isinstance(value, datetime) else value.isoformat()
+        return "'" + literal.replace("'", "''") + "'"
+
+    raise TypeError("Unsupported database default literal")
 
 
 def create_table_sql(model, dialect):
@@ -72,6 +113,11 @@ def create_table_sql(model, dialect):
 
         if field.unique and not field.primary_key:
             parts.append("UNIQUE")
+
+        default_sql = _default_literal(field, dialect)
+
+        if default_sql is not None:
+            parts.append(f"DEFAULT {default_sql}")
 
         declarations.append(" ".join(parts))
 

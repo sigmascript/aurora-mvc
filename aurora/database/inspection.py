@@ -29,6 +29,7 @@ class TableInfo:
     indexes: tuple[str, ...] = ()
     constraints_verified: bool = False
     uniqueness_verified: bool = False
+    foreign_keys: tuple[tuple[str, str, str], ...] = ()
 
 
 def inspect_table(connection, table_name):
@@ -48,8 +49,27 @@ def inspect_table(connection, table_name):
 
         rows = connection.fetch_all(f'PRAGMA table_info("{table_name}")')
         index_rows = connection.fetch_all(f'PRAGMA index_list("{table_name}")')
+        foreign_key_rows = connection.fetch_all(f'PRAGMA foreign_key_list("{table_name}")')
         unique_columns = set()
         index_names = []
+        foreign_keys = []
+
+        # Composite foreign keys need separate structural intent; never infer
+        # equivalence from one member of a multi-column constraint.
+        foreign_key_ids = {}
+
+        for row in foreign_key_rows:
+            foreign_key_ids.setdefault(row["id"], []).append(row)
+
+        foreign_keys_verified = True
+
+        for members in foreign_key_ids.values():
+            if len(members) != 1 or members[0]["seq"] != 0:
+                foreign_keys_verified = False
+                continue
+
+            member = members[0]
+            foreign_keys.append((member["from"], member["table"], member["to"]))
 
         for index in index_rows:
             index_name = index["name"]
@@ -71,7 +91,8 @@ def inspect_table(connection, table_name):
                 not bool(row["notnull"]) and not bool(row["pk"]),
                 bool(row["pk"]), row["dflt_value"],
             ) for row in rows),
-            tuple(sorted(unique_columns)), tuple(sorted(index_names)), True, True,
+            tuple(sorted(unique_columns)), tuple(sorted(index_names)),
+            foreign_keys_verified, True, tuple(sorted(foreign_keys)),
         )
 
     if dialect == "mysql":

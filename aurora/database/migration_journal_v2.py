@@ -76,6 +76,26 @@ def initialize_intent_journal(connection, *, confirm=False):
     connection.commit()
 
 
+def initialize_intent_journal_locked(connection):
+    """Create v2 alongside native Initial under the caller's BEGIN IMMEDIATE.
+
+    This is intentionally separate from the public, create-once journal API.
+    """
+    if not isinstance(connection, sqlite3.Connection) or not connection.in_transaction:
+        raise RuntimeError('Native Initial requires an active SQLite transaction')
+
+    if connection.execute('SELECT 1 FROM sqlite_master WHERE name=?', (_TABLE,)).fetchone():
+        raise RuntimeError('Existing successor journal requires manual reconciliation')
+
+    connection.execute(f'CREATE TABLE "{_TABLE}" ('
+                       'migration_id TEXT PRIMARY KEY NOT NULL, '
+                       'review_sha256 TEXT NOT NULL, '
+                       'before_sha256 TEXT NOT NULL, '
+                       'after_sha256 TEXT NOT NULL, '
+                       "state TEXT NOT NULL CHECK(state IN ('prepared','uncertain','applied')))"
+                       )
+
+
 def list_intents(connection):
     """Read migration intents from the existing journal without modifying it."""
     _check_connection(connection)

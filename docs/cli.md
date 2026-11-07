@@ -26,10 +26,16 @@ aurora db backup --to backup.sqlite3
 aurora db history
 ```
 
-`--config` selects the database configuration (default `aurora_databases.json`); `--database` selects an alias (default `default`). Models may be supplied via repeatable `--model MODULE:CLASS` or an explicit `aurora_models.json` manifest. Missing model selection on SQLite falls back to **inspection only**, not schema verification; `plan --check` returns 3 for this unverified case. An invalid existing manifest is an error.
+`--config` selects the database connection configuration (default `aurora_databases.json`); `--database` selects an alias (default `default`). Models may be supplied via repeatable `--model MODULE:CLASS` or an explicit `aurora_models.json` manifest. Missing model selection on SQLite falls back to **inspection only**, not schema verification; `plan --check` returns 3 for this unverified case. An invalid existing manifest is an error.
 
-`plan` never authorizes writes. Its warnings cover classified differences and limitations of selected-model inspection. For MySQL it includes policy and readiness assessments. JSON output includes structured status and safety data. `--check` returns 2 for detected drift and 3 for unverified MySQL or model-free SQLite state.
+`plan` never authorizes writes. JSON output includes structured status and safety data. `--check` returns 2 for detected drift and 3 for unverified MySQL or model-free SQLite state.
 
-For SQLite, `migrate --dry-run` previews the existing guarded migration workflow. Applying a migration requires the documented digest, review file, backup, and explicit approval. MySQL migration is restricted to one supported operation at a time, with schema/table/column targeting, exact review and SQL digests, `--apply`, and `--confirm APPLY`. MySQL DDL may commit before migration-history recording; never blindly retry an uncertain operation. See `aurora db migrate --help`.
+For SQLite, `migrate --dry-run` previews the existing guarded model migration workflow. Applying an existing reviewed model migration requires the documented digest, review file and explicit approval. MySQL migration is restricted to supported separately guarded operations; uncertain DDL outcomes require manual reconciliation, never blind retry.
 
-`restore` is currently disabled by the integrated AuroraSQL CLI. Preflight and staging-related modules are not a supported restore executor. See `aurora db restore --help` and the database guide.
+### Explicit single-table rename operations (development branch)
+
+`aurora db migrate -c renames.json --dry-run --format json` reads a validated operation document and inspects the target database. The `-c` / `--changes` option is **different** from `--config`, which continues to select database connection settings. Review a digest before considering execution; a preview alone does not authorize DDL. For supported simple SQLite renames, explicit execution requires `--apply --confirm APPLY --approve REVIEW_SHA256 --backup NEW_BACKUP.sqlite3`, with a verified existing intent journal, bounded rehearsal and strict refusal of unsupported dependencies. MySQL/PostgreSQL explicit renames and destructive operations are not implemented.
+
+The JSON format, limitations and examples are documented in [Database and migrations](database.md). This feature is not present in the published `1.0.0a6` package until a subsequent separately approved release.
+
+`restore` is currently disabled by the integrated AuroraSQL CLI. Preflight and staging-related modules are not a supported restore executor.

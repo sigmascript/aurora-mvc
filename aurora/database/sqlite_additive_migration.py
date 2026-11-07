@@ -8,6 +8,7 @@ import sqlite3
 
 from .migration_format import snapshot_fingerprint
 from .migration_journal_v2 import _TABLE, _check_connection, _require_journal, _validate_intent
+from .migration_timeline import complete_successor, inspect_native_history, prepare_successor
 from .review_artifacts import validate_review, verify_review_acknowledgment
 from .schema import create_table_sql
 from .snapshots import schema_snapshot
@@ -20,16 +21,21 @@ class SQLiteAdditiveResult:
     added_columns: tuple[tuple[str, str], ...]
 
 
-def _objects(conn):
+def _objects(conn, *, native=False):
+    allowed = {_TABLE}
+
+    if native:
+        allowed.update({"aurorasql_schema_history", "aurorasql_migration_timeline"})
+
     return {(kind, name): sql for kind, name, sql in conn.execute(
-        "SELECT type,name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'")}
+        "SELECT type,name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'")
+        if name not in allowed}
 
 
-def _verify_result_catalog(connection, expected, table_names):
+def _verify_result_catalog(connection, expected, table_names, *, native=False):
     """Compare resulting catalog structures without relying on ALTER SQL text."""
-    actual_objects = _objects(connection)
+    actual_objects = _objects(connection, native=native)
     expected_objects = _objects(expected)
-    actual_objects.pop(('table', _TABLE), None)
 
     if set(actual_objects) != set(expected_objects):
         raise RuntimeError('Unexpected SQLite catalog objects after migration')
@@ -77,10 +83,9 @@ def _expected_before(snapshot):
         db.close()
 
 
-def _verify_baseline(conn, snapshot):
+def _verify_baseline(conn, snapshot, *, native=False):
     expected = _expected_before(snapshot)
-    actual = _objects(conn)
-    actual.pop(('table', _TABLE), None)
+    actual = _objects(conn, native=native)
 
     if actual != expected:
         raise RuntimeError('Live SQLite catalog differs from reviewed baseline')
@@ -90,14 +95,15 @@ def _verify_baseline(conn, snapshot):
 
 
 def _column_sql(model, name):
-    """Allow only a plain nullable column with no database-side constraints."""
+    """Allow ordinary columns; required additions need a validated SQL default."""
     field = model.__columns__[name]
 
     if (field.primary_key or field.unique or field.references is not None or
-            not field.nullable or field.server_default is not None):
-        raise ValueError('Only unconstrained nullable columns are supported')
+            field.server_default is not None or
+            (not field.nullable and field.default is None)):
+        raise ValueError('Only ordinary nullable or defaulted required columns are supported')
     # Reuse AuroraSQL's own DDL renderer; avoid a second type-mapping engine.
-    from .schema import _SQL_TYPES
+    from .schema import _SQL_TYPES, _default_literal
     from datetime import date, datetime
 
     if field.sql_type:
@@ -111,11 +117,15 @@ def _column_sql(model, name):
     else:
         kind = _SQL_TYPES['sqlite'][field.python_type]
 
-    return f'"{name}" {kind}'
+    default_sql = _default_literal(field, "sqlite")
+    nullability = " NOT NULL" if not field.nullable else ""
+    suffix = f" DEFAULT {default_sql}" if default_sql is not None else ""
+    return f'"{name}" {kind}{nullability}{suffix}'
 
 
 def execute_sqlite_additive_migration(connection, review, models, *,
-                                      reviewed_sha256, confirm=False):
+                                      reviewed_sha256, confirm=False, alias="default",
+                                      title="Untitled"):
     """Apply one approved, additive migration atomically on an exact baseline.
 
     A noncanonical baseline, unknown object, pending journal entry, or any
@@ -174,7 +184,15 @@ def execute_sqlite_additive_migration(connection, review, models, *,
     try:
         connection.execute('BEGIN IMMEDIATE')
         _require_journal(connection)
-        _verify_baseline(connection, review['before'])
+        from .core import Connection
+        native_connection = Connection(connection, "sqlite")
+        native, _, _ = inspect_native_history(native_connection, alias)
+
+        if native is not None and not native[-1]["physical_history_consistent"]:
+            raise RuntimeError('Native history is not verified; migration refused')
+
+        _verify_baseline(connection, review['before'], native=native is not None)
+
         entries = connection.execute(
             f'SELECT migration_id,review_sha256,before_sha256,after_sha256,state FROM "{_TABLE}"'
         ).fetchall()
@@ -184,6 +202,13 @@ def execute_sqlite_additive_migration(connection, review, models, *,
 
             if entry[4] != 'applied' or entry[0] == plan['id']:
                 raise RuntimeError('Unresolved or duplicate migration journal entry')
+
+        successor_number = None
+
+        if native is not None:
+            successor_number = prepare_successor(
+                connection, alias, plan['id'], review['review_sha256'], models, title
+            )
 
         connection.execute(
             f'INSERT INTO "{_TABLE}" VALUES (?,?,?,?,?)',
@@ -207,7 +232,8 @@ def execute_sqlite_additive_migration(connection, review, models, *,
             for model in models:
                 expected.execute(create_table_sql(model, 'sqlite'))
 
-            _verify_result_catalog(connection, expected, model_by_name)
+            _verify_result_catalog(connection, expected, model_by_name,
+                                   native=native is not None)
         finally:
             expected.close()
 
@@ -217,6 +243,9 @@ def execute_sqlite_additive_migration(connection, review, models, *,
 
         if changed != 1:
             raise RuntimeError('Journal transition failed')
+
+        if successor_number is not None:
+            complete_successor(connection, successor_number, plan['id'])
 
         connection.commit()
     except BaseException:

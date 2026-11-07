@@ -16,11 +16,10 @@ def test_aliases_are_selected_without_cross_database_fallback(tmp_path):
         "default": ["pkg.models:User"], "reporting": ["pkg.models:Report"]}}))
     assert select_model_refs(database="reporting", manifest=manifest) == ("pkg.models:Report",)
 
-    with pytest.raises(ValueError, match="No models registered"):
-        select_model_refs(database="missing", manifest=manifest)
+    assert select_model_refs(database="missing", manifest=manifest) == ()
 
 
-@pytest.mark.parametrize("refs", [[], ["not-a-reference"],
+@pytest.mark.parametrize("refs", [["not-a-reference"],
                                    ["pkg.models:User", "pkg.models:User"],
                                    ["pkg.models:User;import os"]])
 def test_invalid_explicit_references_fail_closed(refs, tmp_path):

@@ -1,10 +1,12 @@
 """Conservative, read-only schema comparison; no migration executor."""
 
 from dataclasses import dataclass
+from datetime import date, datetime
+import re
 
 from .inspection import inspect_table
 from .models import Model
-from .schema import create_table_sql
+from .schema import _default_literal, _SQL_TYPES, create_table_sql
 
 
 @dataclass(frozen=True)
@@ -53,6 +55,62 @@ def _type_family(sql_type):
     return None
 
 
+def _sqlite_declared_type(field):
+    """Mirror the bounded SQLite declaration types for exact drift checks."""
+    if field.sql_type is not None:
+        return field.sql_type
+
+    if field.python_type is date:
+        return "DATE"
+
+    if field.python_type is datetime:
+        return "TIMESTAMP"
+
+    if field.python_type is str and field.length is not None:
+        return f"VARCHAR({field.length})"
+
+    return _SQL_TYPES["sqlite"][field.python_type]
+
+
+def _normalized_declaration(declaration, dialect):
+    """Normalize only proven type aliases, not general SQL expressions."""
+    value = re.sub(r"\s+", " ", declaration.strip().lower())
+    value = re.sub(r"\s*([(),])\s*", r"\1", value)
+
+    if dialect == "mysql":
+        if value == "tinyint(1)":
+            return "boolean"
+
+        return value
+
+    if dialect == "postgresql":
+        value = value.replace("character varying", "varchar")
+        value = re.sub(r"^numeric\(", "decimal(", value)
+
+        if value == "timestamp without time zone":
+            return "timestamp"
+
+        return value
+
+    return value
+
+
+def _declared_type(field, dialect):
+    if field.sql_type is not None:
+        return field.sql_type
+
+    if field.python_type is date:
+        return "DATE"
+
+    if field.python_type is datetime:
+        return "DATETIME" if dialect == "mysql" else "TIMESTAMP"
+
+    if field.python_type is str and field.length is not None:
+        return f"VARCHAR({field.length})"
+
+    return _SQL_TYPES[dialect][field.python_type]
+
+
 def plan_schema(connection, model):
     """Compare model columns with an existing table; NEVER execute DDL.
 
@@ -91,6 +149,9 @@ def plan_schema(connection, model):
     if table.indexes:
         warnings.append("Existing indexes require manual review; model index declarations are not supported.")
 
+    if connection.dialect == "sqlite" and not table.constraints_verified:
+        warnings.append("Composite or unsupported foreign-key constraints require manual review.")
+
     actual = {field.name: field for field in table.columns}
 
     for name, field in model.__columns__.items():
@@ -102,26 +163,38 @@ def plan_schema(connection, model):
 
         expected_type = {int: "int", float: "float", bool: "bool", str: "str"}.get(field.python_type)
 
-        if field.sql_type is not None:
-            # A type-family match does not establish SQL-specific precision or
-            # length equivalence. Fail closed until dialect-specific review.
-            changes.append(SchemaChange("sql_type_review", name,
-                                        f"Explicit SQL type {field.sql_type} requires manual verification"))
-            continue
+        if connection.dialect == "sqlite":
+            expected_declaration = _sqlite_declared_type(field)
 
-        if expected_type is None:
-            expected_type = "date" if field.python_type.__name__ == "date" else "datetime"
+            if observed.sql_type.upper().replace(" ", "") != expected_declaration.upper().replace(" ", ""):
+                changes.append(SchemaChange(
+                    "type_mismatch", name,
+                    f"Expected {expected_declaration}, found {observed.sql_type}",
+                ))
+        elif field.sql_type is not None or field.length is not None:
+            declared = _declared_type(field, connection.dialect)
+            expected = _normalized_declaration(declared, connection.dialect)
+            observed_type = _normalized_declaration(observed.sql_type, connection.dialect)
 
-        actual_type = _type_family(observed.sql_type)
+            if expected != observed_type:
+                changes.append(SchemaChange(
+                    "type_mismatch", name,
+                    f"Expected {declared}, found {observed.sql_type}",
+                ))
+        else:
+            if expected_type is None:
+                expected_type = "date" if field.python_type.__name__ == "date" else "datetime"
 
-        # SQLite stores booleans as INTEGER; this is expected for our DDL.
-        if connection.dialect == "sqlite" and expected_type == "bool" and actual_type == "int":
-            actual_type = "bool"
+            actual_type = _type_family(observed.sql_type)
 
-        if actual_type is None:
-            changes.append(SchemaChange("unknown_type", name, f"Unrecognized database type: {observed.sql_type}"))
-        elif actual_type != expected_type:
-            changes.append(SchemaChange("type_mismatch", name, f"Expected {expected_type}, found {observed.sql_type}"))
+            if (connection.dialect == "mysql" and expected_type == "bool"
+                    and _normalized_declaration(observed.sql_type, "mysql") == "boolean"):
+                actual_type = "bool"
+
+            if actual_type is None:
+                changes.append(SchemaChange("unknown_type", name, f"Unrecognized database type: {observed.sql_type}"))
+            elif actual_type != expected_type:
+                changes.append(SchemaChange("type_mismatch", name, f"Expected {expected_type}, found {observed.sql_type}"))
 
         if observed.nullable != (field.nullable and not field.primary_key):
             changes.append(SchemaChange("nullability_mismatch", name, "Nullability differs"))
@@ -138,7 +211,37 @@ def plan_schema(connection, model):
                     "Expected unique column" if field.unique else "Unexpected unique column",
                 ))
 
-        if observed.default_sql is not None:
+        if connection.dialect == "sqlite" and table.constraints_verified:
+            expected_reference = field.references
+            actual_reference = next(
+                ((target, target_column) for source, target, target_column in table.foreign_keys
+                 if source == name), None,
+            )
+
+            if ((expected_reference.split(".", 1) if expected_reference else None)
+                    != (list(actual_reference) if actual_reference else None)):
+                changes.append(SchemaChange(
+                    "foreign_key_mismatch", name,
+                    "Foreign-key target differs or is missing",
+                ))
+
+        if connection.dialect == "sqlite" and field.server_default is None:
+            expected_default = _default_literal(field, "sqlite")
+
+            if observed.default_sql != expected_default:
+                changes.append(SchemaChange(
+                    "default_mismatch", name,
+                    "Database-side default differs from the validated model literal",
+                ))
+        elif connection.dialect in ("mysql", "postgresql") and field.server_default is None:
+            expected_default = _default_literal(field, connection.dialect)
+
+            if (expected_default is None) != (observed.default_sql is None):
+                changes.append(SchemaChange("default_mismatch", name,
+                                            "Database-side default presence differs"))
+            elif expected_default is not None:
+                warnings.append(f"Database-side default on {name} requires backend-specific equivalence review.")
+        elif observed.default_sql is not None:
             warnings.append(f"Database-side default on {name} requires manual review.")
 
     for name in sorted(actual.keys() - model.__columns__.keys()):

@@ -163,7 +163,7 @@ class HistoryFinding:
     detail: str
 
 
-def review_history(connection, *, entries=None):
+def review_history(connection, *, entries=None, table_aliases=None):
     """Inspect journal consistency and current table existence without mutations.
 
     An existing table does not prove that its columns match the recorded SQL.
@@ -174,6 +174,7 @@ def review_history(connection, *, entries=None):
     if entries is None:
         entries = list_history(connection)
 
+    aliases = table_aliases or {}
     findings = []
     by_table = {}
     by_operation = {}
@@ -194,7 +195,7 @@ def review_history(connection, *, entries=None):
             findings.append(HistoryFinding(entry.operation_id, entry.table,
                                            "unresolved", "DDL outcome requires manual investigation"))
         # Even an applied journal record is not proof of current schema integrity.
-        observed = inspect_table(connection, entry.table)
+        observed = inspect_table(connection, aliases.get(entry.table, entry.table))
 
         if entry.status == "applied" and not observed.exists:
             findings.append(HistoryFinding(entry.operation_id, entry.table,

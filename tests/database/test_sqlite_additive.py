@@ -24,6 +24,13 @@ class Tag(Model):
     id = column(int, primary_key=True)
     label = column(str)
 
+
+class NewNoteWithDefault(Model):
+    __table__ = 'notes'
+    id = column(int, primary_key=True)
+    title = column(str)
+    description = column(str, nullable=True, default="editor's draft")
+
 @pytest.fixture
 def state(tmp_path):
     c = sqlite3.connect(tmp_path/'test.sqlite')
@@ -53,6 +60,51 @@ def test_add_column_and_table_preserve_rows(state):
 
     assert list_intents(c)[0].state == 'applied'
 
+
+def test_nullable_sql_default_populates_existing_rows_without_python_backfill(state):
+    connection, _ = state
+    review = create_review(
+        schema_snapshot(OldNote, dialect='sqlite'),
+        schema_snapshot(NewNoteWithDefault, dialect='sqlite'),
+        migration_id='AddDefaultedDescription',
+    )
+    result = execute_sqlite_additive_migration(
+        connection, review, (NewNoteWithDefault,),
+        reviewed_sha256=review['review_sha256'], confirm=True,
+    )
+    assert result.added_columns == (('notes', 'description'),)
+    assert connection.execute('SELECT description FROM notes').fetchone()[0] == "editor's draft"
+    assert connection.execute('PRAGMA table_info("notes")').fetchall()[-1][4] == "'editor''s draft'"
+
+    connection.execute('INSERT INTO notes(title,description) VALUES (?,?)', ('explicit', None))
+    assert connection.execute('SELECT description FROM notes WHERE title=?', ('explicit',)).fetchone()[0] is None
+
+
+def test_changed_default_invalidates_review_before_any_ddl(state):
+    connection, _ = state
+    reviewed = create_review(
+        schema_snapshot(OldNote, dialect='sqlite'),
+        schema_snapshot(NewNoteWithDefault, dialect='sqlite'),
+        migration_id='ReviewedDefaultedDescription',
+    )
+
+    class DifferentDefault(Model):
+        __table__ = 'notes'
+        id = column(int, primary_key=True)
+        title = column(str)
+        description = column(str, nullable=True, default='changed')
+
+    with pytest.raises(ValueError, match='Models differ'):
+        execute_sqlite_additive_migration(
+            connection, reviewed, (DifferentDefault,),
+            reviewed_sha256=reviewed['review_sha256'], confirm=True,
+        )
+
+    assert [row[1] for row in connection.execute('PRAGMA table_info("notes")')] == [
+        'id', 'title',
+    ]
+    assert not list_intents(connection)
+
 def test_confirmation_required(state):
     c,r=state
 
@@ -76,6 +128,17 @@ def test_unexpected_column_rejected(state):
 
     with pytest.raises(RuntimeError,match='catalog'):
         apply(c,r)
+
+
+def test_unrecognized_legacy_history_table_is_not_ignored(state):
+    connection, review = state
+    connection.execute('CREATE TABLE aurorasql_schema_history (unexpected TEXT)')
+    connection.commit()
+
+    with pytest.raises(RuntimeError, match='catalog'):
+        apply(connection, review)
+
+    assert not list_intents(connection)
 
 def test_replay_rejected(state):
     c,r=state

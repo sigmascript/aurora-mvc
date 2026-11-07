@@ -74,7 +74,10 @@ class Column:
         if primary_key and nullable:
             raise ValueError("Primary-key columns cannot be nullable")
 
-        if default is not None and not callable(default):
+        if callable(default):
+            raise TypeError("Dynamic defaults belong in application logic; column default must be a SQL literal")
+
+        if default is not None:
             self.validate(default)
 
     def validate(self, value):
@@ -664,11 +667,11 @@ class ModelOperations:
         values = dict(values)
         self.model._validate(values)
 
-        for name, field in self.model.__columns__.items():
-            if name not in values and field.default is not None:
-                values[name] = field.default() if callable(field.default) else field.default
-
-        self.model._validate(values)
+        # Omitted defaults are applied by the database, not by this insert.
+        # Keep the returned model useful for constant defaults without sending
+        # a value that could mask a database declaration mismatch.
+        defaulted = {name: field.default for name, field in self.model.__columns__.items()
+                     if name not in values and field.default is not None}
 
         keys = [(name, field) for name, field in self.model.__columns__.items()
                 if field.primary_key]
@@ -707,7 +710,7 @@ class ModelOperations:
 
                 values[key_name] = row["generated_key"]
 
-        return self.model(**values)
+        return self.model(**{**defaulted, **values})
 
     def update(self, *, values=None, where=None, confirm=False):
         values = dict(values or {})
