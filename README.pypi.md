@@ -2,7 +2,7 @@
 
 Aurora MVC is a lightweight, ASGI-first Python web framework for building practical applications with a clear MVC-friendly structure.
 
-**Latest published alpha:** `1.0.0a6` (Alpha 9 architectural cutover), available on [PyPI](https://pypi.org/project/aurora-mvc/1.0.0a6/) and [GitHub Releases](https://github.com/sigmascript/aurora-mvc/releases/tag/v1.0.0a6). The older `0.9.7` is the latest stable release; unqualified pip installs normally select stable versions. This alpha is intended for testing and evaluation, and its APIs and behavior may change.
+**Current source version:** `1.0.0a7` (release candidate; publication requires separate approval). The previous published alpha, [`1.0.0a6`](https://pypi.org/project/aurora-mvc/1.0.0a6/), remains available on PyPI and [GitHub Releases](https://github.com/sigmascript/aurora-mvc/releases/tag/v1.0.0a6). The older `0.9.7` is the last established stable release. This alpha is intended for evaluation, and its APIs and behavior may change.
 
 ## Highlights
 
@@ -17,7 +17,7 @@ Aurora MVC is a lightweight, ASGI-first Python web framework for building practi
 Requires Python 3.10 or newer.
 
 ```sh
-python -m pip install "aurora-mvc==1.0.0a6"
+python -m pip install "aurora-mvc==1.0.0a7"
 ```
 
 For a local checkout with development tools:
@@ -26,11 +26,11 @@ For a local checkout with development tools:
 python -m pip install -e '.[dev]'
 ```
 
-Optional database drivers for this alpha can be installed with:
+The version-pinned command above works **after** `1.0.0a7` is approved and uploaded to PyPI. Until then, install the source checkout with `python -m pip install -e '.[dev]'`. Optional drivers can be installed with:
 
 ```sh
-python -m pip install "aurora-mvc[mysql]==1.0.0a6"
-python -m pip install "aurora-mvc[postgresql]==1.0.0a6"
+python -m pip install "aurora-mvc[mysql]==1.0.0a7"
+python -m pip install "aurora-mvc[postgresql]==1.0.0a7"
 ```
 
 To allow pip to consider newer prereleases when they become available, use `python -m pip install --pre aurora-mvc`.
@@ -43,20 +43,20 @@ cd hello_app
 aurora run --no-reload
 ```
 
-See [Getting started](https://github.com/sigmascript/aurora-mvc/blob/v1.0.0a6/docs/getting-started.md) for local setup and other layouts.
+See [Getting started](https://github.com/sigmascript/aurora-mvc/blob/v1.0.0a7/docs/getting-started.md) for local setup and other layouts.
 
 ## Database CLI
 
-The six public commands are `aurora db init`, `plan`, `migrate`, `backup`, `restore`, and `history`. **Not every command supports every backend or operation.** `plan` is read-only; schema writes require the supported backend-specific approval gates. **Restore execution is currently disabled** and must not be treated as a recovery solution. Use `aurora db COMMAND --help` and the [database safety guide](https://github.com/sigmascript/aurora-mvc/blob/v1.0.0a6/docs/database.md) for current constraints.
+The six public commands are `aurora db init`, `plan`, `migrate`, `backup`, `restore`, and `history`. **Not every command supports every backend or operation.** `plan` is read-only; schema writes require the supported backend-specific approval gates. **Restore execution is currently disabled** and must not be treated as a recovery solution. Use `aurora db COMMAND --help` and the [database safety guide](https://github.com/sigmascript/aurora-mvc/blob/v1.0.0a7/docs/database.md) for current constraints.
 
-The migration system supports selected guarded operations; it is **not yet a complete general-purpose schema migration engine**. In particular, do not assume arbitrary renames, foreign-key changes, primary-key replacement, or destructive transformations are automatically supported.
+The migration system supports selected guarded operations, including reviewed repeatable MySQL/PostgreSQL model-driven successors. It is **not a general-purpose schema migration engine**. In particular, non-SQLite explicit JSON schema-operation execution, mixed drift, arbitrary renames, foreign-key changes, primary-key replacement, and destructive transformations are not supported.
 
 ## Validation and maturity
 
-The Alpha 9 cutover passed the team's recorded full regression: **1,021 passed, 35 intentionally skipped, 247 subtests passed** (2026-11-02). Separate authorized disposable MySQL/PostgreSQL acceptance was reported as **33 passed earlier in Alpha 9, but not rerun during final publication verification**. Environment-dependent tests are skipped in ordinary runs. These results do not guarantee suitability for production workloads.
+The `1.0.0a7` source candidate passed a full Linux Python 3.12 regression of **1,408 passed, 34 skipped, 250 subtests** before release-polish changes; the team also verified **1,405 passed, 37 skipped, 250 subtests** on Windows Python 3.11.9 at the Milestone 4 Batch B acceptance. Disposable MySQL/PostgreSQL Migration3 verification preserved existing rows and confirmed applied history, but did **not** test restoration. Environment-dependent tests are skipped in ordinary runs. These results do not guarantee production suitability; the final release-candidate test results must be recorded before publication.
 
 ## Documentation
 
-Start at the [documentation index](https://github.com/sigmascript/aurora-mvc/blob/v1.0.0a6/docs/index.md), including the [CLI reference](https://github.com/sigmascript/aurora-mvc/blob/v1.0.0a6/docs/cli.md), [database operations](https://github.com/sigmascript/aurora-mvc/blob/v1.0.0a6/docs/database.md), and [code style](https://github.com/sigmascript/aurora-mvc/blob/v1.0.0a6/docs/development/CODE_STYLE.md).
+Start at the [documentation index](https://github.com/sigmascript/aurora-mvc/blob/v1.0.0a7/docs/index.md), including the [CLI reference](https://github.com/sigmascript/aurora-mvc/blob/v1.0.0a7/docs/cli.md), [database operations](https://github.com/sigmascript/aurora-mvc/blob/v1.0.0a7/docs/database.md), and [code style](https://github.com/sigmascript/aurora-mvc/blob/v1.0.0a7/docs/development/CODE_STYLE.md).
 
 License: MIT. Repository: https://github.com/sigmascript/aurora-mvc

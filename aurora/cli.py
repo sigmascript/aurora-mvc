@@ -213,8 +213,10 @@ def main(argv: list[str] | None = None) -> int:
         "Use 'aurora db plan' to inspect changes and assess safety. "
         "This command reviews and applies only supported migrations after "
         "the required approval, backup and backend-specific checks. "
-        "MySQL/PostgreSQL use one verified Initial and one narrowly reviewed "
-        "successor; unsupported and destructive changes are refused."
+        "MySQL/PostgreSQL support repeated guarded, reviewed successors "
+        "on verified migration history; unsupported, ambiguous and "
+        "destructive changes are refused. Server JSON schema operations "
+        "are not executable."
     )
 
     # Destructive operations remain deliberately unavailable.

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aurora-mvc"
-version = "1.0.0a6"
+version = "1.0.0a7"
 description = "A simple, fast, and modern Python web framework."
 readme = {file = "README.pypi.md", content-type = "text/markdown"}
 requires-python = ">=3.10"

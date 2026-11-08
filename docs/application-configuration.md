@@ -1,9 +1,9 @@
-# Application configuration (Milestone 4 development branch)
+# Application configuration
 
 Aurora projects can use **one small, optional general configuration file** called
 `aurora_config.json`. The file is not a database manifest, a Python module, or a
-user-preference store. This development-branch feature is not present in the
-published `1.0.0a6` package until a separately approved release.
+user-preference store. This feature is in the `1.0.0a7` source candidate;
+it was not part of the published `1.0.0a6` package. Publication remains approval-gated.
 
 The generated minimal, MVC, and modular starters create the file alongside
 `app.py` and load it explicitly. Existing `Aurora(...)` constructors remain

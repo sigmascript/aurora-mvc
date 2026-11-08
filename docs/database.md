@@ -1,6 +1,6 @@
 # AuroraSQL database operations and safety
 
-This guide describes the integrated **AuroraSQL** backend. The former SQLAlchemy-backed `aurora.database` implementation is retired. AuroraSQL is alpha software, and a command's existence does **not** imply support for every database engine or schema operation. The explicit JSON rename workflow described below is new development-branch functionality; it is **not** included in the published `1.0.0a6` release.
+This guide describes the integrated **AuroraSQL** backend in the `1.0.0a7` source candidate. The former SQLAlchemy-backed `aurora.database` implementation is retired. AuroraSQL is alpha software, and a command's existence does **not** imply support for every database engine or schema operation. The SQLite explicit JSON workflow below is **not** part of the older published `1.0.0a6` release; `1.0.0a7` publication awaits approval.
 
 ## Configuration and drivers
 
@@ -12,7 +12,7 @@ A normal Aurora project can use just one `default` database. Model directory loc
 
 | Command | Purpose | Important limit |
 | --- | --- | --- |
-| `init` | Initialize explicitly selected model tables | Only supported empty-schema initialization; never use to migrate an existing schema |
+| `init` | Initialize discovered/registered model tables | Only supported empty-schema initialization; never use to migrate an existing schema |
 | `plan` | Inspect selected schema and report differences | Read-only; inspection is not approval to write |
 | `migrate` | Preview/apply selected supported schema changes | Backend-specific scope, review, backup, and explicit approval gates |
 | `backup` | Create a verified backup | SQLite and guarded native MySQL/PostgreSQL paths; backend tools and client prerequisites vary |
@@ -31,7 +31,7 @@ aurora db migrate
 aurora db history
 ```
 
-The first `init` command is appropriate only when its target is eligible for initialization. Ordinary interactive migrations review proposed changes and ask for confirmation; non-interactive automation has separate explicit approval prerequisites. Add `--database accounting` for a configured alias or `--title "..."` to name a migration where supported. Model discovery does not require a `--model MODULE:CLASS` argument. Server migrations support a narrowly reviewed single change at a time, including repeated guarded successors; history must be independently proved before every later change. MySQL/PostgreSQL live Migration3+ acceptance remains pending. Do **not** invent hashes or bypass history checks.
+The first `init` command is appropriate only when its target is eligible for initialization. Ordinary interactive migrations review proposed changes and ask for confirmation; non-interactive automation has separate explicit approval prerequisites. Add `--database accounting` for a configured alias or `--title "..."` to name a migration where supported. Model discovery does not require a `--model MODULE:CLASS` argument. Server migrations support a narrowly reviewed single change at a time, including repeated guarded successors; history must be independently proved before every later change. **Migration3 was verified on disposable MySQL and PostgreSQL databases** with existing-row preservation, but no production recovery or universal migration parity is certified. Do **not** invent hashes or bypass history checks.
 
 ## Explicit schema operations: `aurora db migrate -c`
 

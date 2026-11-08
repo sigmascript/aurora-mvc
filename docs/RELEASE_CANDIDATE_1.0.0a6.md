@@ -1,6 +1,6 @@
 # Aurora MVC 1.0.0a6 — release candidate checklist
 
-**Status: PREPARED, NOT PUBLISHED.** Alpha 9 is the internal implementation milestone; `1.0.0a6` is the proposed next public package version. Do not tag, push, or upload without explicit team approval.
+**Historical record — subsequently published.** This checklist captures the original pre-publication planning for `1.0.0a6`, which was later published on GitHub and PyPI with immutable tag `v1.0.0a6` at `9e16812`. Unchecked boxes below reflect the **original preparation snapshot**, not today's release status. For the current `1.0.0a7` candidate, see [its separate checklist](RELEASE_CANDIDATE_1.0.0a7.md). Do not modify the historical tag.
 
 ## Scope
 

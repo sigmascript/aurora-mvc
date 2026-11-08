@@ -1,10 +1,10 @@
 # Getting started
 
-**Status:** These instructions target the Aurora MVC `1.0.0a6` release candidate after the Alpha 9 AuroraSQL cutover. The candidate is not confirmed published; check PyPI before installing by version. The integrated database backend is AuroraSQL. Its migration and recovery capabilities remain intentionally limited.
+**Status:** These instructions target the Aurora MVC `1.0.0a7` source release candidate. The previous `1.0.0a6` release is published, but **`1.0.0a7` publication has not been authorized**. The integrated AuroraSQL backend supports bounded reviewed migrations; public restore execution remains disabled.
 
 ## Requirements and installation
 
-Use Python 3.10 or newer. From the root of the Aurora MVC repository:
+Use Python 3.10 or newer. Once `1.0.0a7` is published, install the versioned package with `python -m pip install 'aurora-mvc==1.0.0a7'`. Until then, from the root of the Aurora MVC source checkout:
 
 ```bash
 python -m pip install -e '.[dev]'
@@ -36,22 +36,22 @@ may continue to construct `Aurora(...)` directly. See
 
 ## Initialize an MVC project database (optional)
 
-The `--mvc` generator includes `aurora_databases.json` (a default SQLite configuration) and an initially empty `aurora_models.json` manifest. Database initialization requires at least one explicit model. After creating a model class `Users` in `models/users.py`, from the **project root** run:
+The `--mvc` generator includes `aurora_databases.json` (a default SQLite configuration) and an initially empty `aurora_models.json` manifest. Database initialization requires at least one discoverable model. After creating a model class `Users` in `models/users.py`, from the **project root** run:
 
 ```bash
-aurora db init --model models.users:Users
-aurora db plan --model models.users:Users
+aurora db init
+aurora db plan
+aurora db history --verify-models
 ```
 
-To avoid repeating `--model`, register its import reference in the manifest:
+Models in supported shared/app model directories are discovered automatically across the three generated layouts. If a model lives outside those locations, explicitly register its import reference in the optional manifest:
 
 ```bash
 aurora model register models.users:Users
 aurora model registered
-aurora db init
 ```
 
-`model register` only edits the manifest; it does not create or migrate database tables. Running `db init` again after all selected tables exist reports already initialized without changing the schema. Do not use `db init` for schema updates or existing partially initialized databases. See the [database guide](database.md).
+`model register` only edits the manifest; it does not create or migrate database tables. Running `db init` again after all selected tables exist reports already initialized without changing the schema. For supported subsequent model changes use `aurora db plan` and interactive reviewed `aurora db migrate`; do not use `init` on partially initialized databases. See the [database guide](database.md).
 
 ## Create an application manually
 

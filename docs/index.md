@@ -1,6 +1,6 @@
 # Aurora MVC documentation
 
-Aurora MVC is an ASGI-first Python web framework with MVC-friendly APIs. This documentation accompanies the **`1.0.0a6` release candidate** following the Alpha 9 AuroraSQL cutover. Publication is pending verification and approval.
+Aurora MVC is an ASGI-first Python web framework with MVC-friendly APIs. This documentation describes the **`1.0.0a7` source release candidate**, which includes the guarded AuroraSQL daily workflow developed after the published `1.0.0a6` alpha. Publication of `1.0.0a7` requires separate acceptance and authorization.
 
 The integrated `aurora.database` namespace now uses **AuroraSQL**. The former SQLAlchemy-backed database implementation has been retired. Database features are alpha-stage and backend-specific; consult the CLI help and safety guide before writing schemas.
 

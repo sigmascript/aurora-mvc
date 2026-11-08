@@ -1,6 +1,8 @@
 """Version consistency and release documentation checks."""
 
 from pathlib import Path
+import subprocess
+import sys
 import unittest
 
 try:
@@ -34,6 +36,29 @@ class VersionConsistencyTests(unittest.TestCase):
             (root / "pyproject.toml").read_text(encoding="utf-8")
         )
         self.assertIn(f"`{project['project']['version']}`", readme)
+
+    def test_release_documentation_identifies_candidate(self):
+        root = Path(__file__).resolve().parents[1]
+        project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+        version = project["project"]["version"]
+
+        for relative_path in ("docs/index.md", "docs/getting-started.md", "docs/cli.md"):
+            with self.subTest(document=relative_path):
+                content = (root / relative_path).read_text(encoding="utf-8")
+                self.assertIn(version, content)
+
+    def test_migration_help_describes_repeated_guarded_server_successors(self):
+        result = subprocess.run(
+            [sys.executable, "-m", "aurora", "db", "migrate", "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("repeated guarded", result.stdout)
+        self.assertIn("Server JSON schema operations", result.stdout)
+        self.assertNotIn("one narrowly reviewed successor", result.stdout)
 
 
 if __name__ == "__main__":
