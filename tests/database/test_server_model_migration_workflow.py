@@ -91,6 +91,49 @@ def test_advanced_server_workflow_routes_named_alias_and_review(monkeypatch, tmp
         assert calls[0]["login_path"] == "backup_profile"
 
 
+@pytest.mark.parametrize("dialect", ["mysql", "postgresql"])
+def test_interactive_repeated_server_migration_uses_next_sequence(monkeypatch, tmp_path,
+                                                                   dialect):
+    from aurora.database import (cli_server_model_migration, mysql_successor,
+                                 postgres_successor, server_history_chain,
+                                 server_migration_timeline)
+    from aurora.database.model_identity import model_identity_map
+    from aurora.database.server_migration_timeline import ServerMigrationEntry
+
+    configure_workflow(monkeypatch, tmp_path, dialect)
+    previous = model_identity_map([ExistingLedger])
+    timeline = (
+        ServerMigrationEntry(1, "Initial", "Initial migration", "accounting",
+                             "b" * 64, previous, "c" * 64, "applied"),
+        ServerMigrationEntry(2, "Migration2", "Prior edit", "accounting",
+                             "d" * 64, previous, "e" * 64, "applied"),
+    )
+    monkeypatch.setattr(server_migration_timeline, "inspect_server_timeline",
+                        lambda *_: timeline)
+    monkeypatch.setattr(server_history_chain, "verify_server_review_predecessor",
+                        lambda *_: 3)
+    monkeypatch.setattr(cli_server_model_migration.sys, "stdin",
+                        SimpleNamespace(isatty=lambda: True))
+    monkeypatch.setattr("builtins.input", lambda *_: "y")
+    calls = []
+
+    def execute(connection, models, **kwargs):
+        calls.append(kwargs)
+        return "operation", Path(kwargs["backup_path"])
+
+    target = mysql_successor if dialect == "mysql" else postgres_successor
+    executor = ("execute_mysql_new_table_successor" if dialect == "mysql" else
+                "execute_postgres_new_table_successor")
+    monkeypatch.setattr(target, executor, execute)
+    args = SimpleNamespace(config="ignored", database="accounting", title="Add invoice",
+                           apply=False, approve=None, backup=None, confirm=None, name=None)
+
+    assert cli_server_model_migration.run_server_model_migration(args) == 0
+    assert len(calls) == 1
+    assert calls[0]["name"] == "Migration3"
+    assert calls[0]["alias"] == "accounting"
+
+
 def test_server_workflow_refuses_mysql_profile_for_postgres(monkeypatch, tmp_path):
     from aurora.database import cli_server_model_migration
 

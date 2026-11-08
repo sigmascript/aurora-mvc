@@ -173,3 +173,138 @@ def test_plan_owns_server_review_and_refuses_unresolved_history(monkeypatch, cap
     report = json.loads(capsys.readouterr().out)
     assert report["server_migration_review"] is None
     assert "unresolved" in report["server_migration_warning"]
+
+
+@pytest.mark.parametrize("dialect", ["mysql", "postgresql"])
+def test_plan_verifies_repeated_applied_server_history(monkeypatch, capsys, dialect):
+    import json
+    from aurora.database import cli_init, cli_plan, server_history_chain, server_migration_timeline
+
+    @contextmanager
+    def connect(alias):
+        assert alias == "default"
+        yield SimpleNamespace(dialect=dialect)
+
+    config = SimpleNamespace(connect=connect, resolve=lambda _: f"{dialect}://localhost/test")
+    monkeypatch.setattr(cli_plan, "_load_config", lambda _: (config, "/project"))
+    monkeypatch.setattr(cli_plan, "_select_models", lambda *_: (["app:ServerArticle"],
+                                                               [ServerArticle]))
+    monkeypatch.setattr(cli_plan, "plan_schema", lambda *_: SchemaPlan(
+        "server_articles", True, (), ()))
+    monkeypatch.setattr(server_migration_timeline, "inspect_server_timeline",
+                        lambda *_: (object(), object(), object()))
+    monkeypatch.setattr(cli_init, "_mysql_database_identity", lambda *_: "test-identity")
+    monkeypatch.setattr(cli_init, "_postgres_database_identity", lambda *_: "test-identity")
+    approvals = []
+
+    def verify(connection, models, alias, identity):
+        approvals.append((connection.dialect, models, alias, identity))
+        return True
+
+    monkeypatch.setattr(server_history_chain, "verify_server_applied_chain", verify)
+    args = SimpleNamespace(database="default", config="unused", models_config="unused",
+                           format="json", check=True)
+
+    assert cli_plan.run_plan(args) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["native_history_verified"] is True
+    assert report["status"] == "VERIFIED"
+    assert approvals == [(dialect, [ServerArticle], "default", "test-identity")]
+
+
+@pytest.mark.parametrize("dialect", ["mysql", "postgresql"])
+def test_plan_advises_later_successor_only_with_independent_predecessor_proof(
+        monkeypatch, capsys, dialect):
+    import json
+    from aurora.database import cli_init, cli_plan, history, server_history_chain
+    from aurora.database import server_migration_timeline, server_model_review
+    from aurora.database.server_model_review import ServerModelProposal
+
+    @contextmanager
+    def connect(alias):
+        yield SimpleNamespace(dialect=dialect)
+
+    config = SimpleNamespace(connect=connect, resolve=lambda _: f"{dialect}://localhost/test")
+    monkeypatch.setattr(cli_plan, "_load_config", lambda _: (config, "/project"))
+    monkeypatch.setattr(cli_plan, "_select_models", lambda *_: (["app:ServerArticle"],
+                                                               [ServerArticle]))
+    monkeypatch.setattr(cli_plan, "plan_schema", lambda *_: SchemaPlan(
+        "server_articles", True, (SchemaChange("missing_column", "note", "new"),), ()))
+    monkeypatch.setattr(server_migration_timeline, "inspect_server_timeline",
+                        lambda *_: (object(), object()))
+    monkeypatch.setattr(server_migration_timeline, "verify_server_successor_current",
+                        lambda *_: False)
+    monkeypatch.setattr(cli_init, "_mysql_database_identity", lambda *_: "test-identity")
+    monkeypatch.setattr(cli_init, "_postgres_database_identity", lambda *_: "test-identity")
+    proposal = ServerModelProposal(dialect, ("ALTER TABLE server_articles ADD COLUMN note TEXT",),
+                                   ({"kind": "add_column", "table": "server_articles",
+                                     "column": "note"},), "a" * 64)
+    monkeypatch.setattr(server_model_review, "review_server_model_changes", lambda *_: proposal)
+    findings = [SimpleNamespace(kind="multiple_operations")]
+    monkeypatch.setattr(history, "review_history", lambda *_: findings)
+    monkeypatch.setattr(server_history_chain, "verify_server_review_predecessor",
+                        lambda *_: 3)
+    args = SimpleNamespace(database="default", config="unused", models_config="unused",
+                           format="json", check=False)
+
+    assert cli_plan.run_plan(args) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["server_migration_review"]["status"] == "ADVISORY_ONLY"
+    assert report["server_migration_review"]["execution_allowed"] is False
+
+    findings.append(SimpleNamespace(kind="unresolved"))
+    assert cli_plan.run_plan(args) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["server_migration_review"] is None
+    assert "unresolved" in report["server_migration_warning"]
+
+
+@pytest.mark.parametrize("kind,reviewer_module", [
+    ("widen_column", "server_column_widening"),
+    ("change_nullability", "server_nullability_review"),
+    ("add_default", "server_default_review"),
+])
+def test_plan_reports_existing_narrow_server_reviewers(monkeypatch, capsys,
+                                                       kind, reviewer_module):
+    import importlib
+    import json
+    from aurora.database import cli_init, cli_plan, history, server_model_review
+    from aurora.database import server_migration_timeline
+    from aurora.database.server_model_review import ServerModelProposal
+
+    @contextmanager
+    def connect(alias):
+        yield SimpleNamespace(dialect="mysql")
+
+    config = SimpleNamespace(connect=connect, resolve=lambda _: "mysql+pymysql://localhost/test")
+    monkeypatch.setattr(cli_plan, "_load_config", lambda _: (config, "/project"))
+    monkeypatch.setattr(cli_plan, "_select_models", lambda *_: (["app:ServerArticle"],
+                                                               [ServerArticle]))
+    monkeypatch.setattr(cli_plan, "plan_schema", lambda *_: SchemaPlan(
+        "server_articles", True, (SchemaChange("type_drift", "note", "changed"),), ()))
+    monkeypatch.setattr(server_migration_timeline, "inspect_server_timeline", lambda *_: None)
+    monkeypatch.setattr(cli_init, "_mysql_database_identity", lambda *_: "test-identity")
+    monkeypatch.setattr(history, "review_history", lambda *_: ())
+    monkeypatch.setattr(server_model_review, "review_server_model_changes",
+                        lambda *_: (_ for _ in ()).throw(ValueError("not a creation")))
+    for name, function in (("server_column_widening", "review_server_column_widening"),
+                           ("server_nullability_review", "review_server_nullability_change"),
+                           ("server_default_review", "review_server_default_addition")):
+        reviewer = importlib.import_module("aurora.database." + name)
+        monkeypatch.setattr(reviewer, function,
+                            lambda *_: (_ for _ in ()).throw(ValueError("not reviewed")))
+
+    module = importlib.import_module("aurora.database." + reviewer_module)
+    reviewer_name = {"widen_column": "review_server_column_widening",
+                     "change_nullability": "review_server_nullability_change",
+                     "add_default": "review_server_default_addition"}[kind]
+    proposal = ServerModelProposal("mysql", ("ALTER TABLE server_articles ...",),
+                                   ({"kind": kind, "table": "server_articles"},), "a" * 64)
+    monkeypatch.setattr(module, reviewer_name, lambda *_: proposal)
+    args = SimpleNamespace(database="default", config="unused", models_config="unused",
+                           format="json", check=False)
+
+    assert cli_plan.run_plan(args) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["server_migration_review"]["operations"][0]["kind"] == kind
+    assert report["server_migration_review"]["execution_allowed"] is False

@@ -13,8 +13,30 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import pytest
+
 from aurora.cli import main
 from aurora.database.cli_restore_preflight import check_sqlite_restore
+
+
+@pytest.mark.parametrize("dialect", ["sqlite", "mysql+pymysql", "postgresql+psycopg"])
+def test_all_engines_refuse_public_restore_before_opening_backup(tmp_path, dialect):
+    source = tmp_path / "protected-backup.bin"
+    source.write_bytes(b"recovery evidence must not be consumed")
+    config = tmp_path / "aurora_databases.json"
+    config.write_text(json.dumps({"databases": {"default": {
+        "url": f"{dialect}:///unavailable"}}}), encoding="utf-8")
+
+    with redirect_stderr(io.StringIO()) as errors:
+        with pytest.raises(SystemExit) as stopped:
+            main(["db", "restore", "--config", str(config), "--from", str(source),
+                  "--staging-only", "--staging-database", "disposable"])
+
+    assert stopped.value.code == 1
+    assert "restore remains disabled" in errors.getvalue()
+    assert source.read_bytes() == b"recovery evidence must not be consumed"
+    assert sorted(item.name for item in tmp_path.iterdir()) == [
+        "aurora_databases.json", "protected-backup.bin"]
 
 
 class RecoveryBoundaryTests(unittest.TestCase):
@@ -74,6 +96,25 @@ class RecoveryBoundaryTests(unittest.TestCase):
         self.assertIn("restore remains disabled", stderr.getvalue())
         self.assertEqual(self._value(), "after")
         self.assertFalse((self.root / "live.sqlite3.pre-restore.sqlite3").exists())
+
+    def test_reserved_recovery_modes_do_not_bypass_public_restore_refusal(self):
+        with redirect_stdout(io.StringIO()):
+            self._main("backup", "--to", str(self.backup))
+
+        original_backup = self.backup.read_bytes()
+
+        for options in (("--check-only",), ("--staging-only",),
+                        ("--staging-only", "--staging-database", "isolated_test")):
+            with self.subTest(options=options):
+                stderr = io.StringIO()
+
+                with redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+                    self._main("restore", "--from", str(self.backup), *options)
+
+                self.assertEqual(raised.exception.code, 1)
+                self.assertIn("restore remains disabled", stderr.getvalue())
+                self.assertEqual(self._value(), "before")
+                self.assertEqual(self.backup.read_bytes(), original_backup)
 
     def test_preflight_does_not_restore_or_authorize(self):
         with redirect_stdout(io.StringIO()):

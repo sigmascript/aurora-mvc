@@ -188,6 +188,30 @@ def test_format_is_optional_but_review_identity_remains_normalized(tmp_path):
     assert load_explicit_operations(without_format) == load_explicit_operations(with_format)
 
 
+@pytest.mark.parametrize("scheme", ["mysql+pymysql", "postgresql+psycopg"])
+def test_server_json_operations_remain_preview_only_without_connecting(tmp_path, capsys,
+                                                                        scheme):
+    config = tmp_path / "aurora_databases.json"
+    config.write_text(json.dumps({"databases": {"default": {
+        "url": f"{scheme}://readonly@localhost/disposable"}}}), encoding="utf-8")
+    operations = _operations(tmp_path, doc={"database": "default",
+                                             "rename_table": {"users": "accounts"}})
+    backup = tmp_path / "must_not_exist.dump"
+
+    assert _cli(config, operations, "--dry-run", "--format", "json") == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["status"] == "REFUSED"
+    assert report["execution_allowed"] is False
+    assert "not implemented" in " ".join(report["warnings"])
+
+    with pytest.raises(SystemExit) as error:
+        _cli(config, operations, "--apply", "--confirm", "APPLY",
+             "--approve", report["review_fingerprint"], "--backup", str(backup))
+
+    assert error.value.code == 1
+    assert not backup.exists()
+
+
 @pytest.mark.parametrize("unique", [False, True])
 def test_reviewed_create_index_preserves_data_and_backup(tmp_path, capsys, monkeypatch, unique):
     monkeypatch.delenv("AURORA_ENV", raising=False)

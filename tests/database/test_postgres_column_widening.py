@@ -88,3 +88,41 @@ def test_postgres_widening_is_backup_first_and_transactional(monkeypatch, tmp_pa
         assert identifier and saved == archive
         assert connection.events == ["begin", "lock", "prepared", "journal", "alter",
                                      "journal", "verified", "complete", "commit"]
+
+
+def test_postgres_repeated_widening_rolls_back_failed_chain_proof(monkeypatch, tmp_path):
+    from aurora.database import cli_init, cli_postgres_backup, postgres_column_widening
+    from aurora.database import server_history_chain
+
+    archive = tmp_path / "before.dump"
+
+    def backup(*args):
+        archive.write_bytes(b"PGDMP" + b"0" * 100)
+        return archive
+
+    monkeypatch.setattr(cli_postgres_backup, "backup_postgres_database", backup)
+    monkeypatch.setattr(cli_init, "_postgres_database_identity", lambda *_: "accounting-db")
+    monkeypatch.setattr(postgres_column_widening, "prepare_server_widening_successor",
+                        lambda conn, *args: conn.events.append("prepared") or 3)
+    monkeypatch.setattr(postgres_column_widening, "verify_server_declared_schema",
+                        lambda *_: "a" * 64)
+    monkeypatch.setattr(postgres_column_widening, "complete_server_successor",
+                        lambda conn, *args: conn.events.append("complete"))
+    monkeypatch.setattr(server_history_chain, "verify_server_applied_chain", lambda *_: False)
+    review = SimpleNamespace(operations=({"kind": "widen_column", "table": "invoices",
+                                         "column": "memo", "from": "varchar(100)",
+                                         "to": "varchar(200)"},),
+                             statements=('ALTER TABLE "invoices" ALTER COLUMN "memo" '
+                                         'TYPE VARCHAR(200)',))
+    connection = Connection()
+
+    with pytest.raises(RuntimeError, match="history chain is unverified"):
+        postgres_column_widening.execute_postgres_column_widening(
+            connection, [object()], alias="accounting", identity="accounting-db",
+            parsed=SimpleNamespace(), config_path="ignored", backup_path=str(archive),
+            review=review, approval="a" * 64, name="Migration3")
+
+    assert connection.events[-1] == "rollback"
+    assert "commit" not in connection.events
+    assert connection.events.index("alter") < connection.events.index("complete")
+    assert archive.read_bytes().startswith(b"PGDMP")

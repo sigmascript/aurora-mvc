@@ -466,6 +466,53 @@ def test_widening_successor_requires_review_and_historical_proof(monkeypatch, di
 @pytest.mark.parametrize("dialect,locked,transaction", [
     ("mysql", True, False), ("postgresql", False, True),
 ])
+def test_repeated_widening_prepares_next_number_only_after_chain_proof(
+        monkeypatch, dialect, locked, transaction):
+    from aurora.database import (server_column_widening, server_history_chain,
+                                 server_migration_timeline)
+    from aurora.database.model_identity import model_identity_map
+    from aurora.database.server_migration_timeline import ServerMigrationEntry
+    from aurora.database.server_model_review import ServerModelProposal
+
+    models = [ServerHistoryWithMemo]
+    mapping = model_identity_map(models)
+    first = ServerMigrationEntry(1, "Initial", "Initial migration", "accounting",
+                                 "a" * 64, mapping, "b" * 64, "applied")
+    second = ServerMigrationEntry(2, "Migration2", "First widening", "accounting",
+                                  "c" * 64, mapping, "d" * 64, "applied",
+                                  operation={"kind": "widen_column", "table": "notes",
+                                             "column": "memo", "from": "varchar(25)",
+                                             "to": "varchar(50)"})
+    monkeypatch.setattr(server_migration_timeline, "inspect_server_timeline",
+                        lambda *_: (first, second))
+    proposal = ServerModelProposal(dialect, ("ALTER TABLE notes ALTER COLUMN memo",),
+                                   ({"kind": "widen_column", "table": models[0].__table_name__,
+                                     "column": "memo", "from": "varchar(50)",
+                                     "to": "varchar(100)"},), "e" * 64)
+    monkeypatch.setattr(server_column_widening, "review_server_column_widening",
+                        lambda *_: proposal)
+    monkeypatch.setattr(server_history_chain, "verify_server_review_predecessor",
+                        lambda *_: 3)
+    connection = FakeWriter(dialect, locked=locked, transaction=transaction)
+
+    assert prepare_server_widening_successor(connection, models, "accounting", "database-id",
+                                             proposal, "e" * 64, "Migration3") == 3
+    assert connection.writes[0][1]["number"] == 3
+
+    connection.writes.clear()
+    monkeypatch.setattr(server_history_chain, "verify_server_review_predecessor",
+                        lambda *_: (_ for _ in ()).throw(RuntimeError("chain mismatch")))
+
+    with pytest.raises(RuntimeError, match="chain mismatch"):
+        prepare_server_widening_successor(connection, models, "accounting", "database-id",
+                                          proposal, "e" * 64, "Migration3")
+
+    assert not connection.writes
+
+
+@pytest.mark.parametrize("dialect,locked,transaction", [
+    ("mysql", True, False), ("postgresql", False, True),
+])
 def test_nullability_successor_requires_exact_review_under_lock(monkeypatch, dialect,
                                                                   locked, transaction):
     from aurora.database import (server_nullability_review, server_nullability_history,

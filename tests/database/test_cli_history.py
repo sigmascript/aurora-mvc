@@ -199,6 +199,45 @@ def test_server_history_suppresses_duplicate_only_after_current_verification(mon
                for finding in report["findings"])
 
 
+def test_repeated_server_history_requires_complete_chain_proof(monkeypatch):
+    from urllib.parse import urlsplit
+
+    from aurora.database import cli_history, server_history_chain, server_migration_timeline
+    from aurora.database.history import HistoryEntry
+    from aurora.database.server_migration_timeline import ServerMigrationEntry
+
+    entries = tuple(HistoryEntry(str(number), "notes", "mysql", chr(97 + number) * 64,
+                                 "applied") for number in range(3))
+    timeline = tuple(ServerMigrationEntry(
+        number, "Initial" if number == 1 else f"Migration{number}", "Title",
+        "accounting", "a" * 64, {"models.Note:Note": "notes"}, "b" * 64,
+        "applied", operation=None if number == 1 else
+        {"kind": "widen_column", "table": "notes", "column": "label",
+         "from": "varchar(80)", "to": "varchar(160)"}
+    ) for number in range(1, 4))
+    monkeypatch.setattr(cli_history, "list_history", lambda _: entries)
+    monkeypatch.setattr(server_migration_timeline, "inspect_server_timeline", lambda *_: timeline)
+    monkeypatch.setattr(cli_history, "review_history", lambda *_ , **__: (
+        SimpleNamespace(operation_id="1", table="notes", kind="multiple_operations",
+                        detail="Repeated table"),))
+    monkeypatch.setattr("aurora.database.cli_init._mysql_database_identity",
+                        lambda *_: "verified:test")
+    connection = SimpleNamespace(dialect="mysql")
+    parsed = urlsplit("mysql+pymysql://localhost/accounting")
+
+    monkeypatch.setattr(server_history_chain, "verify_server_applied_chain", lambda *_: True)
+    verified = cli_history._read_history(connection, "accounting", models=[object()],
+                                         parsed=parsed)
+    assert verified["findings"] == []
+    assert verified["timeline"][-1]["verified_current"]
+
+    monkeypatch.setattr(server_history_chain, "verify_server_applied_chain", lambda *_: False)
+    refused = cli_history._read_history(connection, "accounting", models=[object()],
+                                        parsed=parsed)
+    assert any(item["kind"] == "server_history_not_verified"
+               for item in refused["findings"])
+
+
 def test_named_server_history_verification_passes_discovered_models(monkeypatch, tmp_path,
                                                                     capsys):
     from contextlib import contextmanager
@@ -222,10 +261,11 @@ def test_named_server_history_verification_passes_discovered_models(monkeypatch,
     monkeypatch.setattr(cli_history, "_select_models",
                         lambda args, base_dir: (["app.models:Invoice"], selected_models))
 
-    def read_history(selected_connection, alias, *, models=None):
+    def read_history(selected_connection, alias, *, models=None, parsed=None):
         assert selected_connection is connection
         assert alias == "accounting"
         assert models is selected_models
+        assert parsed.scheme == "postgresql"
         return {"entries": [], "findings": [], "timeline": []}
 
     monkeypatch.setattr(cli_history, "_read_history", read_history)
