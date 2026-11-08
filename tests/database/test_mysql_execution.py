@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 import pytest
 
 from aurora.database import cli_init, mysql_init
+from aurora.database import server_migration_timeline
 from tests.database.test_schema import Entry
 
 
@@ -30,7 +31,7 @@ class FakeConnection:
             self.status = "started"
 
         if "UPDATE" in sql:
-            self.status = parameters["status"]
+            self.status = parameters.get("status", parameters.get("state"))
 
         self.events.append((sql, parameters))
         return 1
@@ -43,6 +44,10 @@ def _prepare(monkeypatch, connection):
     monkeypatch.setattr(mysql_init, "initialize_history", lambda conn, confirm:
                         conn.tables.add("aurorasql_schema_history"))
     monkeypatch.setattr(mysql_init, "review_history", lambda conn: ())
+    monkeypatch.setattr(mysql_init, "prepare_server_initial", lambda *args, **kwargs: None)
+    monkeypatch.setattr(mysql_init, "verify_server_initial_schema", lambda *args: "a" * 64)
+    monkeypatch.setattr(mysql_init, "complete_server_initial", lambda *args: None)
+    monkeypatch.setattr(mysql_init, "mark_server_initial_uncertain", lambda *args: None)
     monkeypatch.setattr(cli_init, "_mysql_read_only_preflight", lambda *args: {
         "status": "EMPTY", "review_warnings": [],
     })
@@ -93,3 +98,80 @@ def test_mysql_refuses_wrong_identity_before_journal(monkeypatch):
         mysql_init.execute_mysql_init(connection, (Entry,), **kwargs)
 
     assert not connection.events
+
+
+def test_mysql_native_intent_is_prepared_before_ddl_and_completed_after_verification(monkeypatch):
+    from contextlib import contextmanager
+
+    connection = FakeConnection()
+    kwargs = _prepare(monkeypatch, connection)
+
+    @contextmanager
+    def held_lock(conn):
+        conn._migration_lock_active = True
+
+        try:
+            yield
+        finally:
+            conn._migration_lock_active = False
+
+    monkeypatch.setattr(mysql_init, "migration_lock", held_lock)
+    monkeypatch.setattr(server_migration_timeline, "inspect_table", lambda *_:
+                        SimpleNamespace(exists=False))
+    monkeypatch.setattr(mysql_init, "prepare_server_initial",
+                        server_migration_timeline.prepare_server_initial)
+    monkeypatch.setattr(mysql_init, "complete_server_initial",
+                        server_migration_timeline.complete_server_initial)
+    monkeypatch.setattr(mysql_init, "mark_server_initial_uncertain",
+                        server_migration_timeline.mark_server_initial_uncertain)
+    monkeypatch.setattr(mysql_init, "execute_create", lambda conn, model, token, confirm:
+                        conn.tables.add(model.__table_name__))
+    monkeypatch.setattr(mysql_init, "verify_server_initial_schema", lambda conn, models: "b" * 64)
+
+    assert len(mysql_init.execute_mysql_init(connection, (Entry,), **kwargs)) == 1
+    native_inserts = [(index, params) for index, (sql, params) in enumerate(connection.events)
+                      if "aurorasql_migration_timeline" in sql and "INSERT INTO" in sql]
+    native_updates = [(index, params) for index, (sql, params) in enumerate(connection.events)
+                      if "aurorasql_migration_timeline" in sql and "UPDATE" in sql]
+    assert len(native_inserts) == 1
+    assert native_inserts[0][1]["state"] == "prepared"
+    assert native_updates[0][0] > native_inserts[0][0]
+    assert native_updates[0][1]["state"] == "applied"
+    assert native_updates[0][1]["schema"] == "b" * 64
+
+
+def test_mysql_postcondition_failure_leaves_native_initial_uncertain(monkeypatch):
+    from contextlib import contextmanager
+
+    connection = FakeConnection()
+    kwargs = _prepare(monkeypatch, connection)
+
+    @contextmanager
+    def held_lock(conn):
+        conn._migration_lock_active = True
+
+        try:
+            yield
+        finally:
+            conn._migration_lock_active = False
+
+    monkeypatch.setattr(mysql_init, "migration_lock", held_lock)
+    monkeypatch.setattr(server_migration_timeline, "inspect_table", lambda *_:
+                        SimpleNamespace(exists=False))
+    monkeypatch.setattr(mysql_init, "prepare_server_initial",
+                        server_migration_timeline.prepare_server_initial)
+    monkeypatch.setattr(mysql_init, "mark_server_initial_uncertain",
+                        server_migration_timeline.mark_server_initial_uncertain)
+    monkeypatch.setattr(mysql_init, "execute_create", lambda conn, model, token, confirm:
+                        conn.tables.add(model.__table_name__))
+    monkeypatch.setattr(mysql_init, "verify_server_initial_schema", lambda *_:
+                        (_ for _ in ()).throw(RuntimeError("catalog mismatch")))
+
+    with pytest.raises(RuntimeError, match="catalog mismatch"):
+        mysql_init.execute_mysql_init(connection, (Entry,), **kwargs)
+
+    native_updates = [params for sql, params in connection.events
+                      if "aurorasql_migration_timeline" in sql and "UPDATE" in sql]
+    assert len(native_updates) == 1
+    assert native_updates[0]["state"] == "uncertain"
+    assert "entry" in connection.tables

@@ -5,6 +5,7 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 
 def _run(tmp_path, *args):
@@ -115,3 +116,120 @@ def test_history_review_accepts_supplied_entries_without_journal_read(monkeypatc
     monkeypatch.setattr(history, "list_history", lambda connection: (_ for _ in ()).throw(
         AssertionError("unexpected second journal query")))
     assert history.review_history(object(), entries=()) == ()
+
+
+def test_review_history_only_exempts_one_verified_successor_table(monkeypatch):
+    from aurora.database import history
+
+    monkeypatch.setattr(history, "inspect_table", lambda *_: SimpleNamespace(exists=True))
+    connection = SimpleNamespace(dialect="postgresql")
+    entries = (
+        history.HistoryEntry("initial", "notes", "postgresql", "a" * 64, "applied"),
+        history.HistoryEntry("successor", "notes", "postgresql", "b" * 64, "applied"),
+        history.HistoryEntry("third", "other", "postgresql", "c" * 64, "applied"),
+    )
+
+    assert len([finding for finding in history.review_history(connection, entries=entries)
+                if finding.kind == "multiple_operations"]) == 2
+    assert history.review_history(connection, entries=entries,
+                                  verified_successor_table="notes") == ()
+
+    unresolved = entries[:1] + (
+        history.HistoryEntry("successor", "notes", "postgresql", "b" * 64,
+                             "uncertain"),
+    )
+    assert any(finding.kind == "unresolved" for finding in history.review_history(
+        connection, entries=unresolved, verified_successor_table="notes"))
+
+    too_many = entries[:2] + (
+        history.HistoryEntry("third", "notes", "postgresql", "c" * 64, "applied"),
+    )
+    assert len([finding for finding in history.review_history(
+        connection, entries=too_many, verified_successor_table="notes")
+                if finding.kind == "multiple_operations"]) == 3
+
+    duplicate_id = (
+        entries[0],
+        history.HistoryEntry("initial", "notes", "postgresql", "b" * 64,
+                             "applied"),
+    )
+    assert any(finding.kind == "duplicate_operation_id" for finding in
+               history.review_history(connection, entries=duplicate_id,
+                                      verified_successor_table="notes"))
+
+
+def test_server_history_suppresses_duplicate_only_after_current_verification(monkeypatch):
+    from aurora.database import cli_history, server_migration_timeline
+    from aurora.database.history import HistoryEntry
+    from aurora.database.server_migration_timeline import ServerMigrationEntry
+
+    entries = (
+        HistoryEntry("initial", "notes", "postgresql", "a" * 64, "applied"),
+        HistoryEntry("successor", "notes", "postgresql", "b" * 64, "applied"),
+    )
+    monkeypatch.setattr(cli_history, "list_history", lambda _: entries)
+    monkeypatch.setattr(cli_history, "inspect_native_history", lambda *_: None)
+    monkeypatch.setattr(server_migration_timeline, "inspect_server_timeline", lambda *_: (
+        ServerMigrationEntry(1, "Initial", "Initial migration", "accounting",
+                             "a" * 64, {"models.Note:Note": "notes"}, "b" * 64,
+                             "applied"),
+        ServerMigrationEntry(2, "Migration2", "Widen", "accounting",
+                             "c" * 64, {"models.Note:Note": "notes"}, "d" * 64,
+                             "applied", operation={"kind": "widen_column",
+                                                   "table": "notes", "column": "label",
+                                                   "from": "varchar(80)", "to": "varchar(160)"}),
+    ))
+    from aurora.database import history
+    monkeypatch.setattr(history, "inspect_table", lambda *_: SimpleNamespace(exists=True))
+    monkeypatch.setattr(cli_history, "review_history", history.review_history)
+    connection = SimpleNamespace(dialect="postgresql")
+
+    monkeypatch.setattr(server_migration_timeline, "verify_server_successor_current",
+                        lambda *_: True)
+    report = cli_history._read_history(connection, "accounting", models=[object()])
+    assert report["findings"] == []
+    assert report["timeline"][-1]["verified_current"]
+
+    monkeypatch.setattr(server_migration_timeline, "verify_server_successor_current",
+                        lambda *_: False)
+    report = cli_history._read_history(connection, "accounting", models=[object()])
+    assert len([finding for finding in report["findings"]
+                if finding["kind"] == "multiple_operations"]) == 2
+    assert any(finding["kind"] == "server_history_not_verified"
+               for finding in report["findings"])
+
+
+def test_named_server_history_verification_passes_discovered_models(monkeypatch, tmp_path,
+                                                                    capsys):
+    from contextlib import contextmanager
+
+    from aurora.database import cli_history
+
+    selected_models = [object()]
+    connection = SimpleNamespace(dialect="postgresql")
+
+    class Configuration:
+        def resolve(self, alias):
+            assert alias == "accounting"
+            return "postgresql://localhost/accounting"
+
+        @contextmanager
+        def connect(self, alias):
+            assert alias == "accounting"
+            yield connection
+
+    monkeypatch.setattr(cli_history, "_load_config", lambda _: (Configuration(), tmp_path))
+    monkeypatch.setattr(cli_history, "_select_models",
+                        lambda args, base_dir: (["app.models:Invoice"], selected_models))
+
+    def read_history(selected_connection, alias, *, models=None):
+        assert selected_connection is connection
+        assert alias == "accounting"
+        assert models is selected_models
+        return {"entries": [], "findings": [], "timeline": []}
+
+    monkeypatch.setattr(cli_history, "_read_history", read_history)
+    args = SimpleNamespace(config="ignored", database="accounting", verify_models=True,
+                           format="json")
+    assert cli_history.run_history(args) == 0
+    assert json.loads(capsys.readouterr().out)["entries"] == []

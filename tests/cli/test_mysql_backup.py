@@ -1,5 +1,6 @@
 """MySQL backup safety tests (mocked CLI tools; no live server required)."""
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -53,9 +54,17 @@ class MySQLBackupTests(unittest.TestCase):
         self.assertIn("--single-transaction", observed[0])
         self.assertIn("--skip-add-locks", observed[0])
 
-    def test_requires_login_path(self):
-        with self.assertRaisesRegex(ValueError, "login-path"):
-            backup_mysql_database(str(self.config), "default", str(self.destination), None)
+    def test_uses_configured_credentials_when_login_path_is_omitted(self):
+        if os.name != "posix":
+            with self.assertRaisesRegex(ValueError, "login-path"):
+                backup_mysql_database(str(self.config), "default", str(self.destination), None)
+            return
+
+        with patch("aurora.database.cli_mysql_backup.subprocess.run", side_effect=self.run_client):
+            result = backup_mysql_database(str(self.config), "default", str(self.destination), None)
+
+        self.assertEqual(result, self.destination)
+        self.assertTrue(result.is_file())
 
     def test_refuses_existing_destination(self):
         self.destination.write_text("preserve")
