@@ -12,10 +12,15 @@ from .execution import CreateApproval, execute_create
 from .history import initialize_history, review_history
 from .inspection import inspect_table
 from .schema import _quote, create_table_sql
+from .server_initial_verification import verify_server_initial_schema
+from .server_migration_timeline import (complete_server_initial,
+                                        mark_server_initial_uncertain,
+                                        prepare_server_initial)
 
 
 def execute_mysql_init(connection, models, *, approval, expected_approval,
-                       alias="default", expected_identity=None, parsed=None):
+                       alias="default", expected_identity=None, parsed=None,
+                       title="Initial migration"):
     """Create a fully approved, empty MySQL schema, preserving partial outcomes."""
 
     if connection.dialect != "mysql":
@@ -64,48 +69,61 @@ def execute_mysql_init(connection, models, *, approval, expected_approval,
         # MySQL CREATE TABLE auto-commits; this journal must persist independently.
         initialize_history(connection, confirm=True)
         journal = _quote("aurorasql_schema_history", "mysql")
+        prepare_server_initial(connection, ordered, alias, expected_approval, title=title)
 
-        for model in ordered:
-            if review_history(connection):
-                raise RuntimeError("MySQL migration history requires manual review")
+        try:
+            for model in ordered:
+                if review_history(connection):
+                    raise RuntimeError("MySQL migration history requires manual review")
 
-            if inspect_table(connection, model.__table_name__).exists:
-                raise RuntimeError("Table appeared during MySQL initialization")
+                if inspect_table(connection, model.__table_name__).exists:
+                    raise RuntimeError("Table appeared during MySQL initialization")
 
-            sql = create_table_sql(model, "mysql")
-            token = CreateApproval(model.__table_name__, "mysql",
-                                   sha256(sql.encode("utf-8")).hexdigest())
-            operation_id = str(uuid4())
-            connection.execute_write(
-                f"INSERT INTO {journal} (operation_id, table_name, dialect, fingerprint, status) "
-                "VALUES (:id, :name, :dialect, :fingerprint, :status)",
-                {"id": operation_id, "name": model.__table_name__,
-                 "dialect": "mysql", "fingerprint": token.fingerprint,
-                 "status": "started"},
-            )
-
-            try:
-                execute_create(connection, model, token, confirm=True)
-
-                if not inspect_table(connection, model.__table_name__).exists:
-                    raise RuntimeError("MySQL table creation could not be verified")
-
+                sql = create_table_sql(model, "mysql")
+                token = CreateApproval(model.__table_name__, "mysql",
+                                       sha256(sql.encode("utf-8")).hexdigest())
+                operation_id = str(uuid4())
                 connection.execute_write(
-                    f"UPDATE {journal} SET status=:status WHERE operation_id=:id",
-                    {"status": "applied", "id": operation_id},
+                    f"INSERT INTO {journal} (operation_id, table_name, dialect, fingerprint, status) "
+                    "VALUES (:id, :name, :dialect, :fingerprint, :status)",
+                    {"id": operation_id, "name": model.__table_name__,
+                     "dialect": "mysql", "fingerprint": token.fingerprint,
+                     "status": "started"},
                 )
-            except BaseException:
+
                 try:
+                    execute_create(connection, model, token, confirm=True)
+
+                    if not inspect_table(connection, model.__table_name__).exists:
+                        raise RuntimeError("MySQL table creation could not be verified")
+
                     connection.execute_write(
                         f"UPDATE {journal} SET status=:status WHERE operation_id=:id",
-                        {"status": "uncertain", "id": operation_id},
+                        {"status": "applied", "id": operation_id},
                     )
                 except BaseException:
-                    # 'started' remains durable evidence; never retry automatically.
-                    pass
+                    try:
+                        connection.execute_write(
+                            f"UPDATE {journal} SET status=:status WHERE operation_id=:id",
+                            {"status": "uncertain", "id": operation_id},
+                        )
+                    except BaseException:
+                        # 'started' remains durable evidence; never retry automatically.
+                        pass
 
-                raise
+                    raise
 
-            operation_ids.append(operation_id)
+                operation_ids.append(operation_id)
+
+            schema_sha256 = verify_server_initial_schema(connection, ordered)
+            complete_server_initial(connection, alias, schema_sha256)
+        except BaseException:
+            try:
+                mark_server_initial_uncertain(connection, alias)
+            except BaseException:
+                # A durable prepared row still blocks replay if marking fails.
+                pass
+
+            raise
 
     return tuple(operation_ids)

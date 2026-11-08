@@ -1,7 +1,7 @@
-"""Guarded PostgreSQL CREATE-only batch primitive.
+"""Guarded PostgreSQL initial migration with transactional journal evidence.
 
-All DDL and journal writes share one transaction. This module deliberately does
-not expose a CLI write path until live PostgreSQL acceptance tests pass.
+All application DDL and journal writes share one transaction. Backend-specific
+live acceptance is still required before claiming production readiness.
 """
 
 from hashlib import sha256
@@ -12,9 +12,12 @@ from .execution import CreateApproval, execute_create
 from .history import initialize_history
 from .inspection import inspect_table
 from .schema import _quote, create_table_sql
+from .server_initial_verification import verify_server_initial_schema
+from .server_migration_timeline import complete_server_initial, prepare_server_initial
 
 
-def execute_postgres_init(connection, models, *, approval, expected_approval, alias="default"):
+def execute_postgres_init(connection, models, *, approval, expected_approval, alias="default",
+                          expected_identity=None, parsed=None, title="Initial migration"):
     """Create an approved empty PostgreSQL schema atomically or raise.
 
     The caller must independently calculate expected_approval from the exact
@@ -57,6 +60,13 @@ def execute_postgres_init(connection, models, *, approval, expected_approval, al
         if locked is None or locked["acquired"] is not True:
             raise RuntimeError("PostgreSQL migration lock unavailable")
 
+        if expected_identity is not None:
+            from .cli_init import _postgres_database_identity, _postgres_approval_digest
+
+            if (parsed is None or _postgres_database_identity(connection, parsed) != expected_identity
+                    or _postgres_approval_digest(ordered, alias, expected_identity) != expected_approval):
+                raise RuntimeError("PostgreSQL database or proposal changed after approval")
+
         from .cli_init import _preflight, _unsafe_warnings
         report = _preflight(connection, ordered, alias)
 
@@ -67,6 +77,7 @@ def execute_postgres_init(connection, models, *, approval, expected_approval, al
             raise RuntimeError("Existing migration journal requires manual review")
 
         initialize_history(connection, confirm=True)
+        prepare_server_initial(connection, ordered, alias, expected_approval, title=title)
         journal = _quote("aurorasql_schema_history", connection.dialect)
 
         for model in ordered:
@@ -90,6 +101,9 @@ def execute_postgres_init(connection, models, *, approval, expected_approval, al
                 {"status": "applied", "id": operation_id},
             )
             operation_ids.append(operation_id)
+
+        schema_sha256 = verify_server_initial_schema(connection, ordered)
+        complete_server_initial(connection, alias, schema_sha256)
     # A failed commit is uncertain: Connection.transaction raises, never returns
     # success or retries. PostgreSQL rollback removes transactional journal/DDL.
     return tuple(operation_ids)

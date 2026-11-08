@@ -127,7 +127,7 @@ def main(argv: list[str] | None = None) -> int:
             command.add_argument("--models-config", default="aurora_models.json")
             command.add_argument("--explain", action="store_true")
             command.add_argument("--format", choices=("text", "json"), default="text")
-            command.add_argument("--check", action="store_true")
+            command.add_argument("--check", action="store_true", help=argparse.SUPPRESS)
             command.add_argument("--review-before", help="Existing before schema snapshot JSON")
             command.add_argument("--review-after", help="Existing after schema snapshot JSON")
             command.add_argument("--review-id", help="Migration review identifier")
@@ -136,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             command.add_argument("--history-file", help="Optional legacy history SQLite file")
             command.add_argument("--intents", action="store_true", help="Read guarded SQLite intent journal v2 instead of earlier history")
-            command.add_argument("--verify-models", action="store_true", help="Check SQLite Initial history against registered model declarations")
+            command.add_argument("--verify-models", action="store_true", help="Verify supported migration history against discovered models and physical schema")
             command.add_argument("--models-config", default="aurora_models.json")
             command.add_argument("--format", choices=("text", "json"), default="text")
 
@@ -158,9 +158,9 @@ def main(argv: list[str] | None = None) -> int:
 
     init = db_actions.add_parser(
         "init",
-        help="Create selected tables in an empty SQLite or MySQL database (writes once)",
+        help="Create selected tables in an empty supported database (writes once)",
         description=(
-            "Initialize an empty SQLite or MySQL database from discovered Aurora models. "
+            "Initialize an empty supported database from discovered Aurora models. "
             "If every selected table exists, report already initialized without modifying the database. "
             "Refuse partial or unrelated schemas; this command never migrates tables."
         ),
@@ -187,15 +187,18 @@ def main(argv: list[str] | None = None) -> int:
     sync.add_argument('--database', default='default', help='Configured database alias (default: default)')
     sync.add_argument('--model', action='append', metavar='MODULE:CLASS', help=argparse.SUPPRESS)
     sync.add_argument('--models-config', default='aurora_models.json', help='Explicit project model manifest JSON path')
-    sync.add_argument('--explain', action='store_true', help='Explain planned changes during --dry-run only')
-    sync.add_argument('--format', choices=('text', 'json'), default='text', help='Dry-run output format (default: text)')
-    sync.add_argument('--dry-run', action='store_true', help='Preview changes only; no files or schema writes')
-    sync.add_argument('--check', action='store_true', help='CI check during --dry-run: exit 2 for schema drift')
+    # Retain legacy preview flags for existing callers; the canonical
+    # inspection and CI workflow is now `aurora db plan`.
+    sync.add_argument('--explain', action='store_true', help=argparse.SUPPRESS)
+    sync.add_argument('--format', choices=('text', 'json'), default='text', help=argparse.SUPPRESS)
+    sync.add_argument('--dry-run', action='store_true', help=argparse.SUPPRESS)
+    sync.add_argument('--check', action='store_true', help=argparse.SUPPRESS)
     sync.add_argument('--approve', help='Reviewed SHA-256 digest; APPLY still required')
     sync.add_argument('--review-file', help='Existing, validated AuroraSQL migration review JSON')
     sync.add_argument('--name', help='New migration review filename stem (required to apply)')
     sync.add_argument('--output-dir', default='migrations', help='Existing review directory (default: migrations)')
     sync.add_argument('--backup', help='New backup filename in an existing directory (required to apply)')
+    sync.add_argument('--login-path', help=argparse.SUPPRESS)
     sync.add_argument('--schema', help='Exact MySQL schema (required for MySQL)')
     sync.add_argument('--table', help='One MySQL target table')
     sync.add_argument('--column', help='One nullable MySQL column; omit for CREATE TABLE')
@@ -207,11 +210,11 @@ def main(argv: list[str] | None = None) -> int:
 
     # Keep backend-specific limitations visible without implying universal support.
     sync.description = (
-        "Preview AuroraSQL schema changes or apply an explicitly reviewed, "
-        "supported migration. Native SQLite model additions use a review "
-        "fingerprint, confirmation and backup; explicit structural changes "
-        "and backend-specific operations retain separate safety gates. "
-        "Unsupported and destructive changes are refused."
+        "Use 'aurora db plan' to inspect changes and assess safety. "
+        "This command reviews and applies only supported migrations after "
+        "the required approval, backup and backend-specific checks. "
+        "MySQL/PostgreSQL use one verified Initial and one narrowly reviewed "
+        "successor; unsupported and destructive changes are refused."
     )
 
     # Destructive operations remain deliberately unavailable.
@@ -257,6 +260,17 @@ def main(argv: list[str] | None = None) -> int:
 
                 from aurora.database.cli_mysql_backup import backup_mysql_database
                 backup_mysql_database(args.config, args.database, args.to, args.login_path)
+                return 0
+
+            if scheme == "postgresql+psycopg":
+                if os.environ.get("AURORA_ENV", "development").lower() == "production":
+                    raise ValueError("Production backup requires separate approval")
+
+                if args.login_path:
+                    raise ValueError("--login-path is specific to MySQL")
+
+                from aurora.database.cli_postgres_backup import backup_postgres_database
+                backup_postgres_database(args.config, args.database, args.to)
                 return 0
 
             if args.login_path:

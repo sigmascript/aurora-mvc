@@ -1,11 +1,13 @@
-"""Guarded mysqldump backup using an existing MySQL login-path profile."""
+"""Guarded mysqldump backup using configured or explicit MySQL credentials."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import os
 from pathlib import Path
 import re
 from secrets import token_hex
+import stat
 import subprocess
 import tempfile
 
@@ -25,15 +27,67 @@ def _run(command: list[str], *, label: str) -> subprocess.CompletedProcess:
 
     if result.returncode:
         # Client diagnostics can include credentials and connection strings.
-        raise ValueError(f"MySQL {label} failed (exit status {result.returncode}); verify login-path and privileges")
+        raise ValueError(f"MySQL {label} failed (exit status {result.returncode}); verify credentials and privileges")
 
     return result
 
 
+@contextmanager
+def _client_authentication(url, login_path):
+    """Provide client options without exposing URL passwords in process arguments.
+
+    An ephemeral plaintext option file is allowed only on POSIX filesystems
+    where owner-only permissions can be verified. Windows callers retain the
+    supported login-path route until its ACL safety is independently tested.
+    """
+    if login_path is not None:
+        if not _IDENTIFIER.fullmatch(login_path):
+            raise ValueError("MySQL --login-path must be a configured profile name")
+
+        yield [f"--login-path={login_path}"]
+        return
+
+    if os.name != "posix":
+        raise ValueError("Automatic MySQL backup credentials require verified file permissions; "
+                         "use --login-path on Windows")
+
+    if url.password is None:
+        raise ValueError("Configured MySQL backup requires a database URL password "
+                         "or an explicit --login-path")
+
+    password = unquote(url.password)
+
+    if any(char in password for char in "\r\n\x00"):
+        raise ValueError("Configured MySQL password cannot be encoded in a safe option file")
+
+    # MySQL option-file parsing treats backslashes and quotes specially.
+    escaped = password.replace("\\", "\\\\").replace('"', '\\"')
+    descriptor, filename = tempfile.mkstemp(prefix=".aurora-mysql-auth-", suffix=".cnf")
+    location = Path(filename)
+
+    try:
+        os.fchmod(descriptor, 0o600)
+
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+            descriptor = -1
+            stream.write('[client]\npassword="' + escaped + '"\n')
+
+        permissions = location.stat()
+
+        if (permissions.st_uid != os.getuid()
+                or stat.S_IMODE(permissions.st_mode) != 0o600):
+            raise PermissionError("MySQL credential file owner-only access is unverified")
+
+        yield [f"--defaults-extra-file={location}"]
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+        location.unlink(missing_ok=True)
+
+
 def backup_mysql_database(config_path: str, alias: str, destination: str | None,
                           login_path: str | None) -> Path:
-    if not login_path or not _IDENTIFIER.fullmatch(login_path):
-        raise ValueError("MySQL backup requires --login-path NAME (configured with mysql_config_editor)")
 
     config, _ = _load_config(config_path)
     url = urlsplit(config.resolve(alias))
@@ -52,10 +106,18 @@ def backup_mysql_database(config_path: str, alias: str, destination: str | None,
     host = url.hostname
     port = url.port or 3306
 
-    # Explicit host/user/port ensure a login profile cannot silently redirect
-    # a backup to a different account or server. Password remains in the profile.
-    connection = [f"--login-path={login_path}", "--protocol=TCP",
-                  f"--host={host}", f"--port={port}", f"--user={unquote(url.username) if url.username else None}"]
+    with _client_authentication(url, login_path) as authentication:
+        return _backup_selected_mysql_database(url, alias, destination, database,
+                                               host, port, authentication)
+
+
+def _backup_selected_mysql_database(url, alias, destination, database, host, port,
+                                    authentication):
+    """Probe and dump using the same bounded authentication scope."""
+    # MySQL option-file selectors must be first. Explicit host/user/port
+    # additionally bind the backup client to AuroraSQL's selected URL.
+    connection = [*authentication, "--protocol=TCP",
+                  f"--host={host}", f"--port={port}", f"--user={unquote(url.username)}"]
     probe = _run(["mysql", *connection, "--batch", "--skip-column-names", database,
                   "--execute=SELECT DATABASE(), CURRENT_USER()"], label="connection check")
     fields = probe.stdout.strip().split("\t")

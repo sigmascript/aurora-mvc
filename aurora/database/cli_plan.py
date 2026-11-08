@@ -62,6 +62,27 @@ def _model_free_report(url, base_dir, alias):
             "warnings": ["No models supplied or registered; schema differences cannot be evaluated."]}
 
 
+def _model_free_server_report(config, alias):
+    """Count selected server tables without creating history or applying DDL."""
+    with config.connect(alias) as connection:
+        if connection.dialect == "mysql":
+            rows = connection.fetch_all(
+                "SELECT TABLE_NAME AS name FROM information_schema.TABLES "
+                "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE'"
+            )
+        elif connection.dialect == "postgresql":
+            rows = connection.fetch_all(
+                "SELECT tablename AS name FROM pg_catalog.pg_tables "
+                "WHERE schemaname=current_schema()"
+            )
+        else:
+            raise ValueError("Unsupported AuroraSQL server backend")
+
+    return {"backend": "aurorasql", "database_alias": alias, "schema_status": "UNVERIFIED",
+            "status": "UNVERIFIED", "advisory_only": True, "table_count": len(rows), "models": [],
+            "warnings": ["No models supplied or registered; schema differences cannot be evaluated."]}
+
+
 def _load_config(path):
     """Load an explicit project database configuration without connecting."""
     location = Path(path).expanduser().resolve()
@@ -137,7 +158,11 @@ def run_plan(args):
     refs, models = _select_models(args, base_dir)
 
     if not refs:
-        report = _model_free_report(config.resolve(args.database), base_dir, args.database)
+        url = config.resolve(args.database)
+        scheme = urlsplit(url).scheme
+        report = (_model_free_report(url, base_dir, args.database)
+                  if scheme in ("sqlite", "sqlite+pysqlite") else
+                  _model_free_server_report(config, args.database))
 
         if args.format == "json":
             print(json.dumps(report, indent=2, sort_keys=True))
@@ -153,6 +178,9 @@ def run_plan(args):
 
     url = config.resolve(args.database)
     parsed = urlsplit(url)
+
+    server_review = None
+    server_review_warning = None
 
     if parsed.scheme in ("sqlite", "sqlite+pysqlite"):
         db_file = _existing_sqlite_path(url, base_dir)
@@ -206,12 +234,55 @@ def run_plan(args):
     else:
         with config.connect(args.database) as connection:
             plans = [plan_schema(connection, model) for model in models]
+
+            if connection.dialect in ("mysql", "postgresql"):
+                from .server_migration_timeline import (inspect_server_timeline,
+                                                        verify_server_initial_current,
+                                                        verify_server_successor_current)
+
+                timeline = inspect_server_timeline(connection, args.database)
+                history_verified = (verify_server_initial_current(connection, models,
+                                                                  args.database)
+                                    if timeline is not None and len(timeline) == 1 else
+                                    verify_server_successor_current(connection, models,
+                                                                    args.database)
+                                    if timeline is not None and len(timeline) == 2 else
+                                    False if timeline is not None else None)
+
+            if connection.dialect in ("mysql", "postgresql") and any(plan.changes for plan in plans):
+                from .cli_init import _mysql_database_identity, _postgres_database_identity
+                from .history import review_history
+                from .server_model_review import review_server_model_changes
+
+                try:
+                    if review_history(connection):
+                        raise ValueError("Existing migration history has unresolved findings")
+
+                    identity = (_mysql_database_identity(connection, parsed)
+                                if connection.dialect == "mysql" else
+                                _postgres_database_identity(connection, parsed))
+                    proposal = review_server_model_changes(connection, models,
+                                                           args.database, identity)
+                    server_review = {
+                        "operations": proposal.operations,
+                        "statements": proposal.statements,
+                        "review_fingerprint": proposal.review_sha256,
+                        "execution_allowed": False,
+                        "status": "ADVISORY_ONLY",
+                    }
+                except (ValueError, RuntimeError) as error:
+                    # An unsupported proposal must not suppress the ordinary
+                    # read-only drift report or suggest execution permission.
+                    server_review_warning = str(error)
+
         rename_candidates = []
         missing_model_identities = []
-        history_verified = None
+
+        if connection.dialect not in ("mysql", "postgresql"):
+            history_verified = None
 
     drift = any(plan.changes for plan in plans)
-    uncertain = (any(plan.warnings for plan in plans) or
+    uncertain = (any(plan.warnings for plan in plans) or server_review_warning is not None or
                  history_verified is False or bool(missing_model_identities))
     report = {
         "backend": "aurorasql", "database_alias": args.database,
@@ -220,6 +291,8 @@ def run_plan(args):
         "native_history_verified": history_verified,
         "unregistered_history_models": missing_model_identities,
         "table_rename_candidates": rename_candidates,
+        "server_migration_review": server_review,
+        "server_migration_warning": server_review_warning,
         "models": [
             {"reference": ref, "table": plan.table, "exists": plan.exists,
              "changes": [{"kind": c.kind, "column": c.column, "detail": c.detail}
@@ -253,6 +326,15 @@ def run_plan(args):
 
         for reference in missing_model_identities:
             print(f"  [REVIEW] Model no longer registered: {reference}; physical table retained")
+
+        if server_review is not None:
+            for operation in server_review["operations"]:
+                print(f"  [SERVER CANDIDATE] {operation['kind']}: {operation['table']}")
+
+            print("  [REVIEW] Server execution remains disabled pending backend safety acceptance")
+
+        if server_review_warning is not None:
+            print(f"  [REVIEW] Server migration proposal refused: {server_review_warning}")
 
         print("No migration has been approved or executed.")
 

@@ -163,7 +163,8 @@ class HistoryFinding:
     detail: str
 
 
-def review_history(connection, *, entries=None, table_aliases=None):
+def review_history(connection, *, entries=None, table_aliases=None,
+                   verified_successor_table=None):
     """Inspect journal consistency and current table existence without mutations.
 
     An existing table does not prove that its columns match the recorded SQL.
@@ -175,6 +176,11 @@ def review_history(connection, *, entries=None, table_aliases=None):
         entries = list_history(connection)
 
     aliases = table_aliases or {}
+
+    if verified_successor_table is not None:
+        from .models import _identifier
+
+        _identifier(verified_successor_table)
     findings = []
     by_table = {}
     by_operation = {}
@@ -213,7 +219,10 @@ def review_history(connection, *, entries=None, table_aliases=None):
                                                "Operation identifier appears more than once"))
 
     for table, records in by_table.items():
-        if len(records) > 1:
+        # Native ALTER successors legitimately append one record for the same
+        # table, but only their complete timeline verifier may allow it.
+        if len(records) > 1 and not (table == verified_successor_table
+                                     and len(records) == 2):
             for entry in records:
                 findings.append(HistoryFinding(entry.operation_id, table,
                                                "multiple_operations", "Multiple records target the same table; manual review required"))

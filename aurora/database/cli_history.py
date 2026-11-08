@@ -52,6 +52,47 @@ def _read_history(connection, alias, *, models=None):
                 "kind": "initial_not_verified",
                 "detail": "Legacy initialization has not been adopted into verified Initial history",
             })
+    elif getattr(connection, "dialect", None) in ("mysql", "postgresql"):
+        from .server_migration_timeline import (inspect_server_timeline,
+                                                verify_server_initial_current,
+                                                verify_server_successor_current)
+
+        timeline = inspect_server_timeline(connection, alias)
+
+        if timeline is not None:
+            verified = (verify_server_initial_current(connection, models, alias)
+                        if models is not None and len(timeline) == 1 else
+                        verify_server_successor_current(connection, models, alias)
+                        if models is not None and len(timeline) == 2 else False)
+
+            if verified and len(timeline) == 2:
+                # Suppress a repeated-table warning only after the native
+                # successor's complete journal and schema proof succeeded.
+                findings = review_history(
+                    connection, entries=entries,
+                    verified_successor_table=timeline[-1].operation["table"],
+                )
+                report["findings"] = [
+                    {"operation_id": finding.operation_id, "table": finding.table,
+                     "kind": finding.kind, "detail": finding.detail}
+                    for finding in findings
+                ]
+
+            report["timeline"] = [
+                {"number": item.number, "name": item.name, "title": item.title,
+                 "status": item.status, "model_tables": item.model_tables,
+                 "physical_history_consistent": verified if item == timeline[-1] else False,
+                 "verified_current": verified if item == timeline[-1] else False}
+                for item in timeline
+            ]
+
+            if not verified:
+                report["findings"].append({
+                    "operation_id": str(timeline[-1].number), "table": "*",
+                    "kind": "server_history_not_verified",
+                    "detail": "Native server history is recorded but physical schema/model "
+                              "evidence is not verified",
+                })
 
     return report
 
@@ -62,9 +103,6 @@ def run_history(args):
     url = config.resolve(args.database)
     parsed = urlsplit(url)
     verify_models = getattr(args, "verify_models", False)
-
-    if verify_models and parsed.scheme not in ("sqlite", "sqlite+pysqlite"):
-        raise ValueError("Model-verified history is currently SQLite-only")
 
     models = None
 
@@ -83,7 +121,7 @@ def run_history(args):
             report = _read_history(connection, args.database, models=models)
     else:
         with config.connect(args.database) as connection:
-            report = _read_history(connection, args.database)
+            report = _read_history(connection, args.database, models=models)
 
     if args.format == "json":
         print(json.dumps(report, indent=2, sort_keys=True))

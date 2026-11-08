@@ -158,6 +158,9 @@ def _postgres_database_identity(connection, parsed):
     if not row or not row["database_name"] or not row["schema_name"]:
         raise RuntimeError("Cannot identify PostgreSQL database and schema")
 
+    if row["database_name"] != unquote(parsed.path.lstrip("/")):
+        raise RuntimeError("Connected PostgreSQL database differs from configuration")
+
     return json.dumps({
         "host": parsed.hostname.lower(),
         "port": parsed.port or 5432,
@@ -357,16 +360,49 @@ def _unsafe_warnings(report):
             if warning != "Preview only: creating a table requires explicit approval and execution."]
 
 
+def _server_initial_decision(args, report, digest, models, dialect):
+    """Review a server initialization interactively or retain explicit automation."""
+    import sys
+    from .migration_titles import migration_title
+
+    eligible = report["status"] == "EMPTY" and not _unsafe_warnings(report)
+    interactive = args.approve is None and args.confirm is None
+
+    if interactive:
+        report["approval_sha256"] = digest if eligible else None
+        report["write_enabled"] = False
+
+        if not eligible or not sys.stdin.isatty():
+            print(json.dumps(report, indent=2, sort_keys=True))
+            return None, 0 if eligible else 3
+
+        print(f"AuroraSQL initialization — {args.database} ({dialect})")
+
+        for model in models:
+            print(f"  create table: {model.__table_name__}")
+
+        if input("Initialize this database? [y/N]: ").strip().lower() != "y":
+            print("Initialization cancelled; no database changes made.")
+            return None, 0
+
+        title = migration_title(getattr(args, "title", None), "Initial migration")
+        return (digest, title), None
+
+    if args.approve != digest or args.confirm != "APPLY":
+        raise ValueError("Exact schema approval and --confirm APPLY are required")
+
+    # Automation must never wait for an interactive title prompt.
+    title = migration_title(getattr(args, "title", None) or "", "Initial migration")
+    return (args.approve, title), None
+
+
 def run_init_apply(args):
-    """Explicitly approved, recorded, multi-model SQLite initialization pilot."""
+    """Initialize supported schemas after backend-specific review and approval."""
     config, base_dir = _load_config(args.config)
     refs, models = _select_models(args, base_dir)
     from .init_validation import validate_init_models
     url = config.resolve(args.database)
     parsed = urlsplit(url)
-
-    if getattr(args, "title", None) is not None and parsed.scheme not in ("sqlite", "sqlite+pysqlite"):
-        raise ValueError("Migration titles require native SQLite history on this backend")
 
     if parsed.scheme == "postgresql+psycopg":
         models = validate_init_models(models, dialect="postgresql")
@@ -375,23 +411,17 @@ def run_init_apply(args):
             identity = _postgres_database_identity(connection, parsed)
             digest = _postgres_approval_digest(models, args.database, identity)
 
-            if args.approve is None and args.confirm is None:
-                report = _postgres_read_only_preflight(connection, models, args.database)
-                report["approval_sha256"] = (
-                    digest if report["status"] == "EMPTY" and not _unsafe_warnings(report)
-                    else None
-                )
-                report["write_enabled"] = False
-                print(json.dumps(report, indent=2, sort_keys=True))
-                return 0 if report["status"] == "EMPTY" else 3
+            report = _postgres_read_only_preflight(connection, models, args.database)
+            decision, result = _server_initial_decision(args, report, digest, models, "PostgreSQL")
 
-            if args.approve != digest or args.confirm != "APPLY":
-                raise ValueError("Exact schema approval and --confirm APPLY are required")
+            if decision is None:
+                return result
 
             from .postgres_init import execute_postgres_init
             operation_ids = execute_postgres_init(
-                connection, models, approval=args.approve,
+                connection, models, approval=decision[0],
                 expected_approval=digest, alias=args.database,
+                expected_identity=identity, parsed=parsed, title=decision[1],
             )
 
         print(json.dumps({"status": "INITIALIZED", "database_alias": args.database,
@@ -406,23 +436,17 @@ def run_init_apply(args):
             identity = _mysql_database_identity(connection, parsed)
             digest = _mysql_approval_digest(models, args.database, identity)
 
-            if args.approve is None and args.confirm is None:
-                report = _mysql_read_only_preflight(connection, models, args.database)
-                report["approval_sha256"] = (
-                    digest if report["status"] == "EMPTY" and not _unsafe_warnings(report)
-                    else None
-                )
-                print(json.dumps(report, indent=2, sort_keys=True))
-                return 0 if report["status"] == "EMPTY" else 3
+            report = _mysql_read_only_preflight(connection, models, args.database)
+            decision, result = _server_initial_decision(args, report, digest, models, "MySQL")
 
-            if args.approve != digest or args.confirm != "APPLY":
-                raise ValueError("Exact schema approval and --confirm APPLY are required")
+            if decision is None:
+                return result
 
             from .mysql_init import execute_mysql_init
             operation_ids = execute_mysql_init(
-                connection, models, approval=args.approve,
+                connection, models, approval=decision[0],
                 expected_approval=digest, alias=args.database,
-                expected_identity=identity, parsed=parsed,
+                expected_identity=identity, parsed=parsed, title=decision[1],
             )
 
         print(json.dumps({"status": "INITIALIZED", "database_alias": args.database,

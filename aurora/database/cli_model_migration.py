@@ -1,4 +1,4 @@
-"""Model-driven reviewed SQLite additions using the existing six-command CLI."""
+"""Model-driven schema review and guarded SQLite execution."""
 
 import hmac
 import json
@@ -21,7 +21,27 @@ from .sqlite_additive_migration import execute_sqlite_additive_migration
 
 
 def run_model_migration(args):
-    """Preview or apply only model changes already supported by SQLite DDL."""
+    """Route reviewed model migrations to their guarded backend workflow."""
+    config, root = _load_config(args.config)
+    url = config.resolve(args.database)
+    parsed = urlsplit(url)
+
+    if parsed.scheme in ("mysql+pymysql", "postgresql+psycopg"):
+        if args.dry_run:
+            if (args.apply or args.approve or args.confirm or args.backup
+                    or args.title is not None
+                    or getattr(args, "login_path", None) is not None):
+                raise ValueError("Read-only server planning cannot contain execution options")
+
+            from .cli_plan import run_plan
+            return run_plan(args)
+
+        from .cli_server_model_migration import run_server_model_migration
+        return run_server_model_migration(args)
+
+    if getattr(args, "login_path", None) is not None:
+        raise ValueError("MySQL login profiles cannot be used for SQLite model migrations")
+
     if (args.review_file or args.changes or args.name or args.schema or args.table or
             args.column or args.approve_review or args.approve_sql or args.output_dir != "migrations"):
         raise ValueError("Model migration cannot be combined with structural or legacy options")
@@ -37,17 +57,15 @@ def run_model_migration(args):
           args.format != "text" or not sys.stdin.isatty()):
         raise PermissionError("Interactive migration requires a terminal; automation needs reviewed approval")
 
-    config, root = _load_config(args.config)
-    url = config.resolve(args.database)
-
-    if urlsplit(url).scheme not in ("sqlite", "sqlite+pysqlite"):
-        raise ValueError("Model-driven execution currently supports SQLite only")
-
-    db_file = _existing_sqlite_path(url, root)
     refs, models = _select_models(args, root)
 
     if not refs:
         raise ValueError("Registered or explicit models required")
+
+    if parsed.scheme not in ("sqlite", "sqlite+pysqlite"):
+        raise ValueError("Model-driven execution currently supports SQLite only")
+
+    db_file = _existing_sqlite_path(url, root)
 
     with Connection(sqlite3.connect(db_file.as_uri() + "?mode=ro", uri=True,
                                     isolation_level=None), "sqlite") as connection:
