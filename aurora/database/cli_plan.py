@@ -249,20 +249,57 @@ def run_plan(args):
                                     if timeline is not None and len(timeline) == 2 else
                                     False if timeline is not None else None)
 
-            if connection.dialect in ("mysql", "postgresql") and any(plan.changes for plan in plans):
-                from .cli_init import _mysql_database_identity, _postgres_database_identity
-                from .history import review_history
-                from .server_model_review import review_server_model_changes
-
-                try:
-                    if review_history(connection):
-                        raise ValueError("Existing migration history has unresolved findings")
+                if timeline is not None and len(timeline) > 2:
+                    from .cli_init import _mysql_database_identity, _postgres_database_identity
+                    from .server_history_chain import verify_server_applied_chain
 
                     identity = (_mysql_database_identity(connection, parsed)
                                 if connection.dialect == "mysql" else
                                 _postgres_database_identity(connection, parsed))
-                    proposal = review_server_model_changes(connection, models,
-                                                           args.database, identity)
+                    history_verified = verify_server_applied_chain(
+                        connection, models, args.database, identity)
+
+            if connection.dialect in ("mysql", "postgresql") and any(plan.changes for plan in plans):
+                from .cli_init import _mysql_database_identity, _postgres_database_identity
+                from .history import review_history
+                from .server_model_review import review_server_model_changes
+                from .server_column_widening import review_server_column_widening
+                from .server_nullability_review import review_server_nullability_change
+                from .server_default_review import review_server_default_addition
+
+                try:
+                    identity = (_mysql_database_identity(connection, parsed)
+                                if connection.dialect == "mysql" else
+                                _postgres_database_identity(connection, parsed))
+                    reviewers = (review_server_model_changes, review_server_column_widening,
+                                 review_server_nullability_change, review_server_default_addition)
+                    proposal = None
+
+                    for reviewer in reviewers:
+                        try:
+                            proposal = reviewer(connection, models, args.database, identity)
+                            break
+                        except ValueError:
+                            continue
+
+                    if proposal is None:
+                        raise ValueError("No supported single server change can be reviewed")
+
+                    findings = review_history(connection)
+
+                    if timeline is not None and len(timeline) > 1:
+                        from .server_history_chain import verify_server_review_predecessor
+
+                        # Read-only successor proof permits ordinary repeated
+                        # entries, never unrelated or unresolved journal findings.
+                        verify_server_review_predecessor(
+                            connection, models, args.database, identity, proposal)
+                        findings = [finding for finding in findings
+                                    if finding.kind != "multiple_operations"]
+
+                    if findings:
+                        raise ValueError("Existing migration history has unresolved findings")
+
                     server_review = {
                         "operations": proposal.operations,
                         "statements": proposal.statements,

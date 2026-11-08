@@ -577,6 +577,32 @@ def verify_server_successor_current(connection, models, alias):
             and successor_digest == successor.schema_sha256)
 
 
+def _reviewed_server_successor_number(connection, models, alias, identity, review,
+                                      initial_predecessor_verifier):
+    """Choose the next sequence only after complete prior-history verification.
+
+    The first successor retains its original verified Initial proof. Later
+    successors must verify the whole applied chain and physical predecessor.
+    """
+    from .model_identity import model_identity_map
+
+    timeline = inspect_server_timeline(connection, alias)
+
+    if not timeline or any(entry.status != "applied" for entry in timeline):
+        raise RuntimeError("Complete applied server history is required")
+
+    if len(timeline) == 1:
+        if timeline[0].model_tables != model_identity_map(models):
+            raise RuntimeError("Verified original model history is required")
+
+        initial_predecessor_verifier(connection, models, alias, review)
+        return 2
+
+    from .server_history_chain import verify_server_review_predecessor
+
+    return verify_server_review_predecessor(connection, models, alias, identity, review)
+
+
 def prepare_server_successor(connection, models, alias, identity, review, approval,
                              name, title="Untitled"):
     """Prepare one new-table successor after independently verified Initial.
@@ -604,10 +630,10 @@ def prepare_server_successor(connection, models, alias, identity, review, approv
 
     timeline = inspect_server_timeline(connection, alias)
 
-    if timeline is None or len(timeline) != 1 or timeline[0].status != "applied":
-        raise RuntimeError("A verified native Initial history is required")
+    if timeline is None or any(entry.status != "applied" for entry in timeline):
+        raise RuntimeError("A complete applied native history is required")
 
-    previous = timeline[0].model_tables
+    previous = timeline[-1].model_tables
     mapping = model_identity_map(models)
 
     if any(reference.startswith("untrusted:") for reference in mapping):
@@ -618,7 +644,7 @@ def prepare_server_successor(connection, models, alias, identity, review, approv
     added = set(mapping) - set(previous)
 
     if (len(added) != 1 or any(mapping.get(key) != value for key, value in previous.items())
-            or not verify_server_initial_current(connection, before, alias)):
+            or (len(timeline) == 1 and not verify_server_initial_current(connection, before, alias))):
         raise RuntimeError("Historical model mapping or Initial schema is unverified")
 
     new_model = next(model for model in models
@@ -640,18 +666,26 @@ def prepare_server_successor(connection, models, alias, identity, review, approv
             or not hmac.compare_digest(candidate.review_sha256, approval)):
         raise PermissionError("Exact reviewed new-table successor approval is required")
 
+    if len(timeline) == 1:
+        number = 2
+    else:
+        from .server_history_chain import verify_server_review_predecessor
+
+        number = verify_server_review_predecessor(
+            connection, models, alias, identity, candidate)
+
     table = _quote(_TABLE, connection.dialect)
     connection.execute_write(
         f"INSERT INTO {table} (migration_id, name, title, database_alias, "
         "review_sha256, models_json, operation_json, schema_sha256, state) "
         "VALUES (:number, :name, :title, :alias, :review, :models, :operation, NULL, :state)",
-        {"number": 2, "name": name, "title": title, "alias": alias,
+        {"number": number, "name": name, "title": title, "alias": alias,
          "review": candidate.review_sha256, "models": canonical_model_map(mapping),
          "operation": canonical_operation_json(candidate.operations[0]),
          "state": "prepared"},
     )
 
-    return 2
+    return number
 
 
 def prepare_server_column_successor(connection, models, alias, identity, review,
@@ -682,13 +716,12 @@ def prepare_server_column_successor(connection, models, alias, identity, review,
 
     timeline = inspect_server_timeline(connection, alias)
 
-    if timeline is None or len(timeline) != 1 or timeline[0].status != "applied":
-        raise RuntimeError("Verified Initial history is required for column addition")
+    if timeline is None or any(entry.status != "applied" for entry in timeline):
+        raise RuntimeError("Complete applied history is required for column addition")
 
     mapping = model_identity_map(models)
 
-    if (mapping != timeline[0].model_tables
-            or any(key.startswith("untrusted:") for key in mapping)):
+    if any(key.startswith("untrusted:") for key in mapping):
         raise RuntimeError("Historical model identities cannot authorize column addition")
 
     candidate = review_server_model_changes(connection, models, alias, identity)
@@ -699,19 +732,21 @@ def prepare_server_column_successor(connection, models, alias, identity, review,
             or candidate.operations[0]["kind"] != "add_column"):
         raise PermissionError("Exact reviewed column addition approval is required")
 
-    verify_server_column_addition_predecessor(connection, models, alias, candidate)
+    number = _reviewed_server_successor_number(
+        connection, models, alias, identity, candidate,
+        verify_server_column_addition_predecessor)
     table = _quote(_TABLE, connection.dialect)
     connection.execute_write(
         f"INSERT INTO {table} (migration_id, name, title, database_alias, "
         "review_sha256, models_json, operation_json, schema_sha256, state) "
         "VALUES (:number, :name, :title, :alias, :review, :models, :operation, NULL, :state)",
-        {"number": 2, "name": name, "title": title, "alias": alias,
+        {"number": number, "name": name, "title": title, "alias": alias,
          "review": candidate.review_sha256, "models": canonical_model_map(mapping),
          "operation": canonical_operation_json(candidate.operations[0]),
          "state": "prepared"},
     )
 
-    return 2
+    return number
 
 
 def prepare_server_widening_successor(connection, models, alias, identity, review,
@@ -742,9 +777,8 @@ def prepare_server_widening_successor(connection, models, alias, identity, revie
 
     timeline = inspect_server_timeline(connection, alias)
 
-    if (timeline is None or len(timeline) != 1 or timeline[0].status != "applied"
-            or timeline[0].model_tables != model_identity_map(models)):
-        raise RuntimeError("Verified original model history is required")
+    if timeline is None or any(entry.status != "applied" for entry in timeline):
+        raise RuntimeError("Complete applied model history is required")
 
     candidate = review_server_column_widening(connection, models, alias, identity)
 
@@ -754,19 +788,21 @@ def prepare_server_widening_successor(connection, models, alias, identity, revie
             or candidate.operations[0]["kind"] != "widen_column"):
         raise PermissionError("Exact reviewed widening approval is required")
 
-    verify_server_widening_predecessor(connection, models, alias, candidate)
+    number = _reviewed_server_successor_number(
+        connection, models, alias, identity, candidate,
+        verify_server_widening_predecessor)
     table = _quote(_TABLE, connection.dialect)
     connection.execute_write(
         f"INSERT INTO {table} (migration_id, name, title, database_alias, "
         "review_sha256, models_json, operation_json, schema_sha256, state) "
         "VALUES (:number, :name, :title, :alias, :review, :models, :operation, NULL, :state)",
-        {"number": 2, "name": name, "title": title, "alias": alias,
+        {"number": number, "name": name, "title": title, "alias": alias,
          "review": candidate.review_sha256,
          "models": canonical_model_map(model_identity_map(models)),
          "operation": canonical_operation_json(candidate.operations[0]),
          "state": "prepared"},
     )
-    return 2
+    return number
 
 
 def prepare_server_nullability_successor(connection, models, alias, identity, review,
@@ -797,9 +833,8 @@ def prepare_server_nullability_successor(connection, models, alias, identity, re
 
     timeline = inspect_server_timeline(connection, alias)
 
-    if (timeline is None or len(timeline) != 1 or timeline[0].status != "applied"
-            or timeline[0].model_tables != model_identity_map(models)):
-        raise RuntimeError("Verified original model history is required")
+    if timeline is None or any(entry.status != "applied" for entry in timeline):
+        raise RuntimeError("Complete applied model history is required")
 
     candidate = review_server_nullability_change(connection, models, alias, identity)
 
@@ -809,19 +844,21 @@ def prepare_server_nullability_successor(connection, models, alias, identity, re
             or candidate.operations[0]["kind"] != "change_nullability"):
         raise PermissionError("Exact reviewed nullability approval is required")
 
-    verify_server_nullability_predecessor(connection, models, alias, candidate)
+    number = _reviewed_server_successor_number(
+        connection, models, alias, identity, candidate,
+        verify_server_nullability_predecessor)
     table = _quote(_TABLE, connection.dialect)
     connection.execute_write(
         f"INSERT INTO {table} (migration_id, name, title, database_alias, "
         "review_sha256, models_json, operation_json, schema_sha256, state) "
         "VALUES (:number, :name, :title, :alias, :review, :models, :operation, NULL, :state)",
-        {"number": 2, "name": name, "title": title, "alias": alias,
+        {"number": number, "name": name, "title": title, "alias": alias,
          "review": candidate.review_sha256,
          "models": canonical_model_map(model_identity_map(models)),
          "operation": canonical_operation_json(candidate.operations[0]),
          "state": "prepared"},
     )
-    return 2
+    return number
 
 
 def prepare_server_default_successor(connection, models, alias, identity, review,
@@ -848,9 +885,8 @@ def prepare_server_default_successor(connection, models, alias, identity, review
 
     timeline = inspect_server_timeline(connection, alias)
 
-    if (timeline is None or len(timeline) != 1 or timeline[0].status != "applied"
-            or timeline[0].model_tables != model_identity_map(models)):
-        raise RuntimeError("Verified original model history is required")
+    if timeline is None or any(entry.status != "applied" for entry in timeline):
+        raise RuntimeError("Complete applied model history is required")
 
     candidate = review_server_default_addition(connection, models, alias, identity)
 
@@ -860,19 +896,21 @@ def prepare_server_default_successor(connection, models, alias, identity, review
             or candidate.operations[0]["kind"] != "add_default"):
         raise PermissionError("Exact reviewed default approval is required")
 
-    verify_server_default_predecessor(connection, models, alias, candidate)
+    number = _reviewed_server_successor_number(
+        connection, models, alias, identity, candidate,
+        verify_server_default_predecessor)
     table = _quote(_TABLE, connection.dialect)
     connection.execute_write(
         f"INSERT INTO {table} (migration_id, name, title, database_alias, "
         "review_sha256, models_json, operation_json, schema_sha256, state) "
         "VALUES (:number, :name, :title, :alias, :review, :models, :operation, NULL, :state)",
-        {"number": 2, "name": name, "title": title, "alias": alias,
+        {"number": number, "name": name, "title": title, "alias": alias,
          "review": candidate.review_sha256,
          "models": canonical_model_map(model_identity_map(models)),
          "operation": canonical_operation_json(candidate.operations[0]),
          "state": "prepared"},
     )
-    return 2
+    return number
 
 
 def complete_server_successor(connection, number, name, alias, schema_sha256):

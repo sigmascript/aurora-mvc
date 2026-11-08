@@ -58,10 +58,11 @@ def execute_mysql_new_table_successor(connection, models, *, alias, identity,
             prepared = True
             timeline = inspect_server_timeline(connection, alias)
 
-            if timeline is None or len(timeline) != 2 or timeline[0].status != "applied":
+            if (timeline is None or len(timeline) != sequence
+                    or timeline[-2].status != "applied" or timeline[-1].status != "prepared"):
                 raise RuntimeError("MySQL predecessor history changed")
 
-            previous = timeline[0]
+            previous = timeline[-2]
             mapping = model_identity_map(models)
             added = set(mapping) - set(previous.model_tables)
 
@@ -90,16 +91,23 @@ def execute_mysql_new_table_successor(connection, models, *, alias, identity,
             if affected != 1:
                 raise RuntimeError("MySQL successor journal completion was not confirmed")
 
-            original_models = [item for item in models
-                               if f"{item.__module__}:{item.__qualname__}" in previous.model_tables]
-            initial_digest = verify_server_declared_schema(
-                connection, models, evidence_models=original_models)
+            if sequence == 2:
+                original_models = [item for item in models
+                                   if f"{item.__module__}:{item.__qualname__}" in previous.model_tables]
+                initial_digest = verify_server_declared_schema(
+                    connection, models, evidence_models=original_models)
 
-            if initial_digest != previous.schema_sha256:
-                raise RuntimeError("MySQL Initial schema changed during successor execution")
+                if initial_digest != previous.schema_sha256:
+                    raise RuntimeError("MySQL Initial schema changed during successor execution")
 
             successor_digest = verify_server_declared_schema(connection, models)
             complete_server_successor(connection, sequence, name, alias, successor_digest)
+
+            if sequence > 2:
+                from .server_history_chain import verify_server_applied_chain
+
+                if not verify_server_applied_chain(connection, models, alias, identity):
+                    raise RuntimeError("MySQL completed history chain failed independent verification")
         except BaseException:
             if operation_id is not None:
                 try:
@@ -115,7 +123,7 @@ def execute_mysql_new_table_successor(connection, models, *, alias, identity,
 
             if prepared:
                 try:
-                    mark_server_successor_uncertain(connection, 2, name, alias)
+                    mark_server_successor_uncertain(connection, sequence, name, alias)
                 except BaseException:
                     # Durable prepared intent blocks automatic replay.
                     pass

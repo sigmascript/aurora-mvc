@@ -70,4 +70,10 @@ def execute_postgres_column_widening(connection, models, *, alias, identity, par
         digest = verify_server_declared_schema(connection, models)
         complete_server_successor(connection, number, name, alias, digest)
 
+        if number > 2:
+            from .server_history_chain import verify_server_applied_chain
+
+            if not verify_server_applied_chain(connection, models, alias, identity):
+                raise RuntimeError("PostgreSQL widening history chain is unverified")
+
     return operation_id, archive

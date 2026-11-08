@@ -70,6 +70,12 @@ def execute_mysql_column_widening(connection, models, *, alias, identity, parsed
 
             digest = verify_server_declared_schema(connection, models)
             complete_server_successor(connection, number, name, alias, digest)
+
+            if number > 2:
+                from .server_history_chain import verify_server_applied_chain
+
+                if not verify_server_applied_chain(connection, models, alias, identity):
+                    raise RuntimeError("MySQL widening history chain is unverified")
         except BaseException:
             if operation_id is not None:
                 try:
@@ -84,7 +90,7 @@ def execute_mysql_column_widening(connection, models, *, alias, identity, parsed
 
             if prepared:
                 try:
-                    mark_server_successor_uncertain(connection, 2, name, alias)
+                    mark_server_successor_uncertain(connection, number, name, alias)
                 except BaseException:
                     # The remaining prepared record must still prevent blind replay.
                     pass

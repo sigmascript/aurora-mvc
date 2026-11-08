@@ -14,7 +14,7 @@ from .history import list_history, review_history
 from .migration_timeline import inspect_native_history, verify_current_models
 
 
-def _read_history(connection, alias, *, models=None):
+def _read_history(connection, alias, *, models=None, parsed=None):
     entries = list_history(connection)
     findings = review_history(connection, entries=entries)
     report = {
@@ -65,6 +65,15 @@ def _read_history(connection, alias, *, models=None):
                         verify_server_successor_current(connection, models, alias)
                         if models is not None and len(timeline) == 2 else False)
 
+            if models is not None and len(timeline) > 2 and parsed is not None:
+                from .cli_init import _mysql_database_identity, _postgres_database_identity
+                from .server_history_chain import verify_server_applied_chain
+
+                identity = (_mysql_database_identity(connection, parsed)
+                            if connection.dialect == "mysql" else
+                            _postgres_database_identity(connection, parsed))
+                verified = verify_server_applied_chain(connection, models, alias, identity)
+
             if verified and len(timeline) == 2:
                 # Suppress a repeated-table warning only after the native
                 # successor's complete journal and schema proof succeeded.
@@ -76,6 +85,14 @@ def _read_history(connection, alias, *, models=None):
                     {"operation_id": finding.operation_id, "table": finding.table,
                      "kind": finding.kind, "detail": finding.detail}
                     for finding in findings
+                ]
+            elif verified and len(timeline) > 2:
+                # Only the independently proved complete chain can exempt its
+                # repeated-table entries. Keep all unrelated journal findings.
+                report["findings"] = [
+                    {"operation_id": finding.operation_id, "table": finding.table,
+                     "kind": finding.kind, "detail": finding.detail}
+                    for finding in findings if finding.kind != "multiple_operations"
                 ]
 
             report["timeline"] = [
@@ -121,7 +138,7 @@ def run_history(args):
             report = _read_history(connection, args.database, models=models)
     else:
         with config.connect(args.database) as connection:
-            report = _read_history(connection, args.database, models=models)
+            report = _read_history(connection, args.database, models=models, parsed=parsed)
 
     if args.format == "json":
         print(json.dumps(report, indent=2, sort_keys=True))

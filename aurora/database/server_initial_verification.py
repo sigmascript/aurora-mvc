@@ -176,7 +176,8 @@ def _verify_declared_table(connection, model):
 def verify_server_declared_schema(connection, models, *, evidence_models=None,
                                   historical_exclusion=None, historical_type_override=None,
                                   historical_nullability_override=None,
-                                  historical_default_exclusion=None):
+                                  historical_default_exclusion=None,
+                                  include_observations=False):
     """Verify all declared server tables, optionally fingerprinting a subset.
 
     Require no unexpected tables or views, no extra indexes/constraints, and
@@ -208,6 +209,9 @@ def verify_server_declared_schema(connection, models, *, evidence_models=None,
 
     if overrides > 1:
         raise ValueError("Only one historical schema transformation can be verified")
+
+    if include_observations and (overrides or evidence_models is not None):
+        raise ValueError("Complete current catalog evidence is required for observations")
 
     if historical_type_override is not None:
         if (not isinstance(historical_type_override, tuple)
@@ -348,7 +352,7 @@ def verify_server_declared_schema(connection, models, *, evidence_models=None,
     current = sha256(payload.encode("utf-8")).hexdigest()
 
     if not overrides:
-        return current
+        return (current, tuple(observations)) if include_observations else current
 
     previous_payload = json.dumps({"dialect": dialect, "observed": historical_observations},
                                   sort_keys=True, separators=(",", ":"), allow_nan=False)

@@ -33,6 +33,7 @@ def run_server_model_migration(args):
     from .server_nullability_history import verify_server_nullability_predecessor
     from .server_default_review import review_server_default_addition
     from .server_default_history import verify_server_default_predecessor
+    from .server_history_chain import verify_server_review_predecessor
 
     if os.environ.get("AURORA_ENV", "development").lower() == "production":
         raise PermissionError("Server migration execution is disabled in production")
@@ -75,13 +76,13 @@ def run_server_model_migration(args):
         raise ValueError("MySQL login profiles are not supported by PostgreSQL")
 
     with config.connect(args.database) as connection:
-        if review_history(connection):
-            raise RuntimeError("Unresolved server operation journal")
-
         timeline = inspect_server_timeline(connection, args.database)
 
-        if timeline is None or len(timeline) != 1 or timeline[0].status != "applied":
-            raise RuntimeError("One verified Initial migration is required")
+        if timeline is None or any(entry.status != "applied" for entry in timeline):
+            raise RuntimeError("Complete applied server migration history is required")
+
+        if len(timeline) == 1 and review_history(connection):
+            raise RuntimeError("Unresolved server operation journal")
 
         identity = (_mysql_database_identity(connection, parsed)
                     if connection.dialect == "mysql" else
@@ -107,33 +108,39 @@ def run_server_model_migration(args):
         mapping = model_identity_map(models)
         kind = proposal.operations[0]["kind"]
 
-        if kind == "create_table":
-            if (len(mapping) != len(timeline[0].model_tables) + 1
-                    or any(mapping.get(key) != value
-                           for key, value in timeline[0].model_tables.items())
-                    or not verify_server_initial_current(
-                        connection,
-                        [model for model in models
-                         if f"{model.__module__}:{model.__qualname__}"
-                         in timeline[0].model_tables], args.database)):
-                raise RuntimeError("Historical server schema or model identity is unverified")
-        elif kind == "add_column":
-            verify_server_column_addition_predecessor(
-                connection, models, args.database, proposal)
-        elif kind == "widen_column":
-            verify_server_widening_predecessor(
-                connection, models, args.database, proposal)
-        elif kind == "change_nullability":
-            verify_server_nullability_predecessor(
-                connection, models, args.database, proposal)
-        elif kind == "add_default":
-            verify_server_default_predecessor(
-                connection, models, args.database, proposal)
+        if len(timeline) > 1:
+            next_number = verify_server_review_predecessor(
+                connection, models, args.database, identity, proposal)
         else:
-            raise ValueError("Server migration operation is not supported for execution")
+            next_number = 2
+
+            if kind == "create_table":
+                if (len(mapping) != len(timeline[0].model_tables) + 1
+                        or any(mapping.get(key) != value
+                               for key, value in timeline[0].model_tables.items())
+                        or not verify_server_initial_current(
+                            connection,
+                            [model for model in models
+                             if f"{model.__module__}:{model.__qualname__}"
+                             in timeline[0].model_tables], args.database)):
+                    raise RuntimeError("Historical server schema or model identity is unverified")
+            elif kind == "add_column":
+                verify_server_column_addition_predecessor(
+                    connection, models, args.database, proposal)
+            elif kind == "widen_column":
+                verify_server_widening_predecessor(
+                    connection, models, args.database, proposal)
+            elif kind == "change_nullability":
+                verify_server_nullability_predecessor(
+                    connection, models, args.database, proposal)
+            elif kind == "add_default":
+                verify_server_default_predecessor(
+                    connection, models, args.database, proposal)
+            else:
+                raise ValueError("Server migration operation is not supported for execution")
 
         title = migration_title(getattr(args, "title", None), "Untitled")
-        name = args.name if automated else "Migration2"
+        name = args.name if automated else f"Migration{next_number}"
         approval = args.approve if automated else proposal.review_sha256
 
         if not hmac.compare_digest(approval, proposal.review_sha256):

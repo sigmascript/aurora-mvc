@@ -4,7 +4,7 @@ This guide describes the integrated **AuroraSQL** backend. The former SQLAlchemy
 
 ## Configuration and drivers
 
-Database aliases are configured in `aurora_databases.json`. Select models with `--model MODULE:CLASS` or register explicit references in `aurora_models.json`. Where supported, `url_env` reads the connection URL from an environment variable. Never commit database credentials. SQLite is included; MySQL and PostgreSQL require optional drivers (`PyMySQL` and `psycopg`).
+Database aliases can be configured in `aurora_databases.json`. Project models are discovered automatically from shared and application model directories in the normal, MVC and modular layouts; `aurora_models.json` is an optional explicit mapping. Where supported, `url_env` reads the connection URL from an environment variable. Never commit database credentials. SQLite is included; MySQL and PostgreSQL require optional drivers (`PyMySQL` and `psycopg`).
 
 A normal Aurora project can use just one `default` database. Model directory location is independent of database alias; advanced multi-database configurations remain optional. Every reviewed migration selects exactly one alias.
 
@@ -15,7 +15,7 @@ A normal Aurora project can use just one `default` database. Model directory loc
 | `init` | Initialize explicitly selected model tables | Only supported empty-schema initialization; never use to migrate an existing schema |
 | `plan` | Inspect selected schema and report differences | Read-only; inspection is not approval to write |
 | `migrate` | Preview/apply selected supported schema changes | Backend-specific scope, review, backup, and explicit approval gates |
-| `backup` | Create a verified backup | SQLite and guarded MySQL paths exist; backend support and client prerequisites vary |
+| `backup` | Create a verified backup | SQLite and guarded native MySQL/PostgreSQL paths; backend tools and client prerequisites vary |
 | `restore` | Reserved recovery command | **Execution disabled**; refuses unsafe legacy fallback |
 | `history` | Read migration records | Does not itself verify the entire database schema |
 
@@ -24,14 +24,14 @@ There are exactly six public database commands.
 ## Ordinary model workflow
 
 ```sh
-aurora db init --model myapp.models:User
-aurora db plan --model myapp.models:User
-aurora db plan --model myapp.models:User --check
-aurora db migrate --model myapp.models:User --dry-run
+aurora db init
+aurora db plan
+aurora db plan --check
+aurora db migrate
 aurora db history
 ```
 
-The first `init` command is appropriate only when its target is eligible for initialization. The commands above are illustrative; supply `--config`, `--database`, and the backend-specific options when required. For reviewed migrations, use the exact existing review/approval contract. Do **not** invent hashes or bypass history checks.
+The first `init` command is appropriate only when its target is eligible for initialization. Ordinary interactive migrations review proposed changes and ask for confirmation; non-interactive automation has separate explicit approval prerequisites. Add `--database accounting` for a configured alias or `--title "..."` to name a migration where supported. Model discovery does not require a `--model MODULE:CLASS` argument. Server migrations support a narrowly reviewed single change at a time, including repeated guarded successors; history must be independently proved before every later change. MySQL/PostgreSQL live Migration3+ acceptance remains pending. Do **not** invent hashes or bypass history checks.
 
 ## Explicit schema operations: `aurora db migrate -c`
 
@@ -41,7 +41,6 @@ For two column renames on `users`:
 
 ```json
 {
-  "format": "aurorasql.operations.v1",
   "database": "default",
   "rename_columns": {
     "users": {
@@ -56,7 +55,6 @@ For one table rename:
 
 ```json
 {
-  "format": "aurorasql.operations.v1",
   "database": "default",
   "rename_table": {
     "message": "messages"
@@ -64,7 +62,7 @@ For one table rename:
 }
 ```
 
-One file selects **one operation type and one table**; it can rename several independent columns within that one table. Renames are never inferred automatically. Unknown JSON keys, invalid SQL identifiers, duplicate or chained renames, wrong aliases, and unrelated operations are rejected. The operation file does not contain executable SQL.
+One file selects **one operation type and one table**; it can rename several independent columns within that one table. The optional `format` field defaults to `aurorasql.operations.v1` for backward compatibility. Renames are never inferred automatically. Unknown JSON keys, invalid SQL identifiers, duplicate or chained renames, wrong aliases, and unrelated operations are rejected. The operation file does not contain executable SQL.
 
 ### Review first, then execute if supported
 
@@ -92,5 +90,11 @@ The **MySQL and PostgreSQL explicit-operation paths currently refuse execution**
 ## Current limits and recovery
 
 `aurora db restore` refuses execution. Recovery preflight or staging helper modules do not constitute an enabled, operationally verified restoration workflow. Maintain an independently tested recovery procedure before relying on AuroraSQL for important data.
+
+### Recovery rehearsal design (not an enabled restore feature)
+
+For a future **separately authorized disposable** same-engine recovery rehearsal, the operator must first record the database engine/version, exact source identity and alias, migration timeline state, backup path and integrity/catalog evidence. Select a newly provisioned isolated target with independently verified ownership, privileges and identity; never point recovery at the active application database. Verify the backup was created for the same engine, retain its original bytes, and arrange a separate protected copy for any restore tool. Before permitting any write, require explicit approval naming the disposable target and exact procedure. A read-only preflight is not that approval.
+
+The rehearsal must then compare restored schema, row evidence, migration timeline and operation journal against the recorded source evidence; deliberately exercise a corrupted/incomplete backup refusal, changed-target-identity refusal and uncertain-journal refusal. Any mismatch stops the rehearsal for manual reconciliation without retry or journal repair. Preserve original source and backup evidence, independently confirm that the active database was not modified, and record the observed outcome. **No such live restoration has been authorized or demonstrated.** This design does not enable `aurora db restore`, cross-engine conversion, automated disaster recovery or production certification.
 
 Live backend tests require explicitly disposable databases and specific authorization. Verify connection identity and table ownership before DDL. A successful local regression is not proof of current CI, other database engines, production concurrency or complete recovery readiness. After uncertain MySQL DDL, preserve schema and journal evidence and **never blindly retry**.
