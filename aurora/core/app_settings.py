@@ -68,10 +68,10 @@ def _read_document(source):
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise ValueError("Cannot read application configuration JSON") from error
 
-    if not isinstance(document, dict) or document.get("format") != _FORMAT:
+    if not isinstance(document, dict) or document.get("format", _FORMAT) != _FORMAT:
         raise ValueError("Unsupported application configuration format")
 
-    if set(document) - {"format", "application", "limits", "constants"}:
+    if set(document) - {"format", "application", "limits", "constants", "statics"}:
         raise ValueError("Unknown application configuration section")
 
     return document
@@ -86,6 +86,7 @@ class ApplicationSettings:
     tzinfo: object
     constants: object
     constructor_options: object
+    statics: str | None
 
 
 def load_application_settings(source):
@@ -94,6 +95,12 @@ def load_application_settings(source):
     application = document.get("application", {})
     limits = document.get("limits", {})
     constants = document.get("constants", {})
+    statics = document.get("statics")
+
+    if statics is not None:
+        if (not isinstance(statics, str) or not statics or
+                not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", statics)):
+            raise ValueError("statics must be one safe project directory name")
 
     if not isinstance(application, dict) or not isinstance(limits, dict) or not isinstance(constants, dict):
         raise ValueError("Application, limits and constants must be JSON objects")
@@ -171,4 +178,5 @@ def load_application_settings(source):
         name=name.strip(), timezone_name=timezone_name, tzinfo=tzinfo,
         constants=MappingProxyType(dict(constants)),
         constructor_options=MappingProxyType(constructor_options),
+        statics=statics,
     )

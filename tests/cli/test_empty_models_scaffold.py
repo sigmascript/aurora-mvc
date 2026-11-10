@@ -24,7 +24,10 @@ def test_project_model_package_policy(tmp_path: Path, mode: str) -> None:
 
         assert sorted(p.name for p in models.iterdir()) == ["__init__.py"]
 
-    assert json.loads((root / "aurora_models.json").read_text(encoding="utf-8")) == {"databases": {}}
+    if mode == "normal":
+        assert not (root / "aurora_models.json").exists()
+    else:
+        assert json.loads((root / "aurora_models.json").read_text(encoding="utf-8")) == {"databases": {}}
 
     assert not (root / "data.sqlite3").exists()
 

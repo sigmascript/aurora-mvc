@@ -24,7 +24,7 @@ def _run(cwd, *arguments):
     )
 
 
-@pytest.mark.parametrize("layout", ["minimal", "mvc", "modular"])
+@pytest.mark.parametrize("layout", ["mvc", "modular"])
 def test_generated_project_alias_plan_from_external_directory(tmp_path, layout):
     project = create_project(
         "acceptance", directory=tmp_path,
@@ -84,7 +84,7 @@ def test_generated_project_alias_plan_from_external_directory(tmp_path, layout):
     assert (project / "archive.sqlite3").read_bytes() == before
 
 
-@pytest.mark.parametrize("layout", ["minimal", "mvc", "modular"])
+@pytest.mark.parametrize("layout", ["mvc", "modular"])
 def test_generated_project_init_preflight_never_creates_database(tmp_path, layout):
     project = create_project(
         "acceptance", directory=tmp_path,

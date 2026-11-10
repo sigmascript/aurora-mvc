@@ -47,6 +47,6 @@ def test_added_module_preserves_starter_and_empty_models(tmp_path: Path) -> None
     app = (root / "app.py").read_text(encoding="utf-8")
     assert 'app.route("/news/", News)' in app
 
-    assert '"news": ROOT / "apps" / "news" / "views"' in app
+    assert 'Aurora.from_project(__file__)' in app
 
     assert not (root / "data.sqlite3").exists()

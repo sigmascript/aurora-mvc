@@ -47,9 +47,9 @@ class SafeScaffoldingTests(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             create_view('home', 'profile', directory=self.root)
 
-    def test_rejects_missing_anchors_without_creating_controller(self):
+    def test_rejects_ambiguous_app_assignments_without_creating_controller(self):
         app = self.root / 'app.py'
-        app.write_text(app.read_text().replace('# aurora:routes', '# custom routes'))
+        app.write_text(app.read_text() + '\napp = object()\n')
 
         with self.assertRaises(ValueError):
             create_controller('home', 'Settings', directory=self.root)

@@ -14,7 +14,7 @@ class TestCLI(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = create_project("myproject", directory=Path(tmp))
             self.assertTrue((root / "__init__.py").exists())
-            self.assertIn('app = Aurora.from_config(ROOT / "aurora_config.json")',
+            self.assertIn('app = Aurora.from_project(__file__)',
                           (root / "app.py").read_text())
             spec = importlib.util.spec_from_file_location("generated_app", root / "app.py")
             module = importlib.util.module_from_spec(spec)
@@ -62,7 +62,7 @@ class TestModularMultipleApps(unittest.TestCase):
             root = create_project("multi", directory=Path(tmp), modular=True)
             source = (root / "app.py").read_text(encoding="utf-8")
             self.assertIn('app.route("/blog/", Blog)', source)
-            self.assertIn('ROOT / "views"', source)
+            self.assertIn('Aurora.from_project(__file__)', source)
             self.assertTrue((root / "views/layout.html").is_file())
             self.assertTrue((root / "apps/home/views/index.html").is_file())
             self.assertTrue((root / "apps/blog/views/index.html").is_file())
@@ -104,7 +104,7 @@ class TestAddModularApp(unittest.TestCase):
             self.assertTrue((created / "views/index.html").is_file())
             source = (root / "app.py").read_text()
             self.assertIn('app.route("/news_feed/", NewsFeed)', source)
-            self.assertIn('"news_feed": ROOT / "apps" / "news_feed" / "views"', source)
+            self.assertNotIn('view_namespaces=', source)
             from aurora.rendering import ViewRenderer
             from aurora.view import View
             renderer = ViewRenderer(root / "views", view_namespaces={"news_feed": created / "views"})
@@ -123,13 +123,13 @@ class TestAddModularApp(unittest.TestCase):
 
             self.assertEqual(source, (root / "app.py").read_text())
 
-    def test_add_app_refuses_unmarked_project(self):
+    def test_add_app_refuses_ambiguous_app_assignment(self):
         from aurora.cli import add_app
 
         with tempfile.TemporaryDirectory() as tmp:
             root = create_project("multi", directory=Path(tmp), modular=True)
-            source = (root / "app.py").read_text().replace("# aurora:routes", "")
-            (root / "app.py").write_text(source)
+            with (root / "app.py").open("a") as stream:
+                stream.write("\napp = object()\n")
 
             with self.assertRaises(ValueError):
                 add_app("news", directory=root)
@@ -204,14 +204,14 @@ class TestStarterStaticsIntegration(unittest.TestCase):
             self.assertIn('{% extends "layout.html" %}', (root / 'views/home.html').read_text())
             self.assertIn('/statics/css/site.css', (root / 'views/layout.html').read_text())
             self.assertIn('font-family', (root / 'statics/css/site.css').read_text())
-            self.assertIn('statics_directory=', (root / 'app.py').read_text())
+            self.assertIn('Aurora.from_project(__file__)', (root / 'app.py').read_text())
 
     def test_modular_starter_uses_shared_stylesheet(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = create_project("site", directory=Path(tmp), modular=True)
             self.assertIn('/statics/css/site.css', (root / 'views/layout.html').read_text())
             self.assertTrue((root / 'statics/css/site.css').is_file())
-            self.assertIn('statics_directory=', (root / 'app.py').read_text())
+            self.assertIn('Aurora.from_project(__file__)', (root / 'app.py').read_text())
 
     def test_minimal_starter_does_not_require_statics(self):
         with tempfile.TemporaryDirectory() as tmp:

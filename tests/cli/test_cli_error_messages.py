@@ -63,7 +63,7 @@ class CLIErrorMessageTests(unittest.TestCase):
         root = create_project("site", directory=self.parent, mvc=True)
         code, message = self.invoke_error(root, "controller", "add")
         self.assertEqual(code, 2)
-        self.assertIn("the following arguments are required: first", message)
+        self.assertIn("the following arguments are required: component", message)
 
     def test_modular_component_generation_still_works(self):
         root = create_project("modular", directory=self.parent, modular=True)

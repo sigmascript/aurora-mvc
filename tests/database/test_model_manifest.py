@@ -39,6 +39,6 @@ def test_plan_uses_aurorasql_selector_not_legacy():
     import inspect
     from aurora.database import cli_plan
     source = inspect.getsource(cli_plan._select_models)
-    assert "from .model_manifest import select_model_refs" in source
+    assert "select_model_refs" in source
 
     assert "aurora.database" not in source

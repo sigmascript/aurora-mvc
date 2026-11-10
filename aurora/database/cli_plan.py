@@ -124,19 +124,24 @@ def _select_models(args, project_root=None):
     # Validate references before importing developer models. An explicit
     # config determines the project root, not the shell's working directory.
     """Resolve only explicitly selected or registered model references."""
-    from .model_discovery import discover_model_refs
-    from .model_manifest import select_model_refs
+    from .model_discovery import discover_model_refs, validate_model_source
+    from .model_manifest import read_model_mapping, select_model_refs
     root = Path(project_root) if project_root is not None else Path.cwd()
     manifest = _manifest_path(args, root)
     explicit_models = getattr(args, "model", ()) or ()
     refs = (select_model_refs(explicit=explicit_models, database=args.database,
                               manifest=manifest) if explicit_models else
             discover_model_refs(root, manifest, args.database))
+    assigned_refs = set(read_model_mapping(manifest).get(args.database, ()))
     models = []
 
     with _project_import_path(root):
         for reference in refs:
             module_name, class_name = reference.split(":", 1)
+            # The explicit legacy --model path accepts existing nonconventional
+            # modules until its separately approved CLI retirement is complete.
+            if not explicit_models and reference not in assigned_refs:
+                validate_model_source(root, module_name, class_name)
             cls = getattr(importlib.import_module(module_name), class_name, None)
 
             if not isinstance(cls, type) or not issubclass(cls, Model) or cls is Model:

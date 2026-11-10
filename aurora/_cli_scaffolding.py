@@ -86,45 +86,44 @@ def create_project(name: str, *, directory: Path | None = None, mvc: bool = Fals
                 (_MVC_CSS if not modular else _MODULAR_CSS),
                 encoding="utf-8",
             )
-        # Explicit, inert database starter files. Never open or create a database
-        # during scaffolding; developers register models before planning migrations.
-        (root / "aurora_databases.json").write_text(
-            json.dumps({"databases": {"default": {"url": "sqlite:///data.sqlite3"}}}, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        # Minimal projects contain no unused database infrastructure. MVC
+        # scaffolds provide inert configuration without opening a database.
+        if mvc:
+            (root / "aurora_databases.json").write_text(
+                json.dumps({"databases": {"default": {"url": "sqlite:///data.sqlite3"}}}, indent=2) + "\n",
+                encoding="utf-8",
+            )
         (root / "aurora_config.json").write_text(
             json.dumps({
-                "format": "aurora.application.v1",
                 "application": {"name": name, "timezone": "UTC"},
                 "limits": {},
                 "constants": {},
             }, indent=2) + "\n", encoding="utf-8",
         )
-        (root / "aurora_models.json").write_text(
-            json.dumps({"databases": {}}, indent=2) + "\n", encoding="utf-8",
-        )
-        (root / "migrations").mkdir()
-        (root / "backups").mkdir()
-        (root / "README.md").write_text(
-            f"# {name}\n\nRun from the parent directory: "
-            f"`aurora run {name}.app:app`\n\n"
-            "## Application settings\n\n"
-            "- `aurora_config.json` holds validated, nonsecret application defaults.\n"
-            "- Do not place user preferences or credentials in this file.\n"
-            "- `app.py` loads it explicitly with `Aurora.from_config`.\n\n"
-            "## Database setup\n\n"
-            "- `aurora_databases.json` configures the `default` SQLite alias.\n"
-            "- AuroraSQL discovers one CamelCase model per file from shared `models/` "
-            "and modular `apps/*/models/` directories.\n"
-            "- `aurora_models.json` optionally assigns models to named databases; "
-            "unassigned discovered models use `default`.\n"
-            "- No SQLite file or tables are created by scaffolding. Initialize "
-            "your database explicitly before inspection or migrations.\n"
-            "- `aurora db plan` previews changes without writes; `aurora db migrate` "
-            "interactively reviews supported changes.\n"
-            "- `migrations/` and `backups/` are prepared for reviewed operations.\n",
-            encoding="utf-8",
-        )
+        if mvc:
+            (root / "aurora_models.json").write_text(
+                json.dumps({"databases": {}}, indent=2) + "\n", encoding="utf-8",
+            )
+
+        layout = "modular MVC" if modular else "MVC" if mvc else "minimal ASGI"
+        guide = (f"# {name}\n\n{layout} Aurora project.\n\n"
+                 f"From the project directory:\n\n`aurora run`\n\n"
+                 f"Or from its parent directory:\n\n`aurora run {name}.app:app`\n\n"
+                 "Edit `app.py` to define your routes.\n")
+
+        if mvc:
+            guide += ("\n## Models and database\n\n"
+                      "Add a model using `aurora model add User`. Aurora discovers models "
+                      "from shared or module-local `models/`.\n"
+                      "Database initialization is explicit; scaffolding never creates a database.\n"
+                      "Migration and backup directories appear when first needed.\n")
+
+        if modular:
+            guide += ("\n## Modular views\n\n"
+                      "Use `View(\"blog/index\")` for an app-local view and "
+                      "`View(\"about\")` for a shared view. App view folders are discovered.\n")
+
+        (root / "README.md").write_text(guide, encoding="utf-8")
     except BaseException:
         # Do not leave a partial scaffold behind on write failure.
         import shutil
@@ -162,10 +161,6 @@ def add_app(name: str, *, directory: Path | None = None) -> Path:
         raise FileExistsError(f"App already exists: {destination}")
 
     source = app_file.read_text(encoding="utf-8")
-    anchors = ("# aurora:imports", "# aurora:views", "# aurora:routes")
-
-    if any(source.count(anchor) != 1 for anchor in anchors):
-        raise ValueError("This project's app.py has no scaffold insertion anchors; add the app manually.")
     # Keep generated routes predictable; do not silently introduce collisions.
     route = f"/{name}/"
 
@@ -173,9 +168,9 @@ def add_app(name: str, *, directory: Path | None = None) -> Path:
         raise ValueError(f"Route already registered: {route}")
 
     class_name = "".join(part.capitalize() for part in name.split("_"))
-    updated = source.replace("# aurora:imports", f"from apps.{name}.controllers.{class_name} import {class_name}\n# aurora:imports")
-    updated = updated.replace("        # aurora:views", f'        "{name}": ROOT / "apps" / "{name}" / "views",\n        # aurora:views')
-    updated = updated.replace("# aurora:routes", f'app.route("/{name}/", {class_name})\n# aurora:routes')
+    updated = _insert_controller_registration(
+        source, f"from apps.{name}.controllers.{class_name} import {class_name}", route, class_name
+    )
 
     # Prepare the new app in a sibling staging directory. No developer file is
     # changed until all scaffold files have been written successfully.
@@ -309,8 +304,11 @@ def _create_scaffold_file(folder: Path, filename: str, content: str) -> Path:
 
     destination = folder / filename
 
-    with destination.open("x", encoding="utf-8") as stream:
-        stream.write(content)
+    try:
+        with destination.open("x", encoding="utf-8") as stream:
+            stream.write(content)
+    except FileExistsError:
+        raise FileExistsError(f"Component already exists: {destination}") from None
 
     return destination
 
@@ -350,6 +348,87 @@ def _reject_component_collision(folder: Path, name: str, resource: str) -> None:
 
     if existing is not None:
         raise FileExistsError(f"{resource.title()} already exists (existing file will not be overwritten): {existing}")
+
+
+def _reject_project_model_name_collision(project: Path, name: str, destination: Path) -> None:
+    """Reject same-named models assigned to one alias, without importing project code."""
+    from .database.model_manifest import read_model_mapping
+
+    mapping = read_model_mapping(project / "aurora_models.json")
+    assignments = {reference: alias for alias, references in mapping.items()
+                   for reference in references}
+    proposed_ref = ".".join(destination.relative_to(project).with_suffix("").parts) + f":{name}"
+    proposed_alias = assignments.get(proposed_ref, "default")
+    folders = [project / "models", project / "app" / "models"]
+    apps = project / "apps"
+
+    if apps.is_dir() and not apps.is_symlink():
+        folders.extend(app / "models" for app in apps.iterdir()
+                       if app.is_dir() and not app.is_symlink() and app.name.isidentifier())
+
+    for folder in folders:
+        if not folder.is_dir() or folder.is_symlink():
+            continue
+
+        existing = folder / f"{name}.py"
+        if existing == destination or not existing.exists():
+            continue
+        if existing.is_symlink() or not existing.is_file():
+            raise ValueError(f"Unsafe model path: {existing}")
+
+        ref = ".".join(existing.relative_to(project).with_suffix("").parts) + f":{name}"
+        if assignments.get(ref, "default") == proposed_alias:
+            raise ValueError(
+                f"Model {name} already exists for database '{proposed_alias}': {existing}. "
+                "No files or database objects were changed."
+            )
+
+
+def _insert_controller_registration(source: str, import_line: str, route: str, binding: str) -> str:
+    """Insert in recognizable top-level Python statements; no magic comments required."""
+    tree = ast.parse(source)
+    assignments = [node for node in tree.body if isinstance(node, ast.Assign)
+                   and any(isinstance(target, ast.Name) and target.id == "app"
+                           for target in node.targets)]
+    if len(assignments) != 1:
+        raise ValueError("Cannot safely register controller: expected one top-level app assignment.")
+
+    app_line = assignments[0].lineno
+    route_lines = []
+    for node in tree.body:
+        if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)):
+            continue
+        call = node.value
+        if (isinstance(call.func, ast.Attribute) and call.func.attr == "route"
+                and isinstance(call.func.value, ast.Name) and call.func.value.id == "app"):
+            if node.lineno != node.end_lineno or node.lineno <= app_line:
+                raise ValueError("Cannot safely edit customized route registrations.")
+            route_lines.append(node.lineno)
+
+    lines = source.splitlines(keepends=True)
+    # Normalize only the whitespace adjoining the generated import boundary.
+    before = lines[:app_line - 1]
+    after = lines[app_line - 1:]
+    before = [line for line in before if line.strip() not in
+              {"# aurora:imports", "# aurora:routes"}]
+    while before and not before[-1].strip():
+        before.pop()
+    updated = "".join(before) + import_line + "\n\n\n" + "".join(after)
+    updated_lines = updated.splitlines(keepends=True)
+    reparsed = ast.parse(updated)
+    registered = [node for node in reparsed.body if isinstance(node, ast.Expr)
+                  and isinstance(node.value, ast.Call)
+                  and isinstance(node.value.func, ast.Attribute)
+                  and isinstance(node.value.func.value, ast.Name)
+                  and node.value.func.value.id == "app" and node.value.func.attr == "route"]
+    insertion = registered[-1].end_lineno if registered else next(
+        node.end_lineno for node in reparsed.body if isinstance(node, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "app" for t in node.targets))
+    updated_lines.insert(insertion, f'app.route("{route}", {binding})\n')
+    result = "".join(line for line in updated_lines if line.strip() not in
+                     {"# aurora:imports", "# aurora:routes"})
+    ast.parse(result)
+    return result
 
 
 def _resolve_component(folder: Path, name: str, resource: str) -> Path:
@@ -437,10 +516,6 @@ def create_controller(app_name: str, name: str, *,
     project = root.parent.parent
     app_file = project / "app.py"
     source = app_file.read_text(encoding="utf-8")
-    anchors = ("# aurora:imports", "# aurora:routes")
-
-    if any(source.count(anchor) != 1 for anchor in anchors):
-        raise ValueError("app.py must have unique Aurora import and route anchors.")
 
     module = name
     destination = root / "controllers" / f"{module}.py"
@@ -458,9 +533,7 @@ def create_controller(app_name: str, name: str, *,
     if import_line in source:
         raise ValueError("Controller import already registered.")
 
-    updated = source.replace("# aurora:imports", import_line + "\n# aurora:imports")
-    updated = updated.replace("# aurora:routes",
-                              f'app.route("{route}", {binding})\n# aurora:routes')
+    updated = _insert_controller_registration(source, import_line, route, binding)
     content = (f'"""Controller {name} for app {app_name}."""\n'
                'from aurora import Controller\n\n\n'
                f'class {name}(Controller):\n'
@@ -520,7 +593,7 @@ def create_standalone_controller(name: str, *, directory: Path | None = None) ->
 
     # The original standalone scaffold has no anchors. Require a recognizable
     # Aurora application before appending the registration.
-    if not re.search(r"(?m)^app\s*=\s*Aurora(?:\.from_config)?\(", source):
+    if not re.search(r"(?m)^app\s*=\s*Aurora(?:\.from_(?:config|project))?\(", source):
         raise ValueError("Cannot safely register controller: app.py has no standard Aurora app assignment.")
 
     module = name
@@ -546,9 +619,7 @@ def create_standalone_controller(name: str, *, directory: Path | None = None) ->
     if len(app_assignments) != 1:
         raise ValueError("Cannot safely register controller: expected one top-level app assignment.")
 
-    lines = source.splitlines(keepends=True)
-    lines.insert(app_assignments[0].lineno - 1, import_line + "\n")
-    updated = "".join(lines).rstrip("\n") + f'\napp.route("{route}", {binding})\n'
+    updated = _insert_controller_registration(source, import_line, route, binding)
     ast.parse(updated)
     content = (f'"""{name} page controller."""\n'
                'from aurora import Controller\n\n\n'
@@ -648,6 +719,7 @@ def create_model(app_name: str, name: str, *, directory: Path | None = None, bac
 
     try:
         _reject_component_collision(folder, name, "model")
+        _reject_project_model_name_collision(root.parent.parent, name, folder / f"{module}.py")
         destination = _create_scaffold_file(folder, f"{module}.py", source)
     except BaseException:
         if created_folder:
@@ -772,6 +844,7 @@ def create_shared_component(resource: str, name: str, *, directory: Path | None 
     try:
         if resource == "model":
             _reject_component_collision(folder, name, "model")
+            _reject_project_model_name_collision(folder.parent, name, folder / filename)
 
         return _create_scaffold_file(folder, filename, content)
     except BaseException:
@@ -811,3 +884,131 @@ def show_shared_component(resource: str, name: str, *, directory: Path | None = 
             raise ValueError("Component is not a regular file.")
 
     return {"app": "(shared)", "name": path.stem, "path": str(path)}
+
+
+def remove_component(resource: str, name: str, *, app_name: str | None = None,
+                     directory: Path | None = None) -> Path | None:
+    """Remove one selected component; never remove the corresponding DB table."""
+    if resource not in ("controller", "view", "model"):
+        raise ValueError("Unsupported component type")
+
+    if app_name is not None:
+        app_root = _scaffold_app_root(app_name, directory)
+        project = app_root.parent.parent
+        folder = app_root / {"controller": "controllers", "view": "views", "model": "models"}[resource]
+    else:
+        project = Path(directory or Path.cwd()).resolve()
+        folder = (_standalone_controller_root(directory) / "controllers" if resource == "controller"
+                  else _shared_component_root(resource, directory))
+
+    if resource == "view":
+        if not re.fullmatch(r"[a-z][a-z0-9_-]*(?:\.html)?", name):
+            raise ValueError("Invalid view name")
+
+        target = folder / (name if name.endswith(".html") else name + ".html")
+    else:
+        target = _resolve_component(folder, name, resource)
+
+    if target.is_symlink() or not target.is_file():
+        raise ValueError(f"{resource.title()} not found: {name}")
+
+    if resource == "controller":
+        # Only rewrite exactly recognizable generated registrations. A custom
+        # controller reference requires the developer's explicit source edit.
+        app_file = project / "app.py"
+        source = app_file.read_text(encoding="utf-8")
+        module = (f"apps.{app_name}.controllers.{target.stem}" if app_name
+                  else f"controllers.{target.stem}")
+        tree = ast.parse(source)
+        imports = [node for node in tree.body if isinstance(node, ast.ImportFrom)
+                   and node.module == module and len(node.names) == 1
+                   and node.names[0].name == target.stem]
+
+        if len(imports) != 1:
+            raise ValueError("Controller import is customized; remove references manually")
+
+        binding = imports[0].names[0].asname or target.stem
+        routes = [node for node in tree.body if isinstance(node, ast.Expr)
+                  and isinstance(node.value, ast.Call)
+                  and isinstance(node.value.func, ast.Attribute)
+                  and isinstance(node.value.func.value, ast.Name)
+                  and node.value.func.value.id == "app" and node.value.func.attr == "route"
+                  and len(node.value.args) == 2 and isinstance(node.value.args[1], ast.Name)
+                  and node.value.args[1].id == binding and node.lineno == node.end_lineno]
+
+        if len(routes) != 1:
+            raise ValueError("Controller route is customized; remove references manually")
+
+        removed = {imports[0].lineno, routes[0].lineno}
+        updated = "".join(line for number, line in enumerate(source.splitlines(keepends=True), 1)
+                          if number not in removed)
+        ast.parse(updated)
+
+        if re.search(r"\b" + re.escape(binding) + r"\b", updated):
+            raise ValueError("Controller is used elsewhere; remove references manually")
+
+    if resource == "model":
+        from .database.cli_registration import _load_manifest
+
+        manifest = project / "aurora_models.json"
+        mapping = _load_manifest(manifest)
+        ref = ".".join(target.relative_to(project).with_suffix("").parts) + ":" + target.stem
+
+        for refs in mapping["databases"].values():
+            refs[:] = [item for item in refs if item != ref]
+
+    print(f"Remove {resource}: {target}")
+
+    if input("Remove this component? [y/N]: ").strip().lower() != "y":
+        print("Removal cancelled; no files changed.")
+        return None
+
+    if resource == "view":
+        target.unlink()
+        return target
+
+    # Temporarily stage the target in its own directory. On failure before
+    # publishing the companion edit, restore the original filename. No backup
+    # is retained after successful removal.
+    staged = None
+    published = False
+    moved = False
+
+    try:
+        with tempfile.NamedTemporaryFile(dir=target.parent, prefix=".aurora-remove-",
+                                         delete=False) as stream:
+            staged = Path(stream.name)
+
+        os.replace(target, staged)
+        moved = True
+
+        if resource == "controller":
+            temporary_app = None
+
+            try:
+                with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=project,
+                                                 prefix=".aurora-route-", delete=False) as stream:
+                    temporary_app = Path(stream.name)
+                    stream.write(updated)
+
+                os.replace(temporary_app, app_file)
+                temporary_app = None
+            finally:
+                if temporary_app is not None:
+                    temporary_app.unlink(missing_ok=True)
+        else:
+            from .database.cli_registration import _save_manifest
+
+            _save_manifest(manifest, mapping)
+
+        published = True
+    finally:
+        if staged is not None and staged.exists():
+            if published:
+                staged.unlink()
+            elif moved:
+                os.replace(staged, target)
+            else:
+                staged.unlink()
+
+    return target

@@ -35,6 +35,7 @@ from ._cli_scaffolding import (
     create_shared_component,
     list_shared_components,
     show_shared_component,
+    remove_component,
 )
 
 
@@ -57,7 +58,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub = parser.add_subparsers(dest="command", required=True, metavar="{new,app,controller,view,model,db,run}")
     new = sub.add_parser("new", help="Create a new Aurora project (minimal, --mvc, or --modular)")
-    new.add_argument("name")
+    new.add_argument("name", metavar="project", help="New Python-compatible project directory name")
     new.add_argument("--mvc", action="store_true", help="Create a minimal MVC project")
     new.add_argument("--modular", action="store_true", help="Create an MVC project with an apps/ directory")
 
@@ -82,32 +83,40 @@ def main(argv: list[str] | None = None) -> int:
     # Canonical resource-first commands. Existing flat commands remain supported.
     app_group = sub.add_parser("app", help="Add, list, or inspect modular applications")
     app_actions = app_group.add_subparsers(dest="action", required=True)
-    app_actions.add_parser("add", help="Add a modular application").add_argument("name")
+    app_actions.add_parser("add", help="Add a modular application").add_argument("name", metavar="app", help="New modular application name")
     app_actions.add_parser("list", help="List modular applications")
-    app_actions.add_parser("show", help="Inspect a modular application").add_argument("name")
+    app_actions.add_parser("show", help="Inspect a modular application").add_argument("name", metavar="app", help="Existing modular application name")
 
     for resource in ("controller", "view", "model"):
-        group = sub.add_parser(resource, help=f"Add, list, or inspect {resource} components")
+        group = sub.add_parser(resource, help=f"Manage {resource} components")
         actions = group.add_subparsers(dest="action", required=True)
 
-        for verb in ("add", "list", "show"):
-            command = actions.add_parser(verb, help=f"{verb.title()} {resource} components")
+        for verb in ("add", "list", "show", "remove"):
+            action_help = (f"List {resource} components" if verb == "list"
+                           else f"{verb.title()} a {resource} component")
+            command = actions.add_parser(verb, help=action_help)
             command.add_argument("first", nargs="?" if verb == "list" else None,
-                                 help="Component name, or legacy app name")
+                                 metavar="component" if verb != "list" else "app",
+                                 help=("Optional modular app to list; omit for shared components" if verb == "list"
+                                       else "Component name; in the two-argument form, modular app name"))
 
             if verb != "list":
-                command.add_argument("second", nargs="?", help="Legacy component name")
+                command.add_argument("second", nargs="?", metavar="app_component",
+                                     help="Component name when the first argument identifies a modular app")
 
-            command.add_argument("--app", dest="app_option", help="Target modular app")
+            command.add_argument("--app", dest="app_option", metavar="APP", help="Target modular application")
 
         if resource == "model":
-            register = actions.add_parser("register", help="Register an explicit model reference in the project manifest")
-            register.add_argument("reference", metavar="MODULE:CLASS")
-            register.add_argument("--database", default="default", help="Database alias (default: default)")
-            register.add_argument("--models-config", default="aurora_models.json", help="Model manifest JSON path")
-            registered = actions.add_parser("registered", help="List model references registered for one database")
-            registered.add_argument("--database", default="default", help="Database alias (default: default)")
-            registered.add_argument("--models-config", default="aurora_models.json", help="Model manifest JSON path")
+            # Existing alpha scripts may still use these until the dedicated
+            # database CLI transition migrates their callers. They are not
+            # part of the new public model lifecycle.
+            register = actions.add_parser("register", help=argparse.SUPPRESS)
+            register.add_argument("reference")
+            register.add_argument("--database", default="default")
+            register.add_argument("--models-config", default="aurora_models.json")
+            registered = actions.add_parser("registered", help=argparse.SUPPRESS)
+            registered.add_argument("--database", default="default")
+            registered.add_argument("--models-config", default="aurora_models.json")
 
     # Database commands use explicit safety gates; planning remains read-only.
     db_group = sub.add_parser("db", help="Inspect databases and run guarded AuroraSQL operations")
@@ -418,15 +427,16 @@ def main(argv: list[str] | None = None) -> int:
         try:
             if args.action == "register":
                 if os.environ.get("AURORA_ENV", "development").lower() == "production":
-                    raise ValueError("Refusing to modify model manifest in production environment")
+                    raise ValueError("Refusing model manifest edits in production")
 
-                changed = register_model(args.reference, database=args.database, manifest=args.models_config)
-                print(("Registered " if changed else "Already registered: ") + args.reference + f" (database: {args.database})")
+                changed = register_model(args.reference, database=args.database,
+                                         manifest=args.models_config)
+                print(("Registered " if changed else "Already registered: ") + args.reference)
             else:
                 refs = registered_models(database=args.database, manifest=args.models_config)
-                print("\n".join(refs) if refs else f"No models registered for database: {args.database}")
-        except (ValueError, OSError) as exc:
-            parser.exit(1, f"aurora: {exc}\n")
+                print("\n".join(refs) if refs else "No models registered.")
+        except (ValueError, OSError) as error:
+            parser.exit(1, f"aurora: {error}\n")
 
         return 0
 
@@ -452,7 +462,7 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(f"{resource} {args.action} requires a component name. Example: aurora {resource} {args.action} "
                          + ("user" if resource == "view" else "User"))
 
-        if args.action == "add" and os.environ.get("AURORA_ENV", "development").lower() == "production":
+        if args.action in ("add", "remove") and os.environ.get("AURORA_ENV", "development").lower() == "production":
             parser.exit(1, "aurora: Refusing to modify project in production environment.\n")
 
         try:
@@ -476,6 +486,11 @@ def main(argv: list[str] | None = None) -> int:
                     note = f" (registered {reference}; database unchanged)"
 
                 print(f"Created {destination}" + note)
+            elif args.action == "remove":
+                destination = remove_component(resource, name, app_name=app_name)
+
+                if destination is not None:
+                    print(f"Removed {destination} (database unchanged)")
             elif args.action == "list":
                 entries = (list_components(resource, app_name) if app_name is not None
                            else list_standalone_controllers() if resource == "controller"

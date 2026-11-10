@@ -67,7 +67,7 @@ class ScaffoldNamingAndAssetsTests(unittest.TestCase):
             for style in ("mvc", "modular"):
                 root = create_project(style, directory=Path(tmp), **{style: True})
                 self.assertTrue((root / "statics").is_dir())
-                self.assertIn("statics_directory=", (root / "app.py").read_text())
+                self.assertIn("Aurora.from_project(__file__)", (root / "app.py").read_text())
 
     def test_reject_case_insensitive_duplicate(self):
         with tempfile.TemporaryDirectory() as tmp:

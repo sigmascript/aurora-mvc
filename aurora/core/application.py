@@ -120,6 +120,48 @@ class Application:
         })
         return app
 
+    @classmethod
+    def from_project(cls, entry_file, **constructor_options):
+        """Load conventional project resources relative to the given entry file.
+
+        Project paths are independent of the shell working directory. Existing
+        applications using from_config and explicit resource paths are unchanged.
+        """
+        from pathlib import Path
+
+        root = Path(entry_file).resolve().parent
+        config = root / "aurora_config.json"
+        views = root / "views"
+        apps = root / "apps"
+        namespaces = {}
+
+        if apps.is_dir() and not apps.is_symlink():
+            for app_dir in sorted(apps.iterdir()):
+                if (app_dir.is_dir() and not app_dir.is_symlink()
+                        and app_dir.name.isidentifier() and not app_dir.name.startswith("_")):
+                    candidate = app_dir / "views"
+
+                    if candidate.is_dir() and not candidate.is_symlink():
+                        namespaces[app_dir.name] = candidate
+
+        options = dict(constructor_options)
+
+        if views.is_dir() and not views.is_symlink():
+            options.setdefault("views_directory", views)
+
+            if namespaces:
+                options.setdefault("view_namespaces", namespaces)
+
+        from aurora.core.app_settings import load_application_settings
+
+        settings = load_application_settings(config)
+        static_folder = root / (settings.statics or "statics")
+
+        if static_folder.is_dir() and not static_folder.is_symlink():
+            options.setdefault("statics_directory", static_folder)
+
+        return cls.from_config(config, **options)
+
     # --- Middleware and route registration ---
 
     def add_middleware(self, middleware):

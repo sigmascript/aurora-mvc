@@ -4,12 +4,9 @@ Keep the generated output stable across CLI organization changes.
 """
 
 _PROJECT = '''"""{name} Aurora application."""
-from pathlib import Path
-
 from aurora import Aurora
 
-ROOT = Path(__file__).resolve().parent
-app = Aurora.from_config(ROOT / "aurora_config.json")
+app = Aurora.from_project(__file__)
 
 
 def home(request):
@@ -20,15 +17,11 @@ app.add_route("/", home)
 '''
 
 _MVC_APP = '''"""{name} MVC application."""
-from pathlib import Path
-
 from aurora import Aurora
 from controllers.Home import Home
 
-ROOT = Path(__file__).resolve().parent
-app = Aurora.from_config(ROOT / "aurora_config.json",
-                         views_directory=ROOT / "views",
-                         statics_directory=ROOT / "statics")
+app = Aurora.from_project(__file__)
+
 app.route("/", Home)
 '''
 
@@ -79,28 +72,14 @@ _MVC_VIEW = '''{{% extends "layout.html" %}}
 
 
 _MODULAR_APP = '''"""{name} modular MVC application."""
-from pathlib import Path
-
 from aurora import Aurora
 from apps.home.controllers.Home import Home
 from apps.blog.controllers.Blog import Blog
-# aurora:imports
 
-ROOT = Path(__file__).resolve().parent
-# Shared templates live in views/; app templates are namespaced logically.
-app = Aurora.from_config(
-    ROOT / "aurora_config.json",
-    views_directory=ROOT / "views",
-    view_namespaces={{
-        "home": ROOT / "apps" / "home" / "views",
-        "blog": ROOT / "apps" / "blog" / "views",
-        # aurora:views
-    }},
-    statics_directory=ROOT / "statics",
-)
+app = Aurora.from_project(__file__)
+
 app.route("/", Home)
 app.route("/blog/", Blog)
-# aurora:routes
 '''
 
 _MODULAR_HOME = '''"""Home page controller."""

@@ -70,19 +70,19 @@ def test_scaffolds_all_use_one_general_config_and_existing_specialized_manifests
     for flags in ({}, {"mvc": True}, {"modular": True}):
         root = create_project("aiomax", directory=tmp_path, **flags)
         data = json.loads((root / "aurora_config.json").read_text(encoding="utf-8"))
-        assert data["format"] == "aurora.application.v1"
+        assert "format" not in data
         assert data["application"]["name"] == "aiomax"
         assert data["application"]["timezone"] == "UTC"
-        assert (root / "aurora_databases.json").exists()
-        assert (root / "aurora_models.json").exists()
-        assert "Aurora.from_config" in (root / "app.py").read_text(encoding="utf-8")
+        assert (root / "aurora_databases.json").exists() == bool(flags)
+        assert (root / "aurora_models.json").exists() == bool(flags)
+        assert "Aurora.from_project" in (root / "app.py").read_text(encoding="utf-8")
         assert not (root / "data.sqlite3").exists()
         assert load_application_settings(root / "aurora_config.json").name == "aiomax"
 
         if flags.get("modular"):
             add_app("news", directory=root)
             app_source = (root / "app.py").read_text(encoding="utf-8")
-            assert "Aurora.from_config" in app_source
+            assert "Aurora.from_project" in app_source
             assert 'app.route("/news/", News)' in app_source
 
         import ast

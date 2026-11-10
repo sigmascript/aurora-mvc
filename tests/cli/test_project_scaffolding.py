@@ -14,17 +14,21 @@ class ProjectScaffoldingTests(unittest.TestCase):
         for flags in ({}, {'mvc': True}, {'modular': True}):
             with self.subTest(flags=flags), tempfile.TemporaryDirectory() as temp:
                 root = create_project('demo', directory=Path(temp), **flags)
-                db = json.loads((root / 'aurora_databases.json').read_text())
-                models = json.loads((root / 'aurora_models.json').read_text())
-                self.assertEqual(db, {'databases': {'default': {'url': 'sqlite:///data.sqlite3'}}})
-                self.assertEqual(models, {'databases': {}})
+                if flags:
+                    db = json.loads((root / 'aurora_databases.json').read_text())
+                    models = json.loads((root / 'aurora_models.json').read_text())
+                    self.assertEqual(db, {'databases': {'default': {'url': 'sqlite:///data.sqlite3'}}})
+                    self.assertEqual(models, {'databases': {}})
+                else:
+                    self.assertFalse((root / 'aurora_databases.json').exists())
+                    self.assertFalse((root / 'aurora_models.json').exists())
                 self.assertFalse((root / 'data.sqlite3').exists())
-                self.assertTrue((root / 'migrations').is_dir())
-                self.assertTrue((root / 'backups').is_dir())
+                self.assertFalse((root / 'migrations').exists())
+                self.assertFalse((root / 'backups').exists())
 
     def test_config_is_accepted_without_connecting(self):
         with tempfile.TemporaryDirectory() as temp:
-            root = create_project('demo', directory=Path(temp))
+            root = create_project('demo', directory=Path(temp), mvc=True)
             config, base = load_cli_database_config(root / 'aurora_databases.json')
             self.assertEqual(config.aliases(), ('default',))
             self.assertEqual(base.resolve(), root.resolve())
@@ -32,13 +36,13 @@ class ProjectScaffoldingTests(unittest.TestCase):
 
     def test_empty_manifest_allows_automatic_model_discovery(self):
         with tempfile.TemporaryDirectory() as temp:
-            root = create_project('demo', directory=Path(temp))
+            root = create_project('demo', directory=Path(temp), mvc=True)
 
             self.assertEqual(select_model_refs(manifest=root / 'aurora_models.json'), ())
 
     def test_scaffold_does_not_overwrite(self):
         with tempfile.TemporaryDirectory() as temp:
-            root = create_project('demo', directory=Path(temp))
+            root = create_project('demo', directory=Path(temp), mvc=True)
             (root / 'aurora_models.json').write_text('custom')
 
             with self.assertRaises(FileExistsError):
