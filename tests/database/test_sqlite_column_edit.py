@@ -1,12 +1,13 @@
 """A.1 ordinary SQLite column editing preserves records and linear history."""
 
 import json
+from contextlib import chdir
 import sqlite3
 from pathlib import Path
 
 import pytest
 
-from aurora.cli import main
+from tests.legacy_migration_contract import legacy_migration_or_public_cli as main
 from aurora.database import Model, column
 from aurora.database.cli_init import _execute_batch
 from aurora.database.core import Connection
@@ -45,21 +46,25 @@ def _project(tmp_path, *, existing_null=False):
     return path, config
 
 
+def _migrate(config, *arguments):
+    with chdir(config.parent):
+        return main(["db", "migrate", *arguments])
+
+
 def test_reviewed_sqlite_column_edits_preserve_existing_data(tmp_path, capsys,
                                                               monkeypatch):
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.delenv("AURORA_ENV", raising=False)
     path, config = _project(tmp_path)
-    preview = ["db", "migrate", "--config", str(config), "--dry-run", "--format", "json"]
-    assert main(preview) == 0
+    assert _migrate(config, "--dry-run", "--format", "json") == 0
     report = json.loads(capsys.readouterr().out)
     assert {change["kind"] for change in report["operations"]} == {
         "type_mismatch", "nullability_mismatch", "default_mismatch",
     }
     backup = tmp_path / "before.sqlite3"
-    assert main(["db", "migrate", "--config", str(config), "--apply",
-                 "--confirm", "APPLY", "--approve", report["review_fingerprint"],
-                 "--backup", str(backup), "--title", "Update product name"]) == 0
+    assert _migrate(config, "--apply", "--confirm", "APPLY",
+                    "--approve", report["review_fingerprint"], "--backup", str(backup),
+                    "--title", "Update product name") == 0
     capsys.readouterr()
 
     with sqlite3.connect(path) as raw:
@@ -92,7 +97,7 @@ def test_null_values_refuse_required_column_edit_without_backup(tmp_path, capsys
     path, config = _project(tmp_path, existing_null=True)
     before = path.read_bytes()
 
-    assert main(["db", "migrate", "--config", str(config), "--dry-run"]) == 0
+    assert _migrate(config, "--dry-run") == 0
     assert "advisory only" in capsys.readouterr().out
     assert path.read_bytes() == before
 

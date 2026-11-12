@@ -19,7 +19,7 @@ def test_aurorasql_migrate_write_refused_without_legacy_fallback():
     result = _cli("migrate", "--apply", "--confirm", "APPLY")
     assert result.returncode != 0
 
-    assert "Model-driven migration refused" in result.stderr
+    assert "unrecognized arguments: --apply" in result.stderr
 
 
 def test_aurorasql_migrate_without_models_refuses():
@@ -33,50 +33,49 @@ def test_aurorasql_backup_refuses_legacy_fallback():
     result = _cli("backup")
     assert result.returncode != 0
 
-    assert "refusing legacy fallback" in result.stderr
+    assert "--to" in result.stderr
 
 
 def test_aurorasql_restore_refuses_legacy_fallback():
     result = _cli("restore", "--from", "missing.sqlite3")
     assert result.returncode != 0
 
-    assert "refusing legacy fallback" in result.stderr
+    assert "restore" in result.stderr.lower()
 
 
 def test_aurorasql_migrate_dry_run_fails_closed_without_config():
-    result = _cli("migrate", "--dry-run",
-                  "--config", "nonexistent-alpha9-config.json")
+    result = _cli("migrate", "--dry-run")
     assert result.returncode != 0
 
-    assert "preview refused" in result.stderr
+    assert "unrecognized arguments: --dry-run" in result.stderr
 
 
 def test_migrate_check_requires_dry_run_before_configuration():
-    result = _cli("migrate", "--check", "--config", "missing-config.json")
-    assert result.returncode == 1
+    result = _cli("migrate", "--check")
+    assert result.returncode != 0
 
-    assert "--check requires --dry-run" in result.stderr
+    assert "unrecognized arguments: --check" in result.stderr
 
 
 def test_migrate_json_requires_dry_run_before_configuration():
-    result = _cli("migrate", "--format", "json", "--config", "missing-config.json")
-    assert result.returncode == 1
+    result = _cli("migrate", "--format", "json")
+    assert result.returncode != 0
 
-    assert "--format json requires --dry-run" in result.stderr
+    assert "unrecognized arguments: --format json" in result.stderr
 
 
 def test_migrate_explain_requires_dry_run_before_configuration():
-    result = _cli("migrate", "--explain", "--config", "missing-config.json")
-    assert result.returncode == 1
+    result = _cli("migrate", "--explain")
+    assert result.returncode != 0
 
-    assert "--explain requires --dry-run" in result.stderr
+    assert "unrecognized arguments: --explain" in result.stderr
 
 
 def test_migrate_write_flags_never_fall_through_to_read_only_preview():
     result = _cli("migrate", "--dry-run", "--apply")
-    assert result.returncode == 1
+    assert result.returncode != 0
 
-    assert "Model-driven migration refused" in result.stderr
+    assert "unrecognized arguments: --dry-run --apply" in result.stderr
 
 
 def test_public_cli_uses_only_the_retained_database_namespace():

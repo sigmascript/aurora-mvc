@@ -11,6 +11,7 @@ import sqlite3
 from urllib.parse import unquote, urlsplit
 
 from .cli_plan import _load_config
+from .sqlite_forward_history import has_forward_history, read_history
 
 
 def _sqlite_source(url, config_dir):
@@ -78,11 +79,15 @@ def run_backup(args):
     try:
         with closing(sqlite3.connect(source.as_uri() + "?mode=ro", uri=True)) as original:
             _integrity(original)
+            if has_forward_history(original):
+                read_history(original, config_dir, source)
 
             with closing(sqlite3.connect(destination)) as copy:
                 with copy:
                     original.backup(copy)
                     _integrity(copy)
+                    if has_forward_history(copy):
+                        read_history(copy, config_dir, source)
 
         completed = True
     finally:

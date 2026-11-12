@@ -11,7 +11,7 @@ from .inspection import inspect_table
 from .planning import plan_schema
 
 
-def _preflight(connection, models, alias):
+def _preflight(connection, models, alias, *, project_root=None):
     # Refuse unknown existing schema rather than silently adopting it.
     dialect = connection.dialect
 
@@ -28,15 +28,45 @@ def _preflight(connection, models, alias):
         existing = {row["name"] for row in rows}
 
     target = {model.__table_name__ for model in models}
-    unexpected = existing - target
     plans = [plan_schema(connection, model) for model in models]
     missing = [p.table for p in plans if not p.exists]
     warnings = [warning for p in plans for warning in p.warnings]
     drift = [p.table for p in plans if p.exists and (p.changes or p.warnings)]
+    unexpected = existing - target
+    verified_current = False
 
-    # Even an apparently matching existing schema cannot be certified by this preflight.
-    status = "REFUSED" if unexpected or (existing and missing) or drift else (
-        "EMPTY" if not existing else "EXISTING_UNVERIFIED")
+    if dialect == "sqlite" and "migrations" in existing:
+        from .sqlite_forward_history import read_history, matches_models
+        from .cli_plan import _load_config
+        # Do not confuse a malformed or incomplete single-table history with
+        # a harmless model change. Its independent schema witness must agree.
+        try:
+            database_path = connection._raw.execute("PRAGMA database_list").fetchall()[0][2]
+            base_dir = Path(project_root) if project_root is not None else Path.cwd()
+            read_history(connection._raw, base_dir, database_path)
+            unexpected -= {"migrations"}
+            verified_current = (not unexpected and not missing and not drift and
+                                matches_models(connection._raw, models))
+        except (RuntimeError, ValueError, sqlite3.Error) as error:
+            return {"database_alias": alias, "read_only": True, "status": "REFUSED",
+                    "reason": str(error), "existing_tables": sorted(existing),
+                    "missing_tables": missing, "unexpected_tables": sorted(unexpected),
+                    "review_warnings": warnings, "model_tables": sorted(target)}
+    elif dialect == "sqlite" and existing:
+        from .migration_timeline import _JOURNALS, inspect_native_history, verify_current_models
+
+        # Internal history tables are never model tables. Trust their presence
+        # only when the complete chain and physical schema independently agree.
+        unexpected -= _JOURNALS
+
+        if not unexpected and not missing and not drift:
+            timeline, entries, findings = inspect_native_history(connection, alias)
+            verified_current = (not findings and timeline is not None and
+                                verify_current_models(connection._raw, models, timeline, entries))
+
+    status = ("EMPTY" if not existing else
+              "ALREADY_INITIALIZED" if verified_current else
+              "REFUSED" if unexpected or missing or drift else "EXISTING_UNVERIFIED")
     return {"database_alias": alias, "read_only": True, "status": status,
             "existing_tables": sorted(existing), "missing_tables": missing,
             "unexpected_tables": sorted(unexpected), "review_warnings": warnings,
@@ -117,7 +147,7 @@ def run_init_check(args):
                                   isolation_level=None)
 
             with Connection(raw, "sqlite") as connection:
-                report = _preflight(connection, models, args.database)
+                report = _preflight(connection, models, args.database, project_root=base_dir)
     elif parsed.scheme == "postgresql+psycopg":
         with config.connect(args.database) as connection:
             report = _postgres_read_only_preflight(connection, models, args.database)
@@ -136,7 +166,7 @@ def run_init_check(args):
             report = _preflight(connection, models, args.database)
 
     print(json.dumps(report, indent=2, sort_keys=True))
-    return 0 if report["status"] in ("EMPTY", "MISSING_DATABASE") else 3
+    return 0 if report["status"] in ("EMPTY", "MISSING_DATABASE", "ALREADY_INITIALIZED") else 3
 
 
 def _approval_digest(models, alias, db_path):
@@ -368,6 +398,19 @@ def _server_initial_decision(args, report, digest, models, dialect):
     eligible = report["status"] == "EMPTY" and not _unsafe_warnings(report)
     interactive = args.approve is None and args.confirm is None
 
+    if report["status"] == "ALREADY_INITIALIZED":
+        print(f"Database {args.database} is already initialized; no changes made.")
+        return None, 0
+
+    if args.approve is None and args.confirm in ("yes", "y"):
+        if not eligible:
+            report["write_enabled"] = False
+            print(json.dumps(report, indent=2, sort_keys=True))
+            return None, 3
+
+        title = migration_title(getattr(args, "title", None) or "", "Initial migration")
+        return (digest, title), None
+
     if interactive:
         report["approval_sha256"] = digest if eligible else None
         report["write_enabled"] = False
@@ -473,17 +516,34 @@ def run_init_apply(args):
         raise ValueError("SQLite initialization requires an ordinary database file")
 
     digest = _approval_digest(models, args.database, db_file)
-    interactive = args.approve is None and args.confirm is None
+    confirm_value = getattr(args, "confirm", None)
+    simple_confirm = args.approve is None and confirm_value in ("yes", "y")
+    interactive = args.approve is None and confirm_value is None
     create_file = not db_file.exists()
 
-    if create_file and (not interactive or not db_file.parent.is_dir()):
-        raise ValueError("New SQLite file creation requires interactive approval and an existing directory")
+    if create_file and not db_file.parent.is_dir():
+        raise ValueError("New SQLite file creation requires an existing directory")
 
-    if create_file:
+    if create_file and not (simple_confirm or interactive):
+        raise ValueError("New SQLite file creation requires approval")
+
+    if create_file and interactive:
         import sys
 
         if not sys.stdin.isatty():
             raise ValueError("New SQLite database file requires an interactive terminal")
+
+    if not create_file:
+        with Connection(sqlite3.connect(db_file.resolve().as_uri() + "?mode=ro",
+                                        uri=True, isolation_level=None), "sqlite") as checked:
+            preflight = _preflight(checked, models, args.database, project_root=base_dir)
+
+        if preflight["status"] == "ALREADY_INITIALIZED":
+            if args.approve is not None or (args.confirm is not None and not simple_confirm):
+                raise RuntimeError("Database changed after review; initialization refused")
+
+            print(f"Database {args.database} is already initialized; no changes made.")
+            return 0
 
     if interactive:
         import sys
@@ -492,7 +552,7 @@ def run_init_apply(args):
             if not create_file:
                 with Connection(sqlite3.connect(db_file.resolve().as_uri() + "?mode=ro",
                                                 uri=True, isolation_level=None), "sqlite") as checked:
-                    preflight = _preflight(checked, models, args.database)
+                    preflight = _preflight(checked, models, args.database, project_root=base_dir)
 
                 if preflight["status"] != "EMPTY" or _unsafe_warnings(preflight):
                     raise RuntimeError("Initialization preflight is not eligible")
@@ -517,6 +577,9 @@ def run_init_apply(args):
 
             approved_digest = None
             approved_confirm = None
+    elif simple_confirm:
+        approved_digest = digest
+        approved_confirm = "APPLY"
     else:
         approved_digest = args.approve
         approved_confirm = args.confirm
@@ -537,7 +600,18 @@ def run_init_apply(args):
         raise ValueError("Exact schema approval and --confirm APPLY are required")
 
     from .migration_titles import migration_title
-    title = migration_title(getattr(args, "title", None), "Initial migration")
+    title_value = getattr(args, "title", None)
+
+    if not interactive:
+        # An explicit acknowledgement must never trigger a title prompt,
+        # even when subprocess stdin inherits an interactive terminal.
+        title_value = title_value or ""
+
+    # The default title is sufficient; do not ask for a second interactive approval.
+    title = migration_title(title_value or "Initial migration", "Initial migration")
+
+    from .schema_records import prepare_schema_record
+    prepare_schema_record(base_dir, db_file, models)
 
     if create_file:
         # Exclusive creation happens only after the human confirms both path
@@ -554,9 +628,11 @@ def run_init_apply(args):
         if report["status"] != "EMPTY" or _unsafe_warnings(report):
             raise RuntimeError("Database changed after review; initialization refused")
 
-        operation_ids = _execute_batch(connection, models, args.database, title)
+        from .sqlite_forward_history import initialize
+        # A fresh project must use the approved single-table history; old
+        # databases remain on their verified compatibility path.
+        record = initialize(connection._raw, base_dir, db_file, models, title)
 
-    print(json.dumps({"status": "INITIALIZED", "database_alias": args.database,
-                      "tables": [model.__table_name__ for model in models],
-                      "operation_ids": operation_ids}, indent=2, sort_keys=True))
+    print(f"Initialized {len(models)} table(s) in {db_file.name}.")
+    print(f"Schema snapshot: {record}")
     return 0

@@ -378,3 +378,52 @@ def test_server_workflow_routes_default_addition_after_original_proof(monkeypatc
     assert proven and len(calls) == 1
     assert calls[0]["alias"] == "accounting"
     assert calls[0]["title"] == "Default memo"
+
+
+@pytest.mark.parametrize("dialect", ["mysql", "postgresql"])
+@pytest.mark.parametrize("confirmation", ["yes", "y"])
+def test_simple_server_confirmation_preserves_review_and_backup(monkeypatch, tmp_path,
+                                                                dialect, confirmation):
+    from aurora.database import cli_server_model_migration, mysql_successor, postgres_successor
+
+    configure_workflow(monkeypatch, tmp_path, dialect)
+    monkeypatch.setattr(cli_server_model_migration.sys, "stdin",
+                        SimpleNamespace(isatty=lambda: True))
+    monkeypatch.setattr("builtins.input",
+                        lambda *_: pytest.fail("Explicit confirmation must not prompt"))
+    calls = []
+
+    def execute(connection, models, **kwargs):
+        calls.append(kwargs)
+        return "operation", Path(kwargs["backup_path"])
+
+    target = mysql_successor if dialect == "mysql" else postgres_successor
+    executor = ("execute_mysql_new_table_successor" if dialect == "mysql" else
+                "execute_postgres_new_table_successor")
+    monkeypatch.setattr(target, executor, execute)
+    args = SimpleNamespace(config="ignored", database="accounting", title=None,
+                           apply=False, confirm=confirmation, approve=None, backup=None,
+                           name=None)
+
+    assert cli_server_model_migration.run_server_model_migration(args) == 0
+    assert len(calls) == 1
+    assert calls[0]["approval"] == "a" * 64
+    assert calls[0]["title"] == "Untitled"
+    assert calls[0]["name"] == "Migration2"
+    assert Path(calls[0]["backup_path"]).parent == tmp_path / "backups"
+
+
+@pytest.mark.parametrize("dialect", ["mysql", "postgresql"])
+def test_simple_server_confirmation_refuses_mixed_advanced_flags(monkeypatch, tmp_path,
+                                                                 dialect):
+    from aurora.database import cli_server_model_migration
+
+    configure_workflow(monkeypatch, tmp_path, dialect)
+    args = SimpleNamespace(config="ignored", database="accounting", title=None,
+                           apply=False, confirm="yes", approve="a" * 64, backup=None,
+                           name=None)
+
+    with pytest.raises(PermissionError, match="Simple confirmation"):
+        cli_server_model_migration.run_server_model_migration(args)
+
+    assert not (tmp_path / "backups").exists()

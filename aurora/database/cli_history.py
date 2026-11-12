@@ -134,6 +134,20 @@ def run_history(args):
         raw = sqlite3.connect(db_file.resolve().as_uri() + "?mode=ro", uri=True,
                               isolation_level=None)
 
+        from .sqlite_forward_history import has_forward_history, read_history
+        if has_forward_history(raw):
+            try:
+                rows, _ = read_history(raw, base_dir, db_file)
+            finally:
+                raw.close()
+            print(f"Database: {args.database}")
+            print(f"Recorded migrations: {len(rows)}")
+            for ident, title, snapshot, date, warnings in reversed(rows[-10:]):
+                print(f"  {ident}. {title} — {date} — {snapshot}")
+                if warnings:
+                    for warning in json.loads(warnings):
+                        print(f"     Confirmed warning: {warning}")
+            return 0
         with Connection(raw, "sqlite") as connection:
             report = _read_history(connection, args.database, models=models)
     else:
@@ -143,19 +157,27 @@ def run_history(args):
     if args.format == "json":
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
-        print(f"Database: {args.database} (AuroraSQL journal; read-only)")
-        print(f"History entries: {len(report['entries'])}")
+        print(f"Database: {args.database}")
+        timeline = report.get("timeline", ())
 
-        for entry in report["entries"]:
-            print(f"  {entry['operation_id']} {entry['table']} {entry['status']}")
+        if timeline:
+            print(f"Recorded migrations: {len(timeline)}")
 
-        for migration in report.get("timeline", ()):
-            status = "VERIFIED CURRENT" if migration["verified_current"] else migration["status"].upper()
-            print(f"  {migration['number']} {migration['title']} - {status}")
+            for migration in timeline:
+                status = "verified" if migration["verified_current"] else migration["status"]
+                print(f"  {migration['number']}. {migration['title']} ({status})")
+        else:
+            print(f"History entries: {len(report['entries'])}")
 
-        print(f"Findings requiring review: {len(report['findings'])}")
+            for entry in report["entries"]:
+                print(f"  {entry['table']}: {entry['status']}")
 
-        for finding in report["findings"]:
-            print(f"  [{finding['kind']}] {finding['table']}: {finding['detail']}")
+        if report["findings"]:
+            print(f"Findings requiring review: {len(report['findings'])}")
+
+            for finding in report["findings"]:
+                print(f"  [{finding['kind']}] {finding['table']}: {finding['detail']}")
+        else:
+            print("No history problems found.")
 
     return 3 if report["findings"] else 0

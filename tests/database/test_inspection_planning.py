@@ -29,7 +29,7 @@ def test_inspect_and_plan_existing_sqlite_table():
         plan = plan_schema(db, Note)
         assert not plan.changes
 
-        assert plan.requires_review  # Unverified constraints remain explicit.
+        assert not plan.requires_review  # Matching SQLite constraints are inspected.
 
         assert plan.create_sql_preview is None
 
@@ -79,7 +79,7 @@ def test_unique_index_and_default_are_inspected_without_mutation():
 
         assert not plan.execution_allowed
 
-        assert any("default" in warning.lower() for warning in plan.warnings)
+        assert any(change.kind == "default_mismatch" for change in plan.changes)
 
         db.execute_write('CREATE UNIQUE INDEX "nickname_unique" ON "account" ("nickname")')
         mismatch = plan_schema(db, Account)

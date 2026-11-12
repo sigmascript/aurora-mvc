@@ -101,8 +101,7 @@ def test_generated_project_init_preflight_never_creates_database(tmp_path, layou
     }), encoding="utf-8")
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
-    result = _run(elsewhere, "db", "init", "--check", "--config",
-                  str(project / "aurora_databases.json"))
+    result = _run(project, "db", "init", "--check")
     assert result.returncode == 0, result.stderr
 
     assert "MISSING_DATABASE" in result.stdout

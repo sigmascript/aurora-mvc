@@ -29,11 +29,10 @@ def test_all_engines_refuse_public_restore_before_opening_backup(tmp_path, diale
 
     with redirect_stderr(io.StringIO()) as errors:
         with pytest.raises(SystemExit) as stopped:
-            main(["db", "restore", "--config", str(config), "--from", str(source),
-                  "--staging-only", "--staging-database", "disposable"])
+            main(["db", "restore", "--from", str(source)])
 
     assert stopped.value.code == 1
-    assert "restore remains disabled" in errors.getvalue()
+    assert "Restore refused" in errors.getvalue() or "Target database already exists" in errors.getvalue()
     assert source.read_bytes() == b"recovery evidence must not be consumed"
     assert sorted(item.name for item in tmp_path.iterdir()) == [
         "aurora_databases.json", "protected-backup.bin"]
@@ -56,7 +55,13 @@ class RecoveryBoundaryTests(unittest.TestCase):
             connection.commit()
 
     def _main(self, *args):
-        return main(["db", *args, "--config", str(self.config)])
+        import os
+        previous = Path.cwd()
+        try:
+            os.chdir(self.root)
+            return main(["db", *args])
+        finally:
+            os.chdir(previous)
 
     def _value(self):
         with closing(sqlite3.connect(self.database)) as connection:
@@ -93,28 +98,19 @@ class RecoveryBoundaryTests(unittest.TestCase):
                 self._main("restore", "--from", str(self.backup))
 
         self.assertEqual(raised.exception.code, 1)
-        self.assertIn("restore remains disabled", stderr.getvalue())
+        self.assertIn("Target database already exists", stderr.getvalue())
         self.assertEqual(self._value(), "after")
         self.assertFalse((self.root / "live.sqlite3.pre-restore.sqlite3").exists())
 
-    def test_reserved_recovery_modes_do_not_bypass_public_restore_refusal(self):
-        with redirect_stdout(io.StringIO()):
-            self._main("backup", "--to", str(self.backup))
-
-        original_backup = self.backup.read_bytes()
-
-        for options in (("--check-only",), ("--staging-only",),
-                        ("--staging-only", "--staging-database", "isolated_test")):
-            with self.subTest(options=options):
+    def test_removed_recovery_flags_are_rejected(self):
+        for option in ("--check-only", "--staging-only", "--staging-database",
+                       "--staging-login-path", "--login-path", "--config"):
+            with self.subTest(option=option):
                 stderr = io.StringIO()
-
                 with redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
-                    self._main("restore", "--from", str(self.backup), *options)
-
-                self.assertEqual(raised.exception.code, 1)
-                self.assertIn("restore remains disabled", stderr.getvalue())
-                self.assertEqual(self._value(), "before")
-                self.assertEqual(self.backup.read_bytes(), original_backup)
+                    self._main("restore", "--from", str(self.backup), option, "unused")
+                self.assertEqual(raised.exception.code, 2)
+                self.assertIn("unrecognized arguments", stderr.getvalue())
 
     def test_preflight_does_not_restore_or_authorize(self):
         with redirect_stdout(io.StringIO()):

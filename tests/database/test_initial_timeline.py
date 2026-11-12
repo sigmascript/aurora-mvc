@@ -62,7 +62,7 @@ def test_history_displays_unpadded_number_and_human_title(tmp_path, capsys):
                      format="text")
     assert run_history(args) == 0
     output = capsys.readouterr().out
-    assert "1 Create articles - APPLIED" in output
+    assert "1. Create articles (applied)" in output
     assert "001" not in output
 
 

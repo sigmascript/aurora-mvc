@@ -9,7 +9,7 @@ from aurora.cli import main
 class DatabaseCommandContractTests(unittest.TestCase):
 
     def test_exact_six_public_commands_have_help(self):
-        for name in ('init', 'plan', 'migrate', 'backup', 'restore', 'history'):
+        for name in ('check', 'init', 'migrate', 'backup', 'restore', 'history'):
             with self.subTest(name=name), self.assertRaises(SystemExit) as result:
                 with contextlib.redirect_stdout(io.StringIO()):
                     main(['db', name, '--help'])
@@ -17,7 +17,7 @@ class DatabaseCommandContractTests(unittest.TestCase):
             self.assertEqual(result.exception.code, 0)
 
     def test_deprecated_commands_are_rejected(self):
-        for name in ('sync', 's', 'check', 'inspect', 'status', 'validate',
+        for name in ('sync', 's', 'inspect', 'status', 'validate',
                      'compat', 'policy', 'readiness', 'list', 'show',
                      'migration', 'mysql-create-table', 'mysql-add-column'):
             with self.subTest(name=name), self.assertRaises(SystemExit) as result:

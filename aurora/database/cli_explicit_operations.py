@@ -13,7 +13,6 @@ from pathlib import Path
 from contextlib import closing
 import re
 import sqlite3
-import secrets
 import sys
 from urllib.parse import urlsplit
 
@@ -374,7 +373,8 @@ def _apply_sqlite_operations(args, document, db_file, preview_digest, *, model_m
         raise PermissionError("Explicit schema migration is disabled in production")
 
     if (args.confirm != "APPLY" or not isinstance(args.approve, str) or
-            not args.backup or not hmac.compare_digest(args.approve, preview_digest)):
+            (not args.backup and not getattr(args, "_simple_confirm", False)) or
+            not hmac.compare_digest(args.approve, preview_digest)):
         raise PermissionError("Require --confirm APPLY, exact --approve and --backup")
 
     with closing(sqlite3.connect(db_file.as_uri() + "?mode=ro", uri=True)) as probe:
@@ -389,17 +389,24 @@ def _apply_sqlite_operations(args, document, db_file, preview_digest, *, model_m
 
     if native:
         from .migration_titles import migration_title
-        title = migration_title(getattr(args, "title", None), "Untitled")
+        title = migration_title("Untitled" if getattr(args, "_simple_confirm", False) and
+                                getattr(args, "title", None) is None else
+                                getattr(args, "title", None), "Untitled")
+
+    from .schema_records import prepare_schema_record, write_schema_record
+    project_root = Path(args.config).expanduser().resolve().parent
+    prepare_schema_record(project_root, db_file, ())
 
     statements = _sql_statements(document["operation"])
     expected_catalog = _rehearse_sqlite(db_file, statements)
 
     # Back up with the existing verified, exclusive-create SQLite implementation.
     # Retain the artifact even if DDL subsequently fails, for manual recovery.
-    from types import SimpleNamespace
-    backup_args = SimpleNamespace(config=args.config, database=args.database,
-                                  to=args.backup)
-    run_backup(backup_args)
+    if args.backup:
+        from types import SimpleNamespace
+        backup_args = SimpleNamespace(config=args.config, database=args.database,
+                                      to=args.backup)
+        run_backup(backup_args)
 
     connection = sqlite3.connect(db_file.as_uri() + "?mode=rw", uri=True,
                                  isolation_level=None, timeout=5)
@@ -492,8 +499,83 @@ def _apply_sqlite_operations(args, document, db_file, preview_digest, *, model_m
     finally:
         connection.close()
 
-    print(f"Applied reviewed SQLite {document['operation']['kind']} on {args.database}; "
-          f"backup retained at {args.backup}.")
+    try:
+        record = write_schema_record(project_root, db_file, (), title)
+    except Exception:
+        print("Database changed, but schema snapshot was not saved. "
+              "Inspect history; do not retry this migration blindly.")
+        return 4
+
+    print(f"Applied SQLite {document['operation']['kind']} on {args.database}.")
+    print(f"Schema snapshot: {record}")
+    return 0
+
+
+def _forward_explicit_operation(args, document, db_file, root, *, simple_confirm, interactive):
+    """Review and apply a rename against the complete forward-only model schema."""
+    from .cli_plan import _select_models
+    from .init_validation import validate_init_models
+    from .migration_titles import migration_title
+    from .sqlite_forward_history import (read_history, matches_models,
+                                         apply_explicit_rename)
+
+    operation = document["operation"]
+    if operation["kind"] not in ("rename_table", "rename_columns"):
+        raise ValueError("Forward-history explicit changes currently support table or column renames only")
+    if args.apply or args.approve or args.backup:
+        raise ValueError("Forward-only SQLite operations use ordinary confirmation; advanced approval is unsupported")
+    refs, models = _select_models(args, root)
+    if not refs:
+        raise ValueError("Registered models are required to verify a schema rename")
+    models = validate_init_models(models, dialect="sqlite")
+    statements = _sql_statements(operation)
+    # Rehearse the operation and check its full model correspondence before
+    # asking for authorization. The rehearsal is read-only on the real DB.
+    with closing(sqlite3.connect(db_file.as_uri() + "?mode=ro", uri=True)) as observed:
+        read_history(observed, root, db_file)
+    expected = _rehearse_sqlite(db_file, statements)
+    with closing(sqlite3.connect(db_file.as_uri() + "?mode=ro", uri=True)) as source:
+        clone = sqlite3.connect(":memory:")
+        try:
+            source.backup(clone)
+            clone.execute("PRAGMA foreign_keys=ON")
+            clone.execute("PRAGMA legacy_alter_table=OFF")
+            for sql in statements:
+                clone.execute(sql)
+            matches_models(clone, models)
+            if _catalog(clone) != expected:
+                raise RuntimeError("Rehearsed schema differs from expected result")
+        finally:
+            clone.close()
+
+    if args.dry_run:
+        report = {"database_alias": args.database, "dialect": "sqlite",
+                  "operation": operation, "status": "READY_FOR_REVIEW",
+                  "warnings": [], "read_only": True, "execution_allowed": False}
+        if args.format == "json":
+            print(json.dumps(report, sort_keys=True, indent=2))
+        else:
+            print(f"Database: {args.database} (SQLite)")
+            print(f"Operation: {operation['kind']} on {operation['table']}")
+            print("Status: READY_FOR_REVIEW; no database changes made")
+        return 2 if args.check else 0
+    if os.environ.get("AURORA_ENV", "development").lower() == "production":
+        raise PermissionError("Explicit SQLite operations are disabled in production")
+    if not simple_confirm and not interactive:
+        raise PermissionError("Confirmation required; use --confirm yes")
+    print(f"AuroraSQL migration — {args.database} (SQLite)")
+    print(f"  {operation['kind']}: {operation['table']}")
+    if interactive and input("Apply these changes? [y/N]: ").strip().lower() != "y":
+        print("Migration cancelled; no database changes made.")
+        return 0
+    title = migration_title(getattr(args, "title", None) or "Untitled", "Untitled")
+    with closing(sqlite3.connect(db_file.as_uri() + "?mode=rw", uri=True,
+                                 isolation_level=None, timeout=5)) as raw:
+        # Repeat the complete witness check under the write lock in the
+        # executor, before any real application DDL.
+        path = apply_explicit_rename(raw, root, db_file, models, title, operation)
+    print(f"Applied SQLite {operation['kind']} on {args.database}.")
+    print(f"Schema snapshot: {path}")
     return 0
 
 
@@ -507,7 +589,13 @@ def run_explicit_operations(args):
     if args.dry_run and (args.apply or args.approve or args.confirm or args.backup):
         raise ValueError("Read-only preview cannot include execution flags")
 
-    interactive = not args.dry_run and not args.apply
+    simple_confirm = args.confirm in ("yes", "y")
+
+    if simple_confirm and (args.apply or args.approve or args.backup or args.dry_run or
+                           args.check or args.format != "text"):
+        raise PermissionError("Simple confirmation cannot be combined with advanced execution options")
+
+    interactive = not args.dry_run and not args.apply and not simple_confirm
 
     if not args.dry_run and (args.check or args.format != "text"):
         raise PermissionError("Explicit operation execution cannot use preview options")
@@ -535,6 +623,16 @@ def run_explicit_operations(args):
     if dialect not in ("sqlite", "mysql", "postgresql"):
         raise ValueError("Unsupported schema-operation backend")
 
+    if dialect == "sqlite":
+        db_file = _sqlite_source(url, project_root)
+        from .sqlite_forward_history import has_forward_history
+        with closing(sqlite3.connect(db_file.as_uri() + "?mode=ro", uri=True)) as probe:
+            forward = has_forward_history(probe)
+        if forward:
+            return _forward_explicit_operation(args, document, db_file, project_root,
+                                               simple_confirm=simple_confirm,
+                                               interactive=interactive)
+
     warnings = []
     catalog = None
     db_file = None
@@ -554,20 +652,21 @@ def run_explicit_operations(args):
         if dialect != "sqlite" or warnings:
             raise PermissionError("Backend or schema is not eligible for execution")
 
-        if interactive:
+        if interactive or simple_confirm:
             operation = document["operation"]
             print(f"AuroraSQL migration — {args.database} (SQLite)")
             print(f"  {operation['kind']}: {operation['table']}")
 
-            if input("Apply this reviewed operation? [y/N]: ").strip().lower() != "y":
+            if interactive and input("Apply this reviewed operation? [y/N]: ").strip().lower() != "y":
                 print("Migration cancelled; no database changes made.")
                 return 0
 
             from types import SimpleNamespace
             args = SimpleNamespace(**vars(args))
             args.confirm = "APPLY"
+            args._simple_confirm = True
             args.approve = digest
-            args.backup = str(Path(str(db_file) + ".before-" + secrets.token_hex(8) + ".sqlite3"))
+            args.backup = None
 
         return _apply_sqlite_operations(args, document, db_file, digest)
 

@@ -60,9 +60,29 @@ def test_review_then_approved_creation_and_replay_refusal(tmp_path, capsys):
         tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert "entry" in tables
 
-        assert "aurorasql_schema_history" in tables
-
-        assert connection.execute("SELECT status FROM aurorasql_schema_history").fetchone()[0] == "applied"
+        assert tables == {"entry", "migrations"}
+        columns = [row[1] for row in connection.execute('PRAGMA table_info("migrations")')]
+        assert columns == ["id", "title", "snapshot", "date", "warnings"]
 
     with pytest.raises(RuntimeError, match="Database changed"):
         run_init_apply(args)
+
+
+def test_simple_confirmation_does_not_prompt_for_migration_title(tmp_path, monkeypatch):
+    import sys
+
+    class InteractiveInput:
+        def isatty(self):
+            return True
+
+    monkeypatch.setattr(sys, "stdin", InteractiveInput())
+    monkeypatch.setattr("builtins.input", lambda prompt: (_ for _ in ()).throw(
+        AssertionError(f"unexpected input prompt: {prompt}")))
+
+    args = _args(tmp_path, confirm="yes")
+    assert run_init_apply(args) == 0
+
+    with sqlite3.connect(tmp_path / "test.sqlite3") as connection:
+        titles = connection.execute(
+            "SELECT title FROM migrations").fetchall()
+        assert titles == [("Initial migration",)]

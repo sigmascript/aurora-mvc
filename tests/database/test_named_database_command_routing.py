@@ -7,7 +7,7 @@ import pytest
     ("init", ["--title", "Accounting Initial"], "cli_init", "run_init_apply"),
     ("plan", ["--format", "json", "--check"], "cli_plan", "run_plan"),
     ("migrate", ["--title", "Add invoices"], "cli_model_migration", "run_model_migration"),
-    ("history", ["--verify-models", "--format", "json"], "cli_history", "run_history"),
+    ("history", [], "cli_history", "run_history"),
 ])
 def test_named_database_routes_existing_flags_unchanged(monkeypatch, command, extra,
                                                          module_name, handler):
@@ -38,7 +38,7 @@ def test_named_database_routes_existing_flags_unchanged(monkeypatch, command, ex
     elif command == "migrate":
         assert received[0].title == "Add invoices"
     else:
-        assert received[0].format == "json" and received[0].verify_models
+        assert received[0].format == "text" and not received[0].verify_models
 
 
 @pytest.mark.parametrize("scheme", ["mysql+pymysql", "postgresql+psycopg"])

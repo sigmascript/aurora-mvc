@@ -41,10 +41,10 @@ def test_absolute_sqlite_history_is_read_only(tmp_path):
     _journal(db)
     before = db.read_bytes()
     _setup(tmp_path, 'sqlite:///' + db.as_posix())
-    result = _run(tmp_path, 'db', 'history', '--format', 'json')
+    result = _run(tmp_path, 'db', 'history')
     assert result.returncode == 0, result.stderr
 
-    assert json.loads(result.stdout)['entries'] == []
+    assert 'History entries: 0' in result.stdout
 
     assert db.read_bytes() == before
 
@@ -65,7 +65,7 @@ def test_relative_sqlite_history_unchanged(tmp_path):
     _journal(db)
     before = db.read_bytes()
     _setup(tmp_path, 'sqlite:///relative.sqlite3')
-    result = _run(tmp_path, 'db', 'history', '--format', 'json')
+    result = _run(tmp_path, 'db', 'history')
     assert result.returncode == 0, result.stderr
 
     assert db.read_bytes() == before

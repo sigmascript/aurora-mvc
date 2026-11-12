@@ -144,14 +144,18 @@ def test_new_project_init_creates_sqlite_file_only_after_approval(tmp_path, monk
     assert not db_file.exists()
     capsys.readouterr()
 
-    answers = iter(("y", ""))
-    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+    monkeypatch.setattr("builtins.input", lambda prompt: "y")
     assert main(["db", "init", "--title", "Create fresh CMS"]) == 0
     assert db_file.is_file()
     capsys.readouterr()
 
     with sqlite3.connect(db_file) as connection:
-        title = connection.execute(
-            "SELECT title FROM aurorasql_migration_timeline WHERE migration_id=1"
+        title, snapshot = connection.execute(
+            "SELECT title, snapshot FROM migrations WHERE id=1"
         ).fetchone()
-        assert title == ("Create fresh CMS",)
+        assert title == "Create fresh CMS"
+        assert connection.execute(
+            "SELECT name FROM sqlite_master WHERE name='aurorasql_migration_timeline'"
+        ).fetchone() is None
+    snapshot_path = project / "migrations" / "data" / snapshot
+    assert json.loads(snapshot_path.read_text(encoding="utf-8"))["title"] == title

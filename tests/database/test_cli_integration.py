@@ -44,8 +44,18 @@ def cli(project, *args, env=None):
     if env:
         variables.update(env)
 
-    return subprocess.run([sys.executable, '-m', 'aurora', 'db', *args],
-                          cwd=project, env=variables, text=True, capture_output=True, timeout=30)
+    if args[:1] == ('migrate',) and '--review-file' in args:
+        # Retired public review-file syntax remains covered at the guarded
+        # internal adapter boundary, never by reopening public CLI flags.
+        command = [sys.executable, '-c',
+                   'import sys; from tests.legacy_migration_contract import '
+                   'legacy_migration_or_public_cli as run; sys.exit(run(sys.argv[1:]))',
+                   'db', *args]
+    else:
+        command = [sys.executable, '-m', 'aurora', 'db', *args]
+
+    return subprocess.run(command, cwd=project, env=variables, text=True,
+                          capture_output=True, timeout=30)
 
 
 @pytest.fixture
@@ -93,13 +103,13 @@ def test_reviewed_cli_additive_and_intent_history(project):
 
         assert db.execute('SELECT name FROM sqlite_master WHERE name="tags"').fetchone()
 
-    history = cli(root, 'history', '--intents', '--format', 'json')
-    assert history.returncode == 0, history.stderr
+    from aurora.database.migration_journal_v2 import list_intents
 
-    parsed = json.loads(history.stdout)
-    assert parsed['journal'] == 'sqlite_intents_v2'
+    with sqlite3.connect(root / 'data.sqlite') as db:
+        entries = list_intents(db)
 
-    assert parsed['entries'][0]['state'] == 'applied'
+    assert len(entries) == 1
+    assert entries[0].state == 'applied'
 
     assert apply(root, review['review_sha256']).returncode != 0
 

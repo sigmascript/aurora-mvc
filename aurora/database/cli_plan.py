@@ -7,7 +7,7 @@ import importlib
 import json
 import sqlite3
 import sys
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -155,8 +155,8 @@ def _select_models(args, project_root=None):
     return refs, models
 
 
-def run_plan(args):
-    """Return 0 for verified, 2 for drift, 3 for advisory uncertainty in --check."""
+def run_plan(args, *, public_check=False):
+    """Return read-only schema findings and preserve old plan callers."""
     config, base_dir = _load_config(args.config)
     manifest = _manifest_path(args, base_dir)
 
@@ -202,6 +202,18 @@ def run_plan(args):
             rename_candidates = []
             missing_model_identities = []
             history_verified = None
+            from .sqlite_forward_history import has_forward_history, read_history
+            has_forward = has_forward_history(connection._raw)
+            if has_forward:
+                try:
+                    records, recorded = read_history(connection._raw, base_dir, db_file)
+                    history_verified = True
+                    recorded_tables = {item["name"] for item in recorded["models"]}
+                    selected_tables = {model.__table_name__ for model in models}
+                    missing_model_identities = sorted(recorded_tables - selected_tables)
+                except (RuntimeError, ValueError) as error:
+                    history_verified = False
+                    missing_model_identities = [str(error)]
             has_native = connection.fetch_first(
                 "SELECT 1 AS present FROM sqlite_master "
                 "WHERE name='aurorasql_migration_timeline'"
@@ -325,10 +337,12 @@ def run_plan(args):
 
     drift = any(plan.changes for plan in plans)
     uncertain = (any(plan.warnings for plan in plans) or server_review_warning is not None or
-                 history_verified is False or bool(missing_model_identities))
+                 history_verified is False or bool(missing_model_identities) or
+                 (public_check and history_verified is None))
     report = {
         "backend": "aurorasql", "database_alias": args.database,
-        "status": "DRIFT" if drift else "UNVERIFIED" if uncertain else "VERIFIED",
+        "status": ("BLOCKED" if uncertain else "CHANGES" if drift else "UP_TO_DATE")
+                  if public_check else "DRIFT" if drift else "UNVERIFIED" if uncertain else "VERIFIED",
         "advisory_only": True,
         "native_history_verified": history_verified,
         "unregistered_history_models": missing_model_identities,
@@ -380,7 +394,120 @@ def run_plan(args):
 
         print("No migration has been approved or executed.")
 
-    if args.check:
+    if args.check or public_check:
         return 3 if uncertain else 2 if drift else 0
 
     return 0
+
+
+def run_check(args):
+    """Public read-only model/database readiness check.
+
+    The older run_plan contract remains available for existing callers. A
+    missing SQLite file is READY for *review*, never an implicit write permit.
+    """
+    config, base_dir = _load_config(args.config)
+    refs, models = _select_models(args, base_dir)
+
+    if not refs:
+        report = {"backend": "aurorasql", "database_alias": args.database,
+                  "status": "BLOCKED", "read_only": True,
+                  "reason": "No models found. Add a model with 'aurora model add NAME'."}
+        if args.format == "json":
+            print(json.dumps(report, indent=2, sort_keys=True))
+        else:
+            print(f"Database: {args.database} — BLOCKED: {report['reason']}")
+
+        return 3
+
+    from .cli_init import _dialect_for_init_scheme
+    from .schema import create_table_sql
+    url = config.resolve(args.database)
+    parsed = urlsplit(url)
+    dialect = _dialect_for_init_scheme(parsed.scheme)
+
+    for model in models:
+        create_table_sql(model, dialect)
+
+    if parsed.scheme in ("sqlite", "sqlite+pysqlite"):
+        # Match initialization's filesystem preflight before resolving paths.
+        # In particular, do not follow a symlink or promise initialization in
+        # a nonexistent directory.
+        name = unquote(parsed.path)
+        name = name[2:] if name.startswith("///") else name[1:]
+        candidate = Path(name).expanduser()
+
+        if not candidate.is_absolute():
+            candidate = base_dir / candidate
+
+        filesystem_problem = (
+            "SQLite database path is a symlink" if candidate.is_symlink() else
+            "SQLite database path is not an ordinary file" if candidate.exists() and not candidate.is_file() else
+            "SQLite database directory does not exist" if not candidate.exists() and not candidate.parent.is_dir() else
+            None
+        )
+
+        if filesystem_problem is not None:
+            report = {"backend": "aurorasql", "database_alias": args.database,
+                      "status": "BLOCKED", "read_only": True,
+                      "reason": filesystem_problem}
+            if args.format == "json":
+                print(json.dumps(report, indent=2, sort_keys=True))
+            else:
+                print(f"Database: {args.database} — BLOCKED: {filesystem_problem}")
+
+            return 3
+
+        try:
+            db_file = _existing_sqlite_path(url, base_dir)
+        except ValueError as error:
+            if str(error) != "SQLite database does not exist":
+                raise
+
+            db_file = None
+
+        empty = db_file is None
+
+        if db_file is not None:
+            with closing(sqlite3.connect(db_file.as_uri() + "?mode=ro", uri=True)) as raw:
+                count = raw.execute(
+                    "SELECT count(*) FROM sqlite_master WHERE type='table' "
+                    "AND name NOT LIKE 'sqlite_%'"
+                ).fetchone()[0]
+                empty = count == 0
+
+        if empty:
+            # READY must mean the same model set can pass init validation.
+            # Schema SQL generation alone does not validate cross-model FKs.
+            from .init_validation import validate_init_models
+
+            try:
+                validate_init_models(models, dialect=dialect)
+                if dialect == "sqlite":
+                    from .sqlite_forward_history import TABLE, _OLD
+                    if any(m.__table_name__ in (_OLD | {TABLE}) for m in models):
+                        raise ValueError("Model table name is reserved for migration history")
+            except (TypeError, ValueError) as error:
+                report = {"backend": "aurorasql", "database_alias": args.database,
+                          "status": "BLOCKED", "read_only": True,
+                          "reason": str(error)}
+                if args.format == "json":
+                    print(json.dumps(report, indent=2, sort_keys=True))
+                else:
+                    print(f"Database: {args.database} — BLOCKED: {report['reason']}")
+
+                return 3
+
+            report = {"backend": "aurorasql", "database_alias": args.database,
+                      "status": "READY", "read_only": True,
+                      "reason": "Database is empty or missing; initialization can be reviewed.",
+                      "model_tables": sorted(model.__table_name__ for model in models)}
+            if args.format == "json":
+                print(json.dumps(report, indent=2, sort_keys=True))
+            else:
+                print(f"Database: {args.database} — READY for initialization review")
+                print("No database or schema changes were made.")
+
+            return 0
+
+    return run_plan(args, public_check=True)

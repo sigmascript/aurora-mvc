@@ -47,7 +47,7 @@ class VersionConsistencyTests(unittest.TestCase):
                 content = (root / relative_path).read_text(encoding="utf-8")
                 self.assertIn(version, content)
 
-    def test_migration_help_describes_repeated_guarded_server_successors(self):
+    def test_migration_help_describes_supported_model_changes(self):
         result = subprocess.run(
             [sys.executable, "-m", "aurora", "db", "migrate", "--help"],
             capture_output=True,
@@ -56,9 +56,10 @@ class VersionConsistencyTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("repeated guarded", result.stdout)
-        self.assertIn("Server JSON schema operations", result.stdout)
-        self.assertNotIn("one narrowly reviewed successor", result.stdout)
+        self.assertIn("Update your database to match supported model changes", result.stdout)
+        self.assertIn("JSON changes file", result.stdout)
+        self.assertIn("asks for confirmation", result.stdout)
+        self.assertIn("Unsupported or unsafe changes are refused", result.stdout)
 
 
 if __name__ == "__main__":

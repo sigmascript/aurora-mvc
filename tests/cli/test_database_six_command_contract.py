@@ -13,10 +13,10 @@ class DatabaseSixCommandContractTests(unittest.TestCase):
             main(['db', '--help'])
 
         self.assertEqual(result.exception.code, 0)
-        self.assertIn('{plan,history,backup,restore,init,migrate}', output.getvalue())
+        self.assertIn('{check,init,migrate,backup,restore,history}', output.getvalue())
 
     def test_obsolete_commands_are_rejected_before_execution(self):
-        obsolete = ('sync', 's', 'check', 'inspect', 'list', 'show', 'status',
+        obsolete = ('sync', 's', 'inspect', 'list', 'show', 'status',
                     'validate', 'compat', 'policy', 'readiness', 'migration',
                     'mysql-create-table', 'mysql-add-column')
 
@@ -43,8 +43,8 @@ class DatabaseSixCommandContractTests(unittest.TestCase):
             main(['db', 'migrate', '--model', 'models:User', '--schema', 'staging',
                   '--table', 'users', '--approve', '0' * 64])
 
-        self.assertEqual(result.exception.code, 1)
-        self.assertIn('Model-driven migration refused', error.getvalue())
+        self.assertEqual(result.exception.code, 2)
+        self.assertIn('unrecognized arguments', error.getvalue())
 
 
 

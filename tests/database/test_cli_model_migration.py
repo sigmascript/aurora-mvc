@@ -1,12 +1,13 @@
 """Six-command model migrations preview, approve, back up and extend history."""
 
 import json
+from contextlib import chdir
 import sqlite3
 from types import SimpleNamespace
 
 import pytest
 
-from aurora.cli import main
+from tests.legacy_migration_contract import legacy_migration_or_public_cli as main
 from aurora.database import Model, column
 from aurora.database.cli_init import _execute_batch
 from aurora.database.core import Connection
@@ -42,7 +43,8 @@ def _project(tmp_path):
 
 
 def _migrate(config, *args):
-    return main(["db", "migrate", "--config", str(config), *args])
+    with chdir(config.parent):
+        return main(["db", "migrate", *args])
 
 
 def test_public_model_migration_preview_and_guarded_apply(tmp_path, capsys, monkeypatch):
@@ -100,9 +102,15 @@ def test_model_review_binds_database_path_and_refuses_preview_backup(tmp_path, c
     path, config = _project(tmp_path)
     assert _migrate(config, "--dry-run", "--format", "json") == 0
     fingerprint = json.loads(capsys.readouterr().out)["review_fingerprint"]
-    other = tmp_path / "elsewhere.sqlite3"
+    # A different project root supplies its own conventional configuration.
+    alternate_root = tmp_path / "alternate_project"
+    alternate_root.mkdir()
+    other = alternate_root / "elsewhere.sqlite3"
     other.write_bytes(path.read_bytes())
-    alternate = tmp_path / "other_databases.json"
+    (alternate_root / "aurora_models.json").write_bytes(
+        (tmp_path / "aurora_models.json").read_bytes(),
+    )
+    alternate = alternate_root / "aurora_databases.json"
     alternate.write_text(json.dumps({"databases": {"default": {
         "url": "sqlite:///elsewhere.sqlite3"}}}), encoding="utf-8")
     assert _migrate(alternate, "--dry-run", "--format", "json") == 0
@@ -115,7 +123,7 @@ def test_model_review_binds_database_path_and_refuses_preview_backup(tmp_path, c
     assert not (tmp_path / "unused.sqlite3").exists()
 
 
-def test_simple_interactive_migration_confirms_and_creates_backup(tmp_path, capsys,
+def test_simple_interactive_migration_without_automatic_backup(tmp_path, capsys,
                                                                   monkeypatch):
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.delenv("AURORA_ENV", raising=False)
@@ -134,11 +142,10 @@ def test_simple_interactive_migration_confirms_and_creates_backup(tmp_path, caps
         assert timeline[-1]["title"] == "Untitled"
         assert timeline[-1]["physical_history_consistent"] is True
 
-    backups = list(tmp_path.glob("cms.sqlite3.before-*.sqlite3"))
-    assert len(backups) == 1
-
-    with sqlite3.connect(backups[0]) as connection:
-        assert "email" not in [row[1] for row in connection.execute('PRAGMA table_info("customers")')]
+    assert not list(tmp_path.glob("cms.sqlite3.before-*.sqlite3"))
+    records = list((tmp_path / "migrations" / "cms").glob("*.json"))
+    assert len(records) == 1
+    assert len(json.loads(records[0].read_text())["models"]) == 2
 
 
 def test_simple_interactive_migration_decline_is_read_only(tmp_path, capsys,
@@ -168,8 +175,9 @@ def test_simple_migration_refuses_noninteractive_without_approval(tmp_path, monk
     assert path.read_bytes() == before
 
 
+@pytest.mark.parametrize("simple_confirm", [False, True])
 def test_stable_model_table_rename_preserves_original_journal_and_rows(
-        tmp_path, capsys, monkeypatch):
+        tmp_path, capsys, monkeypatch, simple_confirm):
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.delenv("AURORA_ENV", raising=False)
     path = tmp_path / "renaming.sqlite3"
@@ -196,9 +204,10 @@ def test_stable_model_table_rename_preserves_original_journal_and_rows(
         "url": "sqlite:///renaming.sqlite3"}}}), encoding="utf-8")
     monkeypatch.setattr("sys.stdin", SimpleNamespace(isatty=lambda: True))
     answers = iter(("y", ""))
-    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+    monkeypatch.setattr("builtins.input", lambda prompt: (
+        pytest.fail("Unexpected prompt") if simple_confirm else next(answers)))
 
-    assert _migrate(config) == 0
+    assert _migrate(config, *(["--confirm", "y"] if simple_confirm else [])) == 0
     capsys.readouterr()
 
     with sqlite3.connect(path) as connection:
@@ -210,7 +219,7 @@ def test_stable_model_table_rename_preserves_original_journal_and_rows(
         assert timeline[-1]["model_tables"]["rename_cms_models:Customer"] == "clients"
         assert timeline[-1]["physical_history_consistent"] is True
 
-    assert len(list(tmp_path.glob("renaming.sqlite3.before-*.sqlite3"))) == 1
+    assert not list(tmp_path.glob("renaming.sqlite3.before-*.sqlite3"))
 
     from aurora.database.cli_history import run_history
     history_args = SimpleNamespace(config=str(config), database="default",
@@ -245,3 +254,62 @@ def test_stable_model_table_rename_preserves_original_journal_and_rows(
         )
         assert raw.execute('SELECT status FROM clients WHERE id=7').fetchone() == ("active",)
         assert len(inspect_timeline(raw, "default")) == 3
+
+
+@pytest.mark.parametrize("terminal", [False, True])
+def test_simple_confirm_model_migration_without_terminal_or_legacy_flags(tmp_path, capsys,
+                                                                         monkeypatch, terminal):
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.delenv("AURORA_ENV", raising=False)
+    path, config = _project(tmp_path)
+    monkeypatch.setattr("sys.stdin", SimpleNamespace(isatty=lambda: terminal))
+    monkeypatch.setattr("builtins.input", lambda prompt: pytest.fail("Unexpected prompt"))
+
+    assert _migrate(config, "--confirm", "yes", "--title", "Expand CMS") == 0
+    capsys.readouterr()
+
+    with sqlite3.connect(path) as connection:
+        timeline = inspect_timeline(connection, "default")
+        assert len(timeline) == 2
+        assert timeline[-1]["title"] == "Expand CMS"
+        assert timeline[-1]["physical_history_consistent"] is True
+        assert "email" in [row[1] for row in connection.execute('PRAGMA table_info("customers")')]
+
+    assert not list(tmp_path.glob("cms.sqlite3.before-*.sqlite3"))
+
+
+@pytest.mark.parametrize("options", [
+    ("--confirm", "maybe"),
+    ("--confirm", "yes", "--apply"),
+    ("--confirm", "y", "--approve", "0" * 64),
+])
+def test_model_migration_refuses_unsafe_confirmation_combinations(tmp_path, monkeypatch,
+                                                                   options):
+    monkeypatch.syspath_prepend(str(tmp_path))
+    path, config = _project(tmp_path)
+    original = path.read_bytes()
+    monkeypatch.setattr("sys.stdin", SimpleNamespace(isatty=lambda: False))
+
+    with pytest.raises(SystemExit) as error:
+        _migrate(config, *options)
+
+    assert error.value.code == (2 if options == ("--confirm", "maybe") else 1)
+    assert path.read_bytes() == original
+    assert not list(tmp_path.glob("cms.sqlite3.before-*.sqlite3"))
+
+
+@pytest.mark.parametrize("terminal", [False, True])
+def test_simple_confirm_additive_migration_defaults_title_without_prompt(tmp_path,
+                                                                         monkeypatch, terminal):
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.delenv("AURORA_ENV", raising=False)
+    path, config = _project(tmp_path)
+    monkeypatch.setattr("sys.stdin", SimpleNamespace(isatty=lambda: terminal))
+    monkeypatch.setattr("builtins.input", lambda *_: pytest.fail("Unexpected prompt"))
+
+    assert _migrate(config, "--confirm", "yes") == 0
+
+    with sqlite3.connect(path) as connection:
+        timeline = inspect_timeline(connection, "default")
+        assert timeline[-1]["title"] == "Untitled"
+        assert timeline[-1]["physical_history_consistent"] is True

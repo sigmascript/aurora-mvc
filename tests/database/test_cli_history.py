@@ -48,13 +48,11 @@ def test_history_read_only_and_unresolved_findings(tmp_path):
 
     before = db.read_bytes()
     _config(tmp_path, "sqlite:///app.sqlite3")
-    result = _run(tmp_path, "db", "history", "--format", "json")
+    result = _run(tmp_path, "db", "history")
     assert result.returncode == 3, result.stderr
 
-    report = json.loads(result.stdout)
-    assert report["entries"][0]["status"] == "uncertain"
-
-    assert any(f["kind"] == "unresolved" for f in report["findings"])
+    assert "uncertain" in result.stdout
+    assert "unresolved" in result.stdout
 
     assert db.read_bytes() == before
 
@@ -67,10 +65,10 @@ def test_empty_journal_reports_success_without_mutation(tmp_path):
 
     before = db.read_bytes()
     _config(tmp_path, "sqlite:///app.sqlite3")
-    result = _run(tmp_path, "db", "history", "--format", "json")
+    result = _run(tmp_path, "db", "history")
     assert result.returncode == 0, result.stderr
 
-    assert json.loads(result.stdout)["entries"] == []
+    assert "History entries: 0" in result.stdout
 
     assert db.read_bytes() == before
 
@@ -79,7 +77,7 @@ def test_legacy_history_file_rejected_on_new_backend(tmp_path):
     result = _run(tmp_path, "db", "history", "--history-file", "x")
     assert result.returncode != 0
 
-    assert "legacy" in result.stderr
+    assert "unrecognized arguments" in result.stderr
 
 
 def test_history_report_reads_journal_once(tmp_path, monkeypatch):

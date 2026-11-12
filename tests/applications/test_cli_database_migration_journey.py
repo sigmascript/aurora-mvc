@@ -69,7 +69,7 @@ class ModelMigrationJourneyTests(unittest.TestCase):
         self.assertEqual(output.strip(), 'models.Product:Product')
 
         before = (self.root / 'data.sqlite3').read_bytes()
-        code, _, error = self.invoke('db', 'migrate', '--approve', '0' * 64, '--name', 'create_product', '--backup', 'backups/before_product.sqlite3')
+        code, _, error = self.invoke('db', 'migrate', '--title', 'create_product', '--confirm', 'yes')
         self.assertEqual(code, 1)
         self.assertIn('Model-driven migration refused', error)
         self.assertEqual((self.root / 'data.sqlite3').read_bytes(), before)
@@ -83,7 +83,7 @@ class ModelMigrationJourneyTests(unittest.TestCase):
     def test_declined_confirmation_creates_no_artifacts(self):
         self.register_product()
         before = (self.root / 'data.sqlite3').read_bytes()
-        code, _, error = self.invoke('db', 'migrate', '--approve', '0' * 64, '--name', 'declined', '--backup', 'backups/declined.sqlite3')
+        code, _, error = self.invoke('db', 'migrate', '--title', 'declined', '--confirm', 'yes')
         self.assertEqual(code, 1)
         self.assertIn('Model-driven migration refused', error)
         self.assertEqual((self.root / 'data.sqlite3').read_bytes(), before)

@@ -35,9 +35,9 @@ def _run(tmp_path, *args):
     )
 
 
-def test_init_check_uses_config_directory_for_manifest_and_imports(tmp_path):
+def test_init_check_discovers_project_config_and_imports(tmp_path):
     root = _project(tmp_path)
-    result = _run(tmp_path, "init", "--check", "--config", str(root / "aurora_databases.json"))
+    result = _run(root, "init", "--check")
     assert result.returncode == 0, result.stderr
 
     assert json.loads(result.stdout)["status"] == "MISSING_DATABASE"
@@ -49,7 +49,7 @@ def test_init_preflight_does_not_create_database_or_manifest(tmp_path):
     root = _project(tmp_path)
     manifest = root / "aurora_models.json"
     before = manifest.read_bytes()
-    result = _run(tmp_path, "init", "--check", "--config", str(root / "aurora_databases.json"))
+    result = _run(root, "init", "--check")
     assert result.returncode == 0, result.stderr
 
     assert manifest.read_bytes() == before
@@ -57,13 +57,13 @@ def test_init_preflight_does_not_create_database_or_manifest(tmp_path):
     assert not (root / "test.sqlite3").exists()
 
 
-def test_missing_manifest_does_not_fallback_to_cwd(tmp_path):
+def test_missing_manifest_does_not_fallback_to_parent(tmp_path):
     root = _project(tmp_path)
     (root / "aurora_models.json").unlink()
     (tmp_path / "aurora_models.json").write_text(json.dumps({
         "databases": {"default": ["models:Item"]}
     }), encoding="utf-8")
-    result = _run(tmp_path, "init", "--check", "--config", str(root / "aurora_databases.json"))
+    result = _run(root, "init", "--check")
     assert result.returncode != 0
 
     assert not (root / "test.sqlite3").exists()

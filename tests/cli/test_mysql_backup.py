@@ -132,8 +132,13 @@ class MySQLBackupCLIRoutingTests(unittest.TestCase):
             }}}))
             destination = Path(directory) / "backup.sql"
 
-            with patch("aurora.database.cli_mysql_backup.backup_mysql_database", return_value=destination) as backup:
-                self.assertEqual(main(["db", "backup", "--config", str(config),
-                                       "--to", str(destination), "--login-path", "aurora_recovery"]), 0)
-
-            backup.assert_called_once_with(str(config), "default", str(destination), "aurora_recovery")
+            import os
+            previous = Path.cwd()
+            try:
+                os.chdir(directory)
+                with patch("aurora.database.cli_mysql_backup.backup_mysql_database", return_value=destination) as backup:
+                    self.assertEqual(main(["db", "backup", "--to", str(destination),
+                                           "--login-path", "aurora_recovery"]), 0)
+                backup.assert_called_once_with("aurora_databases.json", "default", str(destination), "aurora_recovery")
+            finally:
+                os.chdir(previous)

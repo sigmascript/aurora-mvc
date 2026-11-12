@@ -48,6 +48,11 @@ def run_server_model_migration(args):
         raise ValueError("Server migration requires its ordinary reviewed model workflow")
 
     automated = bool(getattr(args, "apply", False))
+    simple_confirm = getattr(args, "confirm", None) in ("yes", "y")
+
+    if simple_confirm and any(getattr(args, option, None)
+                              for option in ("apply", "approve", "backup", "name")):
+        raise PermissionError("Simple confirmation cannot be combined with advanced execution options")
 
     if automated:
         if (getattr(args, "confirm", None) != "APPLY"
@@ -55,8 +60,9 @@ def run_server_model_migration(args):
                 or not getattr(args, "backup", None)
                 or not getattr(args, "name", None)):
             raise PermissionError("Automated server migration needs exact review, backup and confirmation")
-    elif (not sys.stdin.isatty() or any(getattr(args, option, None)
-                                       for option in ("approve", "backup", "confirm", "name"))):
+    elif not simple_confirm and (not sys.stdin.isatty() or any(
+            getattr(args, option, None)
+            for option in ("approve", "backup", "confirm", "name"))):
         raise PermissionError("Interactive server migration requires a terminal")
 
     config, root = _load_config(args.config)
@@ -139,7 +145,12 @@ def run_server_model_migration(args):
             else:
                 raise ValueError("Server migration operation is not supported for execution")
 
-        title = migration_title(getattr(args, "title", None), "Untitled")
+        title_value = getattr(args, "title", None)
+
+        if simple_confirm and title_value is None:
+            title_value = "Untitled"
+
+        title = migration_title(title_value, "Untitled")
         name = args.name if automated else f"Migration{next_number}"
         approval = args.approve if automated else proposal.review_sha256
 
@@ -157,7 +168,7 @@ def run_server_model_migration(args):
             print(f"  {kind}: {target}")
             print(f"  Reviewed SHA-256: {proposal.review_sha256}")
 
-            if input("Apply this reviewed migration? [y/N]: ").strip().lower() != "y":
+            if not simple_confirm and input("Apply this reviewed migration? [y/N]: ").strip().lower() != "y":
                 print("Migration cancelled; no database changes made.")
                 return 0
 

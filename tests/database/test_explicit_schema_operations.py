@@ -1,12 +1,13 @@
 """Verified, guarded, single-database JSON rename operations via six-command CLI."""
 
 import json
+from contextlib import chdir
 import sqlite3
 from types import SimpleNamespace
 
 import pytest
 
-from aurora.cli import main
+from tests.legacy_migration_contract import legacy_migration_or_public_cli as main
 from aurora.database.cli_explicit_operations import load_explicit_operations
 from aurora.database.migration_journal_v2 import initialize_intent_journal, list_intents
 
@@ -47,8 +48,8 @@ def _operations(tmp_path, *, table=False, doc=None):
 
 
 def _cli(config, operations, *options):
-    return main(["db", "migrate", "--config", str(config),
-                 "-c", str(operations), *options])
+    with chdir(config.parent):
+        return main(["db", "migrate", "-c", str(operations), *options])
 
 
 def _preview(config, operations, capsys):
@@ -422,7 +423,7 @@ def test_interactive_explicit_rename_requires_confirmation_and_keeps_backup(
 
     assert _cli(config, source) == 0
     capsys.readouterr()
-    assert len(list(tmp_path.glob("app.sqlite3.before-*.sqlite3"))) == 1
+    assert not list(tmp_path.glob("app.sqlite3.before-*.sqlite3"))
 
     with sqlite3.connect(database) as connection:
         assert "user_name" in [item[1] for item in connection.execute('PRAGMA table_info("users")')]
@@ -503,9 +504,10 @@ def test_migration_flag_help_and_default_existing_path(tmp_path, capsys):
 
     assert error.value.code == 0
     text = capsys.readouterr().out
-    assert "--changes" in text and "-c" in text
-    assert "--config" in text
-    assert "--review-file" in text
+    assert "--change" in text and "-c" in text
+    assert "--changes" not in text
+    assert "--config" not in text
+    assert "--review-file" not in text
 
 
 def test_recorded_table_history_requires_explicit_reconciliation(tmp_path, capsys):
@@ -584,3 +586,36 @@ def test_symlinked_specification_is_rejected(tmp_path):
 
     with pytest.raises(ValueError, match='regular file'):
         load_explicit_operations(target)
+
+
+@pytest.mark.parametrize("confirmation", ["yes", "y"])
+def test_simple_confirm_explicit_sqlite_rename_preserves_rows(tmp_path, capsys, monkeypatch,
+                                                            confirmation):
+    monkeypatch.delenv("AURORA_ENV", raising=False)
+    database, config = _project(tmp_path)
+    operations = _operations(tmp_path)
+    monkeypatch.setattr("sys.stdin", SimpleNamespace(isatty=lambda: True))
+    monkeypatch.setattr("builtins.input", lambda prompt: pytest.fail("Unexpected prompt"))
+
+    assert _cli(config, operations, "--confirm", confirmation) == 0
+    capsys.readouterr()
+
+    with sqlite3.connect(database) as connection:
+        assert connection.execute('SELECT user_name,visits FROM users').fetchone() == ('Alice', 3)
+        intents = list_intents(connection)
+        assert len(intents) == 1 and intents[0].state == "applied"
+
+    assert not list(tmp_path.glob("app.sqlite3.before-*.sqlite3"))
+
+
+def test_simple_confirm_explicit_refuses_mixed_legacy_approval(tmp_path, monkeypatch):
+    database, config = _project(tmp_path)
+    operations = _operations(tmp_path)
+    before = database.read_bytes()
+
+    with pytest.raises(SystemExit) as error:
+        _cli(config, operations, "--confirm", "yes", "--approve", "0" * 64)
+
+    assert error.value.code == 1
+    assert database.read_bytes() == before
+    assert not list(tmp_path.glob("app.sqlite3.before-*.sqlite3"))

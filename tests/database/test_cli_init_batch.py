@@ -47,8 +47,11 @@ def test_batch_review_create_and_refuse_replay(tmp_path, capsys):
     assert run_init_apply(args) == 0
 
     with sqlite3.connect(tmp_path / "batch.sqlite3") as raw:
-        rows = raw.execute("SELECT table_name, status FROM aurorasql_schema_history").fetchall()
-        assert sorted(rows) == [("batch_child", "applied"), ("batch_parent", "applied")]
+        tables = {row[0] for row in raw.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        assert tables == {"batch_child", "batch_parent", "migrations"}
+        rows = raw.execute("SELECT title, warnings FROM migrations").fetchall()
+        assert rows == [("Initial migration", None)]
 
     with pytest.raises(RuntimeError, match="Database changed"):
         run_init_apply(args)

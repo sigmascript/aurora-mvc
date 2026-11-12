@@ -132,9 +132,7 @@ def plan_schema(connection, model):
                           preview)
 
     changes = []
-    warnings = [
-        "Database defaults, identity behavior, collation, and advanced type semantics are not verified."
-    ]
+    warnings = []
 
     for field_name, field in model.__columns__.items():
         if field.server_default is not None:
@@ -146,7 +144,9 @@ def plan_schema(connection, model):
     if not table.uniqueness_verified:
         warnings.append("Single-column uniqueness has not been verified for this backend.")
 
-    if table.indexes:
+    # SQLite's automatic single-column UNIQUE indexes are already validated
+    # through inspect_table(). Preserve review for other index declarations.
+    if any(not index.startswith("sqlite_autoindex_") for index in table.indexes):
         warnings.append("Existing indexes require manual review; model index declarations are not supported.")
 
     if connection.dialect == "sqlite" and not table.constraints_verified:
@@ -242,7 +242,11 @@ def plan_schema(connection, model):
             elif expected_default is not None:
                 warnings.append(f"Database-side default on {name} requires backend-specific equivalence review.")
         elif observed.default_sql is not None:
-            warnings.append(f"Database-side default on {name} requires manual review.")
+            if connection.dialect == "sqlite":
+                changes.append(SchemaChange("default_mismatch", name,
+                                            "Unexpected database-side default"))
+            else:
+                warnings.append(f"Database-side default on {name} requires manual review.")
 
     for name in sorted(actual.keys() - model.__columns__.keys()):
         changes.append(SchemaChange("extra_column", name, "Existing column is not declared by the model"))

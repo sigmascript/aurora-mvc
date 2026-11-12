@@ -18,7 +18,7 @@ class CLIHelpTests(unittest.TestCase):
     def test_root_help_uses_canonical_groups(self):
         output = self.capture('-h')
         self.assertIn('{new,app,controller,view,model,db,run}', output)
-        self.assertIn('db                  Inspect databases', output)
+        self.assertIn('db                  Check and manage your project databases', output)
 
         for old in ('create-app', 'add-app', 'list-apps', 'show-app', 'create-controller', 'create-view'):
             self.assertNotIn(old, output)

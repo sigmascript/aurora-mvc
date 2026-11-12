@@ -39,6 +39,52 @@ from ._cli_scaffolding import (
 )
 
 
+def _database_failure(exc, args, action):
+    """Explain project-model failures without leaking database URLs or credentials.
+
+    Only a traceback frame within the configured project is eligible for a
+    source location. Database/driver exception text is deliberately hidden.
+    """
+    import traceback
+
+    project = Path(getattr(args, "config", "aurora_databases.json")).resolve().parent
+    frames = traceback.extract_tb(exc.__traceback__)
+    location = None
+    for frame in reversed(frames):
+        candidate = Path(frame.filename).resolve()
+        if candidate.suffix == ".py" and candidate.is_relative_to(project):
+            # Ignore bundled Aurora source when project and repository coincide.
+            if "aurora" not in candidate.relative_to(project).parts[:1]:
+                location = (candidate.relative_to(project), frame.lineno)
+                break
+
+    if isinstance(exc, SyntaxError) and exc.filename:
+        candidate = Path(exc.filename).resolve()
+        if candidate.is_relative_to(project) and candidate.suffix == ".py":
+            location = (candidate.relative_to(project), exc.lineno)
+
+    if location is not None:
+        source, line = location
+        if isinstance(exc, NameError) and isinstance(getattr(exc, "name", None), str):
+            name = exc.name
+            if name.isidentifier():
+                hint = (" Use unique=True for a unique column." if name == "unique" else
+                        " Check that this name is defined or imported.")
+                return (f"aurora: Cannot load model in {source}:{line}: "
+                        f"name '{name}' is not defined.{hint}\n")
+        if isinstance(exc, SyntaxError):
+            return f"aurora: Invalid Python syntax in model {source}:{line}; check the declaration.\n"
+        return (f"aurora: Cannot load project model in {source}:{line} "
+                f"({type(exc).__name__}). Check this model's declarations and imports.\n")
+
+    if isinstance(exc, (ValueError, PermissionError)):
+        # Do not echo arbitrary exception text: URLs and credentials may be embedded.
+        return (f"aurora: Database {action} refused ({type(exc).__name__}). "
+                "Check model declarations, database settings, and supported operations.\n")
+    return (f"aurora: Database {action} failed ({type(exc).__name__}). "
+            "Check your database connection and model definitions. No automatic retry was attempted.\n")
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the Aurora CLI and return its process exit status.
 
@@ -119,59 +165,77 @@ def main(argv: list[str] | None = None) -> int:
             registered.add_argument("--models-config", default="aurora_models.json")
 
     # Database commands use explicit safety gates; planning remains read-only.
-    db_group = sub.add_parser("db", help="Inspect databases and run guarded AuroraSQL operations")
-    db_group.description = "Database commands: init, plan, migrate, backup, restore, history."
-    db_group.epilog = "Normal workflow: aurora db init; aurora db plan; aurora db migrate; aurora db history"
-    db_actions = db_group.add_subparsers(dest="action", required=True)
+    db_group = sub.add_parser("db", help="Check and manage your project databases")
+    db_group.description = "Database commands: check, init, migrate, backup, restore, history."
+    db_group.epilog = "Normal workflow: aurora db check; aurora db init; aurora db migrate; aurora db history"
+    db_actions = db_group.add_subparsers(
+        dest="action", required=True,
+        metavar="{check,init,migrate,backup,restore,history}",
+    )
 
-    for verb in ("plan", "history"):
-        command = db_actions.add_parser(verb, help=(
-            "Read applied migration history" if verb == "history"
-            else "Inspect schema, plan changes, and report safety warnings (read-only)"))
-        command.add_argument("--config", default="aurora_databases.json")
-        command.add_argument("--database", default="default")
+    # Ordinary database inspection uses project conventions, not caller-supplied
+    # model manifests or configuration files. The historical `plan` parser
+    # remains isolated for existing review/automation callers.
+    check = db_actions.add_parser(
+        "check", help="Check database setup and model changes without making changes",
+    )
+    check.add_argument("--database", default="default", help="Database name from your project settings")
+    check.set_defaults(config="aurora_databases.json", models_config="aurora_models.json",
+                       model=[], format="text", check=False, explain=False)
 
-        if verb == "plan":
-            command.add_argument("--model", action="append", default=[], metavar="MODULE:CLASS", help=argparse.SUPPRESS)
-            command.add_argument("--models-config", default="aurora_models.json")
-            command.add_argument("--explain", action="store_true")
-            command.add_argument("--format", choices=("text", "json"), default="text")
-            command.add_argument("--check", action="store_true", help=argparse.SUPPRESS)
-            command.add_argument("--review-before", help="Existing before schema snapshot JSON")
-            command.add_argument("--review-after", help="Existing after schema snapshot JSON")
-            command.add_argument("--review-id", help="Migration review identifier")
-            command.add_argument("--review-out", help="New non-executable review JSON destination")
-            command.add_argument("--review-ack", help="Exact optional reviewed SHA-256 acknowledgement")
-        else:
-            command.add_argument("--history-file", help="Optional legacy history SQLite file")
-            command.add_argument("--intents", action="store_true", help="Read guarded SQLite intent journal v2 instead of earlier history")
-            command.add_argument("--verify-models", action="store_true", help="Verify supported migration history against discovered models and physical schema")
-            command.add_argument("--models-config", default="aurora_models.json")
-            command.add_argument("--format", choices=("text", "json"), default="text")
+    plan = db_actions.add_parser("plan", help=argparse.SUPPRESS)
+    plan.add_argument("--config", default="aurora_databases.json")
+    plan.add_argument("--database", default="default")
+    plan.add_argument("--model", action="append", default=[], metavar="MODULE:CLASS", help=argparse.SUPPRESS)
+    plan.add_argument("--models-config", default="aurora_models.json")
+    plan.add_argument("--explain", action="store_true", help=argparse.SUPPRESS)
+    plan.add_argument("--format", choices=("text", "json"), default="text")
+    plan.add_argument("--check", action="store_true", help=argparse.SUPPRESS)
+    plan.add_argument("--review-before")
+    plan.add_argument("--review-after")
+    plan.add_argument("--review-id")
+    plan.add_argument("--review-out")
+    plan.add_argument("--review-ack")
 
-    for verb in ("backup", "restore"):
-        command = db_actions.add_parser(verb, help=("Create a verified supported database backup" if verb == "backup" else "Inspect recovery options (restore execution unavailable)"))
-        command.add_argument("--config", default="aurora_databases.json")
-        command.add_argument("--database", default="default")
+    history = db_actions.add_parser("history", help="Show recorded database changes")
+    history.add_argument("--database", default="default",
+                         help="Database name from your project settings")
+    history.set_defaults(config="aurora_databases.json", models_config="aurora_models.json",
+                         history_file=None, intents=False, verify_models=False, format="text")
 
-        if verb == "backup":
-            command.add_argument("--to", help="New backup destination; never overwrites")
-            command.add_argument("--login-path", help="MySQL client login-path profile (required for MySQL backup)")
-        else:
-            command.add_argument("--from", dest="source", required=True, help="Backup source path (restore execution currently unavailable)")
-            command.add_argument("--check-only", action="store_true", help="Reserved for future guarded recovery; restore currently unavailable")
-            command.add_argument("--login-path", help="Reserved legacy option; restore currently unavailable")
-            command.add_argument("--staging-database", help="Reserved for future recovery; restore currently unavailable")
-            command.add_argument("--staging-login-path", help="Reserved for future recovery; restore currently unavailable")
-            command.add_argument("--staging-only", action="store_true", help="Reserved for future recovery; restore currently unavailable")
+    # Keep the historical alias parseable without making it a seventh public
+    # command. The documented commands are the six shown in the metavar.
+    db_actions._choices_actions = [choice for choice in db_actions._choices_actions
+                                   if choice.dest != "plan"]
+
+    backup = db_actions.add_parser(
+        "backup", help="Create a verified database backup without overwriting files",
+        description=("Back up the selected database to a new file. Existing backups "
+                     "are never overwritten. MySQL on Windows uses a configured login-path."),
+    )
+    backup.add_argument("--database", default="default", help="Database name from project settings")
+    backup.add_argument("--to", required=True, help="New backup file path")
+    backup.add_argument("--login-path", help="MySQL authentication profile (Windows)")
+    backup.set_defaults(config="aurora_databases.json")
+
+    restore = db_actions.add_parser(
+        "restore", help="Restore a verified SQLite backup into an absent database",
+        description=("Restore a verified SQLite backup to a database file that does not exist. "
+                     "Existing databases are never overwritten. "
+                     "The matching migration snapshots must already be present."),
+    )
+    restore.add_argument("--database", default="default", help="Database name from project settings")
+    restore.add_argument("--from", dest="source", required=True, help="Backup file path")
+    restore.set_defaults(config="aurora_databases.json")
 
     init = db_actions.add_parser(
         "init",
-        help="Create selected tables in an empty supported database (writes once)",
+        help="Set up database tables for your models",
         description=(
-            "Initialize an empty supported database from discovered Aurora models. "
-            "If every selected table exists, report already initialized without modifying the database. "
-            "Refuse partial or unrelated schemas; this command never migrates tables."
+            "Set up the tables defined by your models. "
+            "If the database is already initialized, nothing changes. "
+            "If existing tables conflict with your models, Aurora stops without making changes. "
+            "Use migrate to update existing tables."
         ),
         epilog=(
             "Examples:\n"
@@ -181,51 +245,40 @@ def main(argv: list[str] | None = None) -> int:
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    init.add_argument("--approve", help="Exact reviewed AuroraSQL create approval digest")
-    init.add_argument("--confirm", help="Must be APPLY for guarded AuroraSQL initialization")
-    init.add_argument("--title", help="Human-readable initial migration title")
-    init.add_argument("--check", action="store_true",
-                      help="AuroraSQL read-only initialization preflight; no database writes")
-    init.add_argument("--config", default="aurora_databases.json", help="Database configuration JSON path")
-    init.add_argument("--database", default="default", help="Configured database alias")
+    init.add_argument("--approve", help=argparse.SUPPRESS)
+    init.add_argument("--confirm", help="Confirm initialization with yes or y")
+    init.add_argument("--title", help="Name for this initialization")
+    init.add_argument("--check", action="store_true", help=argparse.SUPPRESS)
+    init.set_defaults(config="aurora_databases.json")
+    init.add_argument("--database", default="default", help="Database name from your project settings")
     init.add_argument("--model", action="append", default=[], metavar="MODULE:CLASS", help=argparse.SUPPRESS)
-    init.add_argument("--models-config", default="aurora_models.json", help="Explicit model manifest JSON path")
-    sync = db_actions.add_parser('migrate', help='Review and safely apply supported database schema changes')
-    sync.add_argument('--config', default='aurora_databases.json', help='Database connection configuration JSON path')
-    sync.add_argument('-c', '--changes', help='Validated single-table schema-operation JSON (guarded SQLite execution)')
-    sync.add_argument('--database', default='default', help='Configured database alias (default: default)')
-    sync.add_argument('--model', action='append', metavar='MODULE:CLASS', help=argparse.SUPPRESS)
-    sync.add_argument('--models-config', default='aurora_models.json', help='Explicit project model manifest JSON path')
-    # Retain legacy preview flags for existing callers; the canonical
-    # inspection and CI workflow is now `aurora db plan`.
-    sync.add_argument('--explain', action='store_true', help=argparse.SUPPRESS)
-    sync.add_argument('--format', choices=('text', 'json'), default='text', help=argparse.SUPPRESS)
-    sync.add_argument('--dry-run', action='store_true', help=argparse.SUPPRESS)
-    sync.add_argument('--check', action='store_true', help=argparse.SUPPRESS)
-    sync.add_argument('--approve', help='Reviewed SHA-256 digest; APPLY still required')
-    sync.add_argument('--review-file', help='Existing, validated AuroraSQL migration review JSON')
-    sync.add_argument('--name', help='New migration review filename stem (required to apply)')
-    sync.add_argument('--output-dir', default='migrations', help='Existing review directory (default: migrations)')
-    sync.add_argument('--backup', help='New backup filename in an existing directory (required to apply)')
-    sync.add_argument('--login-path', help=argparse.SUPPRESS)
-    sync.add_argument('--schema', help='Exact MySQL schema (required for MySQL)')
-    sync.add_argument('--table', help='One MySQL target table')
-    sync.add_argument('--column', help='One nullable MySQL column; omit for CREATE TABLE')
-    sync.add_argument('--apply', action='store_true', help='Explicit MySQL DDL execution only')
-    sync.add_argument('--approve-review', help='Exact MySQL review SHA-256')
-    sync.add_argument('--approve-sql', help='Exact MySQL SQL SHA-256')
-    sync.add_argument('--confirm', help='Must be APPLY for MySQL execution')
-    sync.add_argument('--title', help='Human-readable migration title (default: Untitled)')
+    init.set_defaults(models_config="aurora_models.json")
+    sync = db_actions.add_parser('migrate', help='Apply supported model and schema changes')
+    sync.add_argument('-c', '--change', dest='changes',
+                      help='JSON file describing specific schema changes')
+    sync.add_argument('--database', default='default', help='Database name from your project settings')
+    sync.set_defaults(
+        model=None, config='aurora_databases.json',
+        models_config='aurora_models.json', explain=False, format='text',
+        dry_run=False, check=False,
+    )
+    # The public migration interface is intentionally small. Historical
+    # execution adapters still inspect these values, but they cannot be
+    # supplied from the CLI. Their safety checks remain in the executors.
+    sync.set_defaults(
+        approve=None, review_file=None, name=None, output_dir="migrations",
+        backup=None, schema=None, table=None, column=None, apply=False,
+        approve_review=None, approve_sql=None, login_path=None,
+    )
+    sync.add_argument('--confirm', help='Confirm migration with yes or y')
+    sync.add_argument('--title', help='Name for this migration (optional)')
 
     # Keep backend-specific limitations visible without implying universal support.
     sync.description = (
-        "Use 'aurora db plan' to inspect changes and assess safety. "
-        "This command reviews and applies only supported migrations after "
-        "the required approval, backup and backend-specific checks. "
-        "MySQL/PostgreSQL support repeated guarded, reviewed successors "
-        "on verified migration history; unsupported, ambiguous and "
-        "destructive changes are refused. Server JSON schema operations "
-        "are not executable."
+        "Update your database to match supported model changes, or use "
+        "-c/--change to provide a JSON changes file. "
+        "Aurora checks the database before making changes and asks for confirmation. "
+        "Unsupported or unsafe changes are refused."
     )
 
     # Destructive operations remain deliberately unavailable.
@@ -247,7 +300,7 @@ def main(argv: list[str] | None = None) -> int:
     # Restrict this to commands that load project models; help and read-only
     # database listing/inspection do not need to change import resolution.
     if args.command == "db" and args.action in (
-        "init", "plan", "migrate"
+        "init", "check", "plan", "migrate"
     ):
         project_dir = str(Path.cwd().resolve())
 
@@ -256,7 +309,28 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "db" and args.action in ("backup", "restore") and args.backend == "aurorasql":
         if args.action == "restore":
-            parser.exit(1, "aurora: AuroraSQL restore remains disabled pending recovery acceptance; refusing legacy fallback.\n")
+            from aurora.database.cli_plan import _load_config
+            from urllib.parse import urlsplit
+            try:
+                config, _ = _load_config(args.config)
+                if urlsplit(config.resolve(args.database)).scheme not in ("sqlite", "sqlite+pysqlite"):
+                    raise ValueError("Server database restore is not available")
+                from aurora.database.cli_empty_restore import restore_empty_sqlite
+                return restore_empty_sqlite(args.config, args.database, args.source)
+            except FileExistsError:
+                parser.exit(1, "aurora: Target database already exists; restore will not overwrite it.\n")
+            except Exception as exc:
+                # Do not echo raw connection URLs or filesystem-backed driver errors.
+                message = str(exc)
+                safe = ("Restore supports only a configured SQLite file", "In-memory databases cannot be restored",
+                        "Invalid SQLite database path", "Restore source and destination must be different",
+                        "Target directory must already exist", "Backup must be an existing regular SQLite file",
+                        "Database has SQLite journal/WAL files; restore refused",
+                        "Backup failed SQLite integrity verification", "Backup contains foreign-key violations",
+                        "Restore in production requires separate approval")
+                if message not in safe:
+                    message = "Restore refused: verify the backup, migration snapshots, and empty destination."
+                parser.exit(1, f"aurora: {message}\n")
 
         from aurora.database.cli_plan import _load_config
         from urllib.parse import urlsplit
@@ -289,25 +363,43 @@ def main(argv: list[str] | None = None) -> int:
 
             from aurora.database.cli_backup import run_backup
             return run_backup(args)
+        except FileExistsError:
+            parser.exit(1, "aurora: Backup destination already exists. Choose a new filename; no files were overwritten.\n")
+        except PermissionError:
+            parser.exit(1, "aurora: Backup permission denied. Check source access and destination directory permissions.\n")
+        except (ValueError, OSError) as exc:
+            # Report known-safe guidance, never raw backend exceptions: connection
+            # URLs and client diagnostics can contain credentials.
+            detail = str(exc).lower()
+            if "login-path" in detail:
+                message = "MySQL backup requires a configured --login-path on Windows."
+            elif "source file does not exist" in detail:
+                message = "SQLite database file does not exist. Check the selected database."
+            elif "destination parent directory" in detail:
+                message = "Backup destination directory does not exist. Create it first."
+            elif "destination must end in .sqlite3" in detail:
+                message = "SQLite backup filename must end in .sqlite3."
+            elif "new .dump" in detail:
+                message = "PostgreSQL backup requires a new .dump file in an existing directory."
+            elif "integrity check failed" in detail:
+                message = "SQLite integrity check failed; backup was not completed."
+            else:
+                message = "Backup could not be completed. Check database settings, access, and destination."
+            parser.exit(1, f"aurora: {message}\n")
+        except RuntimeError as exc:
+            detail = str(exc).lower()
+            if "migration" in detail or "snapshot" in detail or "database schema differs" in detail:
+                parser.exit(1, "aurora: Backup refused: migration history or snapshots are incomplete or inconsistent. Run 'aurora db check' and resolve the problem first.\n")
+            parser.exit(1, "aurora: Backup failed unexpectedly; inspect the database and destination.\n")
         except Exception:
-            parser.exit(1, "aurora: AuroraSQL backup refused; refusing legacy fallback; inspect source and destination manually.\n")
+            parser.exit(1, "aurora: Backup failed unexpectedly; no legacy fallback was attempted. Inspect the database and destination.\n")
 
     if args.command == "db" and args.action == "migrate" and args.backend == "aurorasql":
-        if args.title is not None and args.dry_run:
-            parser.exit(1, "aurora: --title is for migration execution only.\n")
-        # Validate read-only CLI contracts before attempting configuration or
-        # model imports. Never interpret a write flag as preview permission.
-        if args.check and not args.dry_run:
-            parser.exit(1, "aurora: --check requires --dry-run.\n")
-
-        if args.explain and not args.dry_run:
-            parser.exit(1, "aurora: --explain requires --dry-run.\n")
-
-        if args.format == "json" and not args.dry_run:
-            parser.exit(1, "aurora: --format json requires --dry-run.\n")
-
-        if args.dry_run and args.backup is not None:
-            parser.exit(1, "aurora: --backup cannot be combined with --dry-run.\n")
+        # Public migration has two reviewed paths: discovered model changes and
+        # one explicit JSON specification. Historical digest/review adapters
+        # remain internal and cannot be selected using obsolete CLI flags.
+        if args.confirm not in (None, "yes", "y"):
+            parser.exit(2, "aurora: --confirm accepts only yes or y.\n")
 
         if args.changes is not None:
             from aurora.database.cli_explicit_operations import run_explicit_operations
@@ -315,52 +407,21 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 return run_explicit_operations(args)
             except Exception:
-                parser.exit(1, "aurora: Explicit schema operation refused; inspect JSON, alias and schema; no database changes made.\n")
+                parser.exit(1, "aurora: Explicit schema operation refused; inspect JSON, alias and schema.\n")
 
-        if args.review_file:
-            from aurora.database.cli_migrate_reviewed import run_reviewed_migration
-
-            try:
-                return run_reviewed_migration(args)
-            except Exception:
-                parser.exit(1, "aurora: Reviewed AuroraSQL migration refused; no legacy fallback; inspect review, models, journal and database state.\n")
-
-        if args.apply or not args.dry_run:
-            from aurora.database.cli_model_migration import run_model_migration
-
-            try:
-                return run_model_migration(args)
-            except Exception:
-                parser.exit(1, "aurora: Model-driven migration refused; inspect approval, backup, models and native history.\n")
-
-        if args.approve or args.approve_review or args.approve_sql or args.confirm:
-            parser.exit(1, "aurora: Use --dry-run for preview or --apply with exact approval, confirmation and backup; refusing legacy fallback.\n")
-
-        if not args.explain and not args.check and args.backup is None:
-            from aurora.database.cli_model_migration import run_model_migration
-
-            try:
-                return run_model_migration(args)
-            except (RuntimeError, ValueError):
-                # An ordinary plan remains available when no eligible additive
-                # review exists. Never convert a failed write into this path.
-                pass
-
-        from types import SimpleNamespace
-        from aurora.database.cli_plan import run_plan
-        plan_args = SimpleNamespace(config=args.config, database=args.database,
-                                    model=args.model or [], models_config=args.models_config,
-                                    format=args.format, check=args.check)
+        from aurora.database.cli_model_migration import run_model_migration
 
         try:
-            return run_plan(plan_args)
-        except Exception:
-            parser.exit(1, "aurora: AuroraSQL migration preview refused; inspect configuration and schema manually.\n")
+            return run_model_migration(args)
+        except Exception as exc:
+            diagnostic = _database_failure(exc, args, "migration")
+            parser.exit(1, "aurora: Model-driven migration refused. " + diagnostic.removeprefix("aurora: "))
 
-    if args.command == "db" and args.action == "plan" and args.backend == "aurorasql":
-        review_values = (args.review_before, args.review_after, args.review_id, args.review_out)
+    if args.command == "db" and args.action in ("check", "plan") and args.backend == "aurorasql":
+        review_values = (getattr(args, "review_before", None), getattr(args, "review_after", None),
+                         getattr(args, "review_id", None), getattr(args, "review_out", None))
 
-        if any(value is not None for value in review_values) or args.review_ack is not None:
+        if any(value is not None for value in review_values) or getattr(args, "review_ack", None) is not None:
             if args.check or args.explain or args.model or args.format != "text":
                 parser.exit(1, "aurora: Review export cannot be combined with schema planning flags.\n")
 
@@ -374,12 +435,13 @@ def main(argv: list[str] | None = None) -> int:
         from aurora.database.cli_plan import run_plan
 
         try:
+            if args.action == "check":
+                from aurora.database.cli_plan import run_check
+                return run_check(args)
+
             return run_plan(args)
-        except (ValueError, TypeError, OSError, ImportError, AttributeError) as exc:
-            # Do not expose database URLs, passwords, or driver error details.
-            parser.exit(1, f"aurora: AuroraSQL plan refused: {type(exc).__name__}; check configuration, model references, and database access.\n")
-        except Exception:
-            parser.exit(1, "aurora: AuroraSQL plan failed; inspect database access and schema manually.\n")
+        except Exception as exc:
+            parser.exit(1, _database_failure(exc, args, "check"))
 
     if args.command == "db" and args.action == "history" and args.backend == "aurorasql":
         if args.history_file:
@@ -418,8 +480,12 @@ def main(argv: list[str] | None = None) -> int:
                 parser.exit(1, "aurora: Refusing AuroraSQL initialization in production.\n")
 
             return run_init_apply(args)
-        except Exception:
-            parser.exit(1, "aurora: AuroraSQL initialization preflight refused; inspect configuration and schema manually.\n")
+        except ValueError as exc:
+            if str(exc) == "At least one model is required":
+                parser.exit(1, "aurora: No models found. Add a model with 'aurora model add NAME'.\n")
+            parser.exit(1, _database_failure(exc, args, "initialization"))
+        except Exception as exc:
+            parser.exit(1, _database_failure(exc, args, "initialization"))
 
     if args.command == "model" and args.action in ("register", "registered"):
         from aurora.database.cli_registration import register_model, registered_models

@@ -11,6 +11,10 @@ from .review_artifacts import create_review
 from .snapshots import schema_snapshot
 
 
+class NoModelChanges(ValueError):
+    """The verified SQLite schema already matches the selected models."""
+
+
 def create_sqlite_model_review(connection, models, alias="default"):
     """Build an additive review; refuse uncertain history or structural drift.
 
@@ -88,6 +92,6 @@ def create_sqlite_model_review(connection, models, alias="default"):
     review = create_review(before, after, migration_id=migration_id)
 
     if not review["plan"]["operations"]:
-        raise ValueError("There are no supported model changes to migrate")
+        raise NoModelChanges("There are no supported model changes to migrate")
 
     return review

@@ -1,20 +1,21 @@
 """Model-driven schema review and guarded SQLite execution."""
 
 import hmac
+from contextlib import closing
 import json
 import os
 from pathlib import Path
-import secrets
 import sqlite3
 import sys
 from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 from .cli_backup import run_backup
+from .schema_records import prepare_schema_record, write_schema_record
 from .cli_plan import _existing_sqlite_path, _load_config, _select_models
 from .core import Connection
 from .migration_titles import migration_title
-from .model_review import create_sqlite_model_review
+from .model_review import NoModelChanges, create_sqlite_model_review
 from .model_table_rename import sqlite_model_rename_proposal
 from .sqlite_column_edit import sqlite_column_edit_proposal, execute_sqlite_column_edit
 from .sqlite_additive_migration import execute_sqlite_additive_migration
@@ -39,6 +40,12 @@ def run_model_migration(args):
         from .cli_server_model_migration import run_server_model_migration
         return run_server_model_migration(args)
 
+    simple_confirm = args.confirm in ("yes", "y")
+
+    if simple_confirm and (args.apply or args.approve or args.backup or args.dry_run or
+                           args.check or args.explain or args.format != "text"):
+        raise PermissionError("Simple confirmation cannot be combined with advanced execution options")
+
     if getattr(args, "login_path", None) is not None:
         raise ValueError("MySQL login profiles cannot be used for SQLite model migrations")
 
@@ -53,9 +60,9 @@ def run_model_migration(args):
         if (args.confirm != "APPLY" or not args.approve or not args.backup or
                 args.check or args.explain or args.format != "text"):
             raise PermissionError("Advanced execution requires exact approval and backup")
-    elif (args.approve or args.confirm or args.backup or args.check or args.explain or
-          args.format != "text" or not sys.stdin.isatty()):
-        raise PermissionError("Interactive migration requires a terminal; automation needs reviewed approval")
+    elif not simple_confirm and (args.approve or args.confirm or args.backup or args.check or
+                                 args.explain or args.format != "text"):
+        raise PermissionError("Interactive migration cannot contain advanced execution options")
 
     refs, models = _select_models(args, root)
 
@@ -66,6 +73,76 @@ def run_model_migration(args):
         raise ValueError("Model-driven execution currently supports SQLite only")
 
     db_file = _existing_sqlite_path(url, root)
+    prepare_schema_record(root, db_file, models)
+    from .sqlite_forward_history import has_forward_history, migrate_additions, read_history
+    with closing(sqlite3.connect(db_file.as_uri() + "?mode=ro", uri=True)) as observed:
+        forward = has_forward_history(observed)
+    if not forward and not args.dry_run and not args.apply:
+        # An old alpha database with a complete verified snapshot chain can be
+        # converted on explicit migration approval, without touching app rows.
+        from .sqlite_forward_history import legacy_initial_review, convert_legacy_initial
+        with closing(sqlite3.connect(db_file.as_uri() + "?mode=ro", uri=True)) as observed:
+            legacy = legacy_initial_review(observed, root, db_file, models, args.database)
+        if legacy is not None:
+            if os.environ.get("AURORA_ENV", "development").lower() == "production":
+                raise PermissionError("History conversion is disabled in production")
+            print(f"Database: {args.database} (SQLite)")
+            print("  Replace verified alpha history with migrations table")
+            print(f"  Keep {len(legacy)} original snapshot(s); latest: {legacy[-1][1]}")
+            if not simple_confirm:
+                if not sys.stdin.isatty():
+                    raise PermissionError("History conversion needs confirmation; use --confirm yes")
+                if input("Convert migration history? [y/N]: ").strip().lower() not in ("y", "yes"):
+                    print("Conversion cancelled; database unchanged.")
+                    return 0
+            with closing(sqlite3.connect(db_file.as_uri() + "?mode=rw", uri=True,
+                                         isolation_level=None, timeout=5)) as writing:
+                converted = convert_legacy_initial(writing, root, db_file, models, args.database)
+            print(f"Migration history converted. Original snapshot: {converted}")
+            return 0
+
+    if forward:
+        if args.dry_run or args.apply or args.backup:
+            raise ValueError("Advanced migration options are not supported by forward-only SQLite history")
+        if os.environ.get("AURORA_ENV", "development").lower() == "production":
+            raise PermissionError("Model migration is disabled in production")
+        from .init_validation import validate_init_models
+        models = validate_init_models(models, dialect="sqlite")
+        # Inspection and approval precede every schema-writing connection.
+        from .planning import plan_schema
+        with Connection(sqlite3.connect(db_file.as_uri() + "?mode=ro", uri=True), "sqlite") as checked:
+            _, prior = read_history(checked._raw, root, db_file)
+            prior_tables = {entry["name"] for entry in prior["models"]}
+            if prior_tables - {model.__table_name__ for model in models}:
+                raise ValueError("Removing a model table requires separate explicit review")
+            plans = [plan_schema(checked, model) for model in models]
+            changes = [change for plan in plans for change in plan.changes]
+            if any(plan.warnings and plan.exists for plan in plans):
+                raise ValueError("Unsupported schema drift; migration refused")
+            if any(change.kind not in ("missing_column", "create_table") for change in changes):
+                raise ValueError("Unsupported model change; migration refused")
+        if not changes:
+            print(f"Database: {args.database} (SQLite) is already up to date; no migration needed.")
+            return 0
+        print(f"AuroraSQL migration — {args.database} (SQLite)")
+        for plan in plans:
+            for change in plan.changes:
+                print(f"  {change.kind}: {plan.table}.{change.column or '*'}")
+        if not simple_confirm:
+            if not sys.stdin.isatty():
+                raise PermissionError("Confirmation required; use --confirm yes")
+            if input("Apply these changes? [y/N]: ").strip().lower() not in ("y", "yes"):
+                print("Migration cancelled; no database changes made.")
+                return 0
+        title = migration_title(args.title or "Untitled", "Untitled")
+        with closing(sqlite3.connect(db_file.as_uri() + "?mode=rw", uri=True,
+                                     isolation_level=None, timeout=5)) as writing:
+            result = migrate_additions(writing, root, db_file, models, title)
+        if result is None:
+            print("No schema changes needed.")
+        else:
+            print(f"Migration applied. Schema snapshot: {result}")
+        return 0
 
     with Connection(sqlite3.connect(db_file.as_uri() + "?mode=ro", uri=True,
                                     isolation_level=None), "sqlite") as connection:
@@ -73,8 +150,15 @@ def run_model_migration(args):
         edit = None if rename is not None else sqlite_column_edit_proposal(
             connection, models, args.database, db_file,
         )
-        review = (create_sqlite_model_review(connection, models, args.database)
-                  if rename is None and edit is None else None)
+        try:
+            review = (create_sqlite_model_review(connection, models, args.database)
+                      if rename is None and edit is None else None)
+        except NoModelChanges:
+            print(f"Database: {args.database} (SQLite) is already up to date; no migration needed.")
+            return 0
+
+    if not args.apply and not simple_confirm and not args.dry_run and not sys.stdin.isatty():
+        raise PermissionError("Interactive migration requires a terminal; use --confirm yes for approved changes")
 
     if edit is not None:
         document, digest, _, statements, _ = edit
@@ -108,20 +192,22 @@ def run_model_migration(args):
             for operation in document["operations"]:
                 print(f"  {operation['kind']}: {operation['table']}.{operation['column']}")
 
-            if input("Apply these reviewed column edits? [y/N]: ").strip().lower() != "y":
+            if not simple_confirm and input("Apply these reviewed column edits? [y/N]: ").strip().lower() != "y":
                 print("Migration cancelled; no database changes made.")
                 return 0
 
             approval = digest
-            backup = str(Path(str(db_file) + ".before-" + secrets.token_hex(8) + ".sqlite3"))
+            backup = None
 
         if not isinstance(approval, str) or not hmac.compare_digest(approval, digest):
             raise PermissionError("Exact reviewed column-edit fingerprint required")
 
         from .cli_explicit_operations import _rehearse_sqlite
         _rehearse_sqlite(db_file, statements)
-        title = migration_title(getattr(args, "title", None), "Untitled")
-        run_backup(SimpleNamespace(config=args.config, database=args.database, to=backup))
+        title = migration_title(getattr(args, "title", None) if not simple_confirm else
+                                (args.title if args.title is not None else "Untitled"), "Untitled")
+        if backup:
+            run_backup(SimpleNamespace(config=args.config, database=args.database, to=backup))
         raw = sqlite3.connect(db_file.as_uri() + "?mode=rw", uri=True,
                               isolation_level=None, timeout=5)
 
@@ -132,7 +218,14 @@ def run_model_migration(args):
         finally:
             raw.close()
 
-        print(f"Applied reviewed SQLite column edit {operation_id}; backup retained at {backup}.")
+        try:
+            record = write_schema_record(root, db_file, models, title)
+        except Exception:
+            print("Database changed, but schema snapshot was not saved. "
+                  "Inspect history; do not retry this migration blindly.")
+            return 4
+
+        print(f"Applied SQLite column edit {operation_id}; schema snapshot: {record}")
         return 0
 
     if rename is not None:
@@ -163,20 +256,35 @@ def run_model_migration(args):
             print(f"AuroraSQL migration — {args.database} (SQLite)")
             print(f"  rename table: {operation['table']} -> {operation['new_table']}")
 
-            if input("Apply this reviewed rename? [y/N]: ").strip().lower() != "y":
+            if not simple_confirm and input("Apply this reviewed rename? [y/N]: ").strip().lower() != "y":
                 print("Migration cancelled; no database changes made.")
                 return 0
 
             approval = digest
-            backup = str(Path(str(db_file) + ".before-" + secrets.token_hex(8) + ".sqlite3"))
+            backup = None
 
         from .cli_explicit_operations import _apply_sqlite_operations
         executor_args = SimpleNamespace(**vars(args))
         executor_args.approve = approval
         executor_args.confirm = "APPLY"
         executor_args.backup = backup
-        return _apply_sqlite_operations(executor_args, document, db_file, digest,
-                                        model_mapping=mapping)
+        executor_args._simple_confirm = True
+        if simple_confirm and executor_args.title is None:
+            executor_args.title = "Untitled"
+        result = _apply_sqlite_operations(executor_args, document, db_file, digest,
+                                          model_mapping=mapping)
+
+        if result == 0:
+            try:
+                record = write_schema_record(root, db_file, models, executor_args.title)
+            except Exception:
+                print("Database changed, but schema snapshot was not saved. "
+                      "Inspect history; do not retry this migration blindly.")
+                return 4
+
+            print(f"Schema snapshot: {record}")
+
+        return result
 
     if args.dry_run:
         report = {"database_alias": args.database, "status": "READY_FOR_REVIEW",
@@ -213,19 +321,25 @@ def run_model_migration(args):
 
             print(f"  {operation['kind']}: {target}")
 
-        if input("Apply these reviewed changes? [y/N]: ").strip().lower() != "y":
+        if not simple_confirm and input("Apply these reviewed changes? [y/N]: ").strip().lower() != "y":
             print("Migration cancelled; no database changes made.")
             return 0
 
         approval = review["review_sha256"]
-        backup = str(Path(str(db_file) + ".before-" + secrets.token_hex(8) + ".sqlite3"))
+        backup = None
 
     if not isinstance(approval, str) or not hmac.compare_digest(
             approval, review["review_sha256"]):
         raise PermissionError("Exact reviewed model fingerprint is required")
 
-    title = migration_title(getattr(args, "title", None), "Untitled")
-    run_backup(SimpleNamespace(config=args.config, database=args.database, to=backup))
+    title_value = getattr(args, "title", None)
+
+    if simple_confirm and title_value is None:
+        title_value = "Untitled"
+
+    title = migration_title(title_value, "Untitled")
+    if backup:
+        run_backup(SimpleNamespace(config=args.config, database=args.database, to=backup))
 
     raw = sqlite3.connect(db_file.as_uri() + "?mode=rw", uri=True,
                           isolation_level=None, timeout=5)
@@ -239,6 +353,13 @@ def run_model_migration(args):
     finally:
         raw.close()
 
-    print(f"Applied reviewed model migration {result.migration_id} to {args.database}; "
-          f"backup retained at {backup}.")
+    try:
+        record = write_schema_record(root, db_file, models, title)
+    except Exception:
+        print("Database changed, but schema snapshot was not saved. "
+              "Inspect history; do not retry this migration blindly.")
+        return 4
+
+    print(f"Applied model migration {result.migration_id} to {args.database}; "
+          f"schema snapshot: {record}")
     return 0
