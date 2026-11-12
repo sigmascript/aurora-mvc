@@ -119,8 +119,16 @@ def run_model_migration(args):
             changes = [change for plan in plans for change in plan.changes]
             if any(plan.warnings and plan.exists for plan in plans):
                 raise ValueError("Unsupported schema drift; migration refused")
-            if any(change.kind not in ("missing_column", "create_table") for change in changes):
-                raise ValueError("Unsupported model change; migration refused")
+        edit = None
+        if changes and all(change.kind in ("type_mismatch", "nullability_mismatch", "default_mismatch")
+                           for change in changes):
+            with Connection(sqlite3.connect(db_file.as_uri() + "?mode=ro", uri=True), "sqlite") as checked:
+                edit = sqlite_column_edit_proposal(
+                    checked, models, args.database, db_file, forward=True,
+                )
+        if changes and edit is None and any(change.kind not in ("missing_column", "create_table")
+                                            for change in changes):
+            raise ValueError("Unsupported model change; database unchanged")
         if not changes:
             print(f"Database: {args.database} (SQLite) is already up to date; no migration needed.")
             return 0
@@ -137,7 +145,11 @@ def run_model_migration(args):
         title = migration_title(args.title or "Untitled", "Untitled")
         with closing(sqlite3.connect(db_file.as_uri() + "?mode=rw", uri=True,
                                      isolation_level=None, timeout=5)) as writing:
-            result = migrate_additions(writing, root, db_file, models, title)
+            if edit is not None:
+                from .sqlite_forward_history import migrate_column_edit
+                result = migrate_column_edit(writing, root, db_file, models, title, edit)
+            else:
+                result = migrate_additions(writing, root, db_file, models, title)
         if result is None:
             print("No schema changes needed.")
         else:

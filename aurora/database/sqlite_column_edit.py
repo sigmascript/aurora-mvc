@@ -43,17 +43,15 @@ def _compatible_type(old, new):
     return False
 
 
-def sqlite_column_edit_proposal(connection, models, alias, db_file):
+def sqlite_column_edit_proposal(connection, models, alias, db_file, *, forward=False):
     """Return a single ordinary-table edit or None when no such edit exists."""
-    timeline, _, _ = inspect_native_history(connection, alias)
-
-    if not timeline or not timeline[-1]["physical_history_consistent"]:
-        raise RuntimeError("Column editing requires verified native history")
-
     mapping = model_identity_map(models)
-
-    if mapping != timeline[-1]["model_tables"]:
-        return None
+    if not forward:
+        timeline, _, _ = inspect_native_history(connection, alias)
+        if not timeline or not timeline[-1]["physical_history_consistent"]:
+            raise RuntimeError("Column editing requires verified native history")
+        if mapping != timeline[-1]["model_tables"]:
+            return None
 
     target = None
     operations = []

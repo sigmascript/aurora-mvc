@@ -4,6 +4,8 @@ Never create SQLite files, history, migrations, or schema. The existing CLI
 planning never applies schema changes or creates databases.
 """
 import importlib
+import importlib.machinery
+import importlib.util
 import json
 import sqlite3
 import sys
@@ -120,6 +122,45 @@ def _manifest_path(args, project_root):
     return path if path.is_absolute() else Path(project_root) / path
 
 
+class _FreshModelLoader(importlib.machinery.SourceFileLoader):
+    """Execute current model source instead of trusting timestamp-only .pyc files."""
+
+    def get_code(self, fullname):
+        return self.source_to_code(self.get_data(self.path), self.path)
+
+
+def _import_project_model(module_name, root):
+    """Load a project's model from source, including same-second edits.
+
+    Only project-local Python files use this loader; installed/external model
+    modules retain normal Python import semantics. No cache files are written.
+    """
+    source = Path(root).joinpath(*module_name.split(".")).with_suffix(".py")
+    if (not source.is_file() or source.is_symlink() or
+            not source.resolve().is_relative_to(Path(root).resolve())):
+        return importlib.import_module(module_name)
+
+    parent, _, leaf = module_name.rpartition(".")
+    if parent:
+        importlib.import_module(parent)
+    loader = _FreshModelLoader(module_name, str(source))
+    spec = importlib.util.spec_from_file_location(module_name, source, loader=loader)
+    module = importlib.util.module_from_spec(spec)
+    previous = sys.modules.get(module_name)
+    sys.modules[module_name] = module
+    try:
+        loader.exec_module(module)
+    except BaseException:
+        if previous is None:
+            sys.modules.pop(module_name, None)
+        else:
+            sys.modules[module_name] = previous
+        raise
+    if parent:
+        setattr(sys.modules[parent], leaf, module)
+    return module
+
+
 def _select_models(args, project_root=None):
     # Validate references before importing developer models. An explicit
     # config determines the project root, not the shell's working directory.
@@ -142,7 +183,7 @@ def _select_models(args, project_root=None):
             # modules until its separately approved CLI retirement is complete.
             if not explicit_models and reference not in assigned_refs:
                 validate_model_source(root, module_name, class_name)
-            cls = getattr(importlib.import_module(module_name), class_name, None)
+            cls = getattr(_import_project_model(module_name, root), class_name, None)
 
             if not isinstance(cls, type) or not issubclass(cls, Model) or cls is Model:
                 raise ValueError("Reference is not an AuroraSQL model")

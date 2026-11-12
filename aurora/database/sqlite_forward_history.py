@@ -383,3 +383,47 @@ def convert_legacy_initial(raw, root, db_file, models, alias):
         raw.rollback()
         raise
     return proposal[-1][1]
+
+
+def migrate_column_edit(raw, root, db_file, models, title, proposal):
+    """Rebuild one ordinary table under the same forward-history transaction.
+
+    The proposal only admits compatible widening, validated defaults and
+    nullability changes without dependent indexes or foreign keys. Never
+    replay a proposal against an unverified or concurrently changed schema.
+    """
+    from .cli_explicit_operations import _catalog, _rehearse_sqlite
+    from .core import Connection
+    from .sqlite_column_edit import sqlite_column_edit_proposal
+
+    document, digest, _, statements, table = proposal
+    expected = _rehearse_sqlite(Path(db_file), statements)
+    raw.execute("PRAGMA foreign_keys=ON")
+    if raw.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
+        raise RuntimeError("SQLite foreign keys must be enabled")
+    snapshot = None
+    try:
+        raw.execute("BEGIN IMMEDIATE")
+        read_history(raw, root, db_file)
+        current = sqlite_column_edit_proposal(
+            Connection(raw, "sqlite"), models, "default", db_file, forward=True,
+        )
+        if current is None or current[1] != digest:
+            raise RuntimeError("Column-edit review is stale; run db check again")
+        before = raw.execute(f'SELECT COUNT(*) FROM {_quote(table, "sqlite")}').fetchone()[0]
+        for statement in statements:
+            raw.execute(statement)
+        if _catalog(raw) != expected:
+            raise RuntimeError("Migration result differs from the reviewed schema")
+        after = raw.execute(f'SELECT COUNT(*) FROM {_quote(table, "sqlite")}').fetchone()[0]
+        if before != after:
+            raise RuntimeError("Column edit unexpectedly changed the number of rows")
+        matches_models(raw, models)
+        snapshot = _new_record(raw, root, db_file, models, title)
+        raw.commit()
+    except BaseException:
+        raw.rollback()
+        if snapshot is not None:
+            snapshot.unlink(missing_ok=True)
+        raise
+    return snapshot
