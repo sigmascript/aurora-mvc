@@ -86,10 +86,7 @@ def _database_failure(exc, args, action):
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Run the Aurora CLI and return its process exit status.
-
-        Public command names and legacy aliases are preserved for compatibility."""
-    # Build the public command tree while retaining hidden legacy aliases.
+    """Run the canonical Aurora developer commands."""
     parser = argparse.ArgumentParser(prog="aurora", description="Aurora MVC developer tools")
 
     try:
@@ -108,25 +105,6 @@ def main(argv: list[str] | None = None) -> int:
     new.add_argument("--mvc", action="store_true", help="Create a minimal MVC project")
     new.add_argument("--modular", action="store_true", help="Create an MVC project with an apps/ directory")
 
-    # Legacy commands remain callable by existing projects and automation.
-    for command in ("create-app", "add-app"):
-        add = sub.add_parser(command, help=argparse.SUPPRESS)
-        add.add_argument("name")
-
-    sub.add_parser("list-apps", help=argparse.SUPPRESS)
-    show = sub.add_parser("show-app", help=argparse.SUPPRESS)
-    show.add_argument("name")
-
-    for command in ("create-controller", "create-view"):
-        scaffold = sub.add_parser(command, help=argparse.SUPPRESS)
-        scaffold.add_argument("app", help="Existing modular app name")
-        scaffold.add_argument("name", help="Controller class name or view name")
-
-    # Keep legacy command dispatch for compatibility, but omit it from public help.
-    sub._choices_actions[:] = [choice for choice in sub._choices_actions
-                               if choice.help != argparse.SUPPRESS]
-
-    # Canonical resource-first commands. Existing flat commands remain supported.
     app_group = sub.add_parser("app", help="Add, list, or inspect modular applications")
     app_actions = app_group.add_subparsers(dest="action", required=True)
     app_actions.add_parser("add", help="Add a modular application").add_argument("name", metavar="app", help="New modular application name")
@@ -152,19 +130,7 @@ def main(argv: list[str] | None = None) -> int:
 
             command.add_argument("--app", dest="app_option", metavar="APP", help="Target modular application")
 
-        if resource == "model":
-            # Existing alpha scripts may still use these until the dedicated
-            # database CLI transition migrates their callers. They are not
-            # part of the new public model lifecycle.
-            register = actions.add_parser("register", help=argparse.SUPPRESS)
-            register.add_argument("reference")
-            register.add_argument("--database", default="default")
-            register.add_argument("--models-config", default="aurora_models.json")
-            registered = actions.add_parser("registered", help=argparse.SUPPRESS)
-            registered.add_argument("--database", default="default")
-            registered.add_argument("--models-config", default="aurora_models.json")
-
-    # Database commands use explicit safety gates; planning remains read-only.
+    # Database commands use explicit safety gates; check is read-only.
     db_group = sub.add_parser("db", help="Check and manage your project databases")
     db_group.description = "Database commands: check, init, migrate, backup, restore, history."
     db_group.epilog = "Normal workflow: aurora db check; aurora db init; aurora db migrate; aurora db history"
@@ -173,9 +139,7 @@ def main(argv: list[str] | None = None) -> int:
         metavar="{check,init,migrate,backup,restore,history}",
     )
 
-    # Ordinary database inspection uses project conventions, not caller-supplied
-    # model manifests or configuration files. The historical `plan` parser
-    # remains isolated for existing review/automation callers.
+    # Ordinary checks use project conventions, not caller-supplied manifests.
     check = db_actions.add_parser(
         "check", help="Check database setup and model changes without making changes",
     )
@@ -183,30 +147,11 @@ def main(argv: list[str] | None = None) -> int:
     check.set_defaults(config="aurora_databases.json", models_config="aurora_models.json",
                        model=[], format="text", check=False, explain=False)
 
-    plan = db_actions.add_parser("plan", help=argparse.SUPPRESS)
-    plan.add_argument("--config", default="aurora_databases.json")
-    plan.add_argument("--database", default="default")
-    plan.add_argument("--model", action="append", default=[], metavar="MODULE:CLASS", help=argparse.SUPPRESS)
-    plan.add_argument("--models-config", default="aurora_models.json")
-    plan.add_argument("--explain", action="store_true", help=argparse.SUPPRESS)
-    plan.add_argument("--format", choices=("text", "json"), default="text")
-    plan.add_argument("--check", action="store_true", help=argparse.SUPPRESS)
-    plan.add_argument("--review-before")
-    plan.add_argument("--review-after")
-    plan.add_argument("--review-id")
-    plan.add_argument("--review-out")
-    plan.add_argument("--review-ack")
-
     history = db_actions.add_parser("history", help="Show recorded database changes")
     history.add_argument("--database", default="default",
                          help="Database name from your project settings")
     history.set_defaults(config="aurora_databases.json", models_config="aurora_models.json",
                          history_file=None, intents=False, verify_models=False, format="text")
-
-    # Keep the historical alias parseable without making it a seventh public
-    # command. The documented commands are the six shown in the metavar.
-    db_actions._choices_actions = [choice for choice in db_actions._choices_actions
-                                   if choice.dest != "plan"]
 
     backup = db_actions.add_parser(
         "backup", help="Create a verified database backup without overwriting files",
@@ -300,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
     # Restrict this to commands that load project models; help and read-only
     # database listing/inspection do not need to change import resolution.
     if args.command == "db" and args.action in (
-        "init", "check", "plan", "migrate"
+        "init", "check", "migrate"
     ):
         project_dir = str(Path.cwd().resolve())
 
@@ -422,29 +367,10 @@ def main(argv: list[str] | None = None) -> int:
             diagnostic = _database_failure(exc, args, "migration")
             parser.exit(1, "aurora: Model-driven migration refused. " + diagnostic.removeprefix("aurora: "))
 
-    if args.command == "db" and args.action in ("check", "plan") and args.backend == "aurorasql":
-        review_values = (getattr(args, "review_before", None), getattr(args, "review_after", None),
-                         getattr(args, "review_id", None), getattr(args, "review_out", None))
-
-        if any(value is not None for value in review_values) or getattr(args, "review_ack", None) is not None:
-            if args.check or args.explain or args.model or args.format != "text":
-                parser.exit(1, "aurora: Review export cannot be combined with schema planning flags.\n")
-
-            from aurora.database.cli_review_workflow import run_review_export
-
-            try:
-                return run_review_export(args)
-            except Exception:
-                parser.exit(1, "aurora: Read-only migration review refused; inspect snapshots, journal and destination.\n")
-
-        from aurora.database.cli_plan import run_plan
-
+    if args.command == "db" and args.action == "check":
+        from aurora.database.cli_plan import run_check
         try:
-            if args.action == "check":
-                from aurora.database.cli_plan import run_check
-                return run_check(args)
-
-            return run_plan(args)
+            return run_check(args)
         except Exception as exc:
             parser.exit(1, _database_failure(exc, args, "check"))
 
@@ -492,29 +418,9 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             parser.exit(1, _database_failure(exc, args, "initialization"))
 
-    if args.command == "model" and args.action in ("register", "registered"):
-        from aurora.database.cli_registration import register_model, registered_models
-
-        try:
-            if args.action == "register":
-                if os.environ.get("AURORA_ENV", "development").lower() == "production":
-                    raise ValueError("Refusing model manifest edits in production")
-
-                changed = register_model(args.reference, database=args.database,
-                                         manifest=args.models_config)
-                print(("Registered " if changed else "Already registered: ") + args.reference)
-            else:
-                refs = registered_models(database=args.database, manifest=args.models_config)
-                print("\n".join(refs) if refs else "No models registered.")
-        except (ValueError, OSError) as error:
-            parser.exit(1, f"aurora: {error}\n")
-
-        return 0
-
-    # Normalize grouped commands to the established, tested handlers.
-    # No duplication of project modification logic.
+    # Route grouped commands to their component handlers.
     if args.command == "app":
-        args.command = {"add": "create-app", "list": "list-apps", "show": "show-app"}[args.action]
+        args.command = {"add": "app-add", "list": "app-list", "show": "app-show"}[args.action]
     elif args.command in ("controller", "view", "model"):
         resource = args.command
 
@@ -527,7 +433,7 @@ def main(argv: list[str] | None = None) -> int:
             app_name, name = args.app_option, args.first
 
             if args.action == "list" and args.first is not None and args.app_option is None:
-                app_name, name = args.first, None  # Legacy: resource list APP
+                app_name, name = args.first, None  # Positional app selector
 
         if args.action != "list" and not name:
             parser.error(f"{resource} {args.action} requires a component name. Example: aurora {resource} {args.action} "
@@ -586,7 +492,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Created {root}\nRun: cd {args.name} && aurora run")
         return 0
 
-    if args.command in ("create-app", "add-app"):
+    if args.command == "app-add":
         if os.environ.get("AURORA_ENV", "development").lower() == "production":
             parser.exit(1, "aurora: Refusing to modify project in production environment.\n")
 
@@ -598,24 +504,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Created {destination}\nRoute: /{args.name}")
         return 0
 
-    if args.command in ("create-controller", "create-view", "create-model"):
-        if os.environ.get("AURORA_ENV", "development").lower() == "production":
-            parser.exit(1, "aurora: Refusing to modify project in production environment.\n")
-
-        try:
-            action = {"create-controller": create_controller, "create-view": create_view,
-                      "create-model": create_model}[args.command]
-            destination = action(args.app, args.name)
-        except (OSError, ValueError) as exc:
-            parser.exit(1, f"aurora: {exc}\n")
-
-        suffix = {"create-controller": " (route registered)",
-                  "create-view": " (routes unchanged)",
-                  "create-model": " (database unchanged; import model explicitly)"}[args.command]
-        print(f"Created {destination}" + suffix)
-        return 0
-
-    if args.command == "list-apps":
+    if args.command == "app-list":
         try:
             names = list_apps()
         except (OSError, ValueError) as exc:
@@ -624,7 +513,7 @@ def main(argv: list[str] | None = None) -> int:
         print("\n".join(names) if names else "No apps found.")
         return 0
 
-    if args.command == "show-app":
+    if args.command == "app-show":
         try:
             info = show_app(args.name)
         except (OSError, ValueError) as exc:

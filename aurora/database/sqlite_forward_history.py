@@ -4,6 +4,7 @@ Existing AuroraSQL journal databases are handled by their existing read-only
 verification paths until an explicit, separately verified conversion exists.
 """
 
+import hashlib
 import json
 import re
 import sqlite3
@@ -54,11 +55,15 @@ def read_history(raw, project_root, db_file):
         raise RuntimeError("Migration history has no initial record")
     directory, _ = prepare_schema_record(project_root, db_file, ())
     last_snapshot = None
+    seen_snapshots = set()
     for expected, (ident, title, filename, date, warnings) in enumerate(records, 1):
         if (ident != expected or not isinstance(title, str) or not title or
                 not isinstance(filename, str) or not _SNAPSHOT.fullmatch(filename) or
                 not isinstance(date, str) or not date):
             raise RuntimeError("Migration history is incomplete or contains invalid entries")
+        if filename in seen_snapshots:
+            raise RuntimeError("Migration history reuses a snapshot filename")
+        seen_snapshots.add(filename)
         if warnings is not None:
             try:
                 parsed = json.loads(warnings)
@@ -73,10 +78,26 @@ def read_history(raw, project_root, db_file):
             snapshot = json.loads(path.read_text(encoding="utf-8"))
         except (ValueError, OSError) as exc:
             raise RuntimeError(f"Migration snapshot is unreadable: {filename}") from exc
-        if (snapshot.get("database") != Path(db_file).stem or snapshot.get("engine") != "sqlite" or
-                snapshot.get("title") != title or
-                not isinstance(snapshot.get("models"), list) or
-                not isinstance(snapshot.get("physical_schema"), list)):
+        if not isinstance(snapshot, dict):
+            raise RuntimeError(f"Migration snapshot is invalid: {filename}")
+        models = snapshot.get("models")
+        physical = snapshot.get("physical_schema")
+        model_names = ([table.get("name") for table in models if isinstance(table, dict)]
+                       if isinstance(models, list) else [])
+        physical_names = ([item.get("name") for item in physical
+                           if isinstance(item, dict) and item.get("type") == "table"]
+                          if isinstance(physical, list) else [])
+        if (snapshot.get("database") != Path(db_file).stem or
+                snapshot.get("engine") != "sqlite" or snapshot.get("title") != title or
+                not isinstance(models, list) or not isinstance(physical, list) or
+                any(not isinstance(table, dict) or not isinstance(table.get("name"), str)
+                    for table in models) or
+                any(not isinstance(item, dict) or
+                    not all(isinstance(item.get(key), str) for key in ("type", "name", "table", "sql"))
+                    for item in physical) or
+                len(model_names) != len(set(model_names)) or
+                len(physical_names) != len(set(physical_names)) or
+                sorted(model_names) != sorted(physical_names)):
             raise RuntimeError(f"Migration snapshot is invalid: {filename}")
         last_snapshot = snapshot
     if last_snapshot["physical_schema"] != _physical(raw):
@@ -220,6 +241,161 @@ def migrate_additions(raw, root, db_file, models, title):
             raw.execute(sql)
         matches_models(raw, models)
         path = _new_record(raw, root, db_file, models, title)
+        raw.commit()
+    except BaseException:
+        raw.rollback()
+        if path is not None:
+            path.unlink(missing_ok=True)
+        raise
+    return path
+
+
+
+def _data_witness(raw, table):
+    """Fingerprint complete table contents, independent of row retrieval order.
+
+    This is only review evidence: execution compares it again while holding the
+    SQLite writer lock, before any DDL.
+    """
+    columns = len(raw.execute(f'PRAGMA table_info({_quote(table, "sqlite")})').fetchall())
+    if not columns:
+        raise RuntimeError("Deletion target has no verifiable columns")
+    ordering = ", ".join(str(i) for i in range(1, columns + 1))
+    digest = hashlib.sha256()
+    for row in raw.execute(f'SELECT * FROM {_quote(table, "sqlite")} ORDER BY {ordering}'):
+        for value in row:
+            encoded = (type(value).__name__ + ':' + repr(value)).encode('utf-8')
+            digest.update(len(encoded).to_bytes(8, 'big'))
+            digest.update(encoded)
+    return digest.hexdigest()
+
+
+def review_table_removal(raw, root, db_file, models):
+    """Return one independently evidenced table removal, or refuse.
+
+    A table is eligible only when no foreign keys, views, triggers or explicit
+    indexes can be affected. This is inspection, not execution authorization.
+    """
+    _, snapshot = read_history(raw, root, db_file)
+    prior = {entry["name"] for entry in snapshot["models"]}
+    current = {model.__table_name__ for model in models}
+    removed = prior - current
+    if len(removed) != 1 or current - prior:
+        raise ValueError("Only one table removal at a time is supported")
+    target = removed.pop()
+    catalog = _physical(raw)
+    # A dependent object or foreign key may be silently destroyed or invalidated.
+    # Refuse instead of trying to approximate dependency semantics.
+    if any(item["type"] in ("view", "trigger") or
+           (item["type"] == "index" and item["table"] == target)
+           for item in catalog):
+        raise ValueError("Table removal has dependencies requiring separate review")
+    for item in catalog:
+        if item["type"] != "table":
+            continue
+        for key in raw.execute(f'PRAGMA foreign_key_list({_quote(item["name"], "sqlite")})'):
+            if item["name"] == target or key[2].casefold() == target.casefold():
+                raise ValueError("Table removal has foreign-key dependencies")
+    # Count inside the writer's IMMEDIATE transaction again before execution.
+    count = raw.execute(f'SELECT COUNT(*) FROM {_quote(target, "sqlite")}').fetchone()[0]
+    return target, count, _data_witness(raw, target)
+
+
+def migrate_table_removal(raw, root, db_file, models, title, target, expected_count, expected_witness,
+                          *, acknowledged=False):
+    """Drop one reviewed table under a SQLite write lock and record its risk.
+
+    Authorization for populated tables must be collected separately by the CLI.
+    Never treat a prior empty-table observation as sufficient to permit deletion.
+    """
+    raw.execute("PRAGMA foreign_keys=ON")
+    if raw.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
+        raise RuntimeError("SQLite foreign keys must be enabled")
+    snapshot_path = None
+    try:
+        raw.execute("BEGIN IMMEDIATE")
+        actual_target, count, witness = review_table_removal(raw, root, db_file, models)
+        if (actual_target, count, witness) != (target, expected_count, expected_witness):
+            raise RuntimeError("Table removal review is stale; run db check again")
+        if count and not acknowledged:
+            raise PermissionError("Populated table removal requires explicit double confirmation")
+        raw.execute(f'DROP TABLE {_quote(target, "sqlite")}')
+        matches_models(raw, models)
+        warnings = ([f'Approved permanent deletion of table {target}: {count} existing row(s)']
+                    if count else [])
+        snapshot_path = _new_record(raw, root, db_file, models, title, warnings)
+        raw.commit()
+    except BaseException:
+        raw.rollback()
+        if snapshot_path is not None:
+            snapshot_path.unlink(missing_ok=True)
+        raise
+    return snapshot_path
+
+
+
+
+def review_column_removal(raw, root, db_file, models):
+    """Inspect exactly one unmodeled column without authorizing its deletion."""
+    from .core import Connection
+    from .planning import plan_schema
+
+    if sqlite3.sqlite_version_info < (3, 35, 0):
+        raise ValueError("SQLite column deletion requires SQLite 3.35 or newer")
+    _, previous = read_history(raw, root, db_file)
+    prior = {entry["name"] for entry in previous["models"]}
+    current = {model.__table_name__ for model in models}
+    if current != prior:
+        raise ValueError("Column removal cannot be combined with table changes")
+    changes = []
+    connection = Connection(raw, "sqlite")
+    for model in models:
+        plan = plan_schema(connection, model)
+        if plan.warnings:
+            raise ValueError("Column removal has unsupported schema warnings")
+        changes.extend((model.__table_name__, change) for change in plan.changes)
+    if len(changes) != 1 or changes[0][1].kind != "extra_column":
+        raise ValueError("Only one removed column is supported per migration")
+    table, change = changes[0]
+    column = change.column
+    # Explicitly reject schema dependencies, including constraints and indexes.
+    # SQLite's own DROP COLUMN validation is an additional fail-closed guard.
+    if any(item["type"] in ("view", "trigger") for item in _physical(raw)):
+        raise ValueError("Column removal requires separate dependency review")
+    if raw.execute(f'PRAGMA index_list({_quote(table, "sqlite")})').fetchall():
+        raise ValueError("Column removal has index or unique-constraint dependencies")
+    for item in _physical(raw):
+        if item["type"] != "table":
+            continue
+        if raw.execute(f'PRAGMA foreign_key_list({_quote(item["name"], "sqlite")})').fetchall():
+            raise ValueError("Column removal has foreign-key dependencies")
+    count = raw.execute(
+        f'SELECT COUNT(*) FROM {_quote(table, "sqlite")} '
+        f'WHERE {_quote(column, "sqlite")} IS NOT NULL'
+    ).fetchone()[0]
+    return table, column, count, _data_witness(raw, table)
+
+
+def migrate_column_removal(raw, root, db_file, models, title, table, column,
+                           expected_count, expected_witness, *, acknowledged=False):
+    """Drop one independently reviewed SQLite column and record approved risk."""
+    raw.execute("PRAGMA foreign_keys=ON")
+    if raw.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
+        raise RuntimeError("SQLite foreign keys must be enabled")
+    path = None
+    try:
+        raw.execute("BEGIN IMMEDIATE")
+        actual = review_column_removal(raw, root, db_file, models)
+        if actual != (table, column, expected_count, expected_witness):
+            raise RuntimeError("Column removal review is stale; run db check again")
+        if expected_count and not acknowledged:
+            raise PermissionError("Populated column removal requires explicit double confirmation")
+        raw.execute(f'ALTER TABLE {_quote(table, "sqlite")} '
+                    f'DROP COLUMN {_quote(column, "sqlite")}')
+        matches_models(raw, models)
+        warnings = ([f'Approved permanent deletion of {table}.{column}: '
+                     f'{expected_count} existing non-NULL value(s)'] if expected_count else [])
+        path = _new_record(raw, root, db_file, models, title, warnings)
         raw.commit()
     except BaseException:
         raw.rollback()

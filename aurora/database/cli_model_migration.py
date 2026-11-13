@@ -113,12 +113,20 @@ def run_model_migration(args):
         with Connection(sqlite3.connect(db_file.as_uri() + "?mode=ro", uri=True), "sqlite") as checked:
             _, prior = read_history(checked._raw, root, db_file)
             prior_tables = {entry["name"] for entry in prior["models"]}
-            if prior_tables - {model.__table_name__ for model in models}:
-                raise ValueError("Removing a model table requires separate explicit review")
+            removed_tables = prior_tables - {model.__table_name__ for model in models}
+            removal = None
+            if removed_tables:
+                from .sqlite_forward_history import review_table_removal
+                removal = review_table_removal(checked._raw, root, db_file, models)
             plans = [plan_schema(checked, model) for model in models]
             changes = [change for plan in plans for change in plan.changes]
             if any(plan.warnings and plan.exists for plan in plans):
                 raise ValueError("Unsupported schema drift; migration refused")
+        column_removal = None
+        if len(changes) == 1 and changes[0].kind == "extra_column" and removal is None:
+            from .sqlite_forward_history import review_column_removal
+            with closing(sqlite3.connect(db_file.as_uri() + "?mode=ro", uri=True)) as checked:
+                column_removal = review_column_removal(checked, root, db_file, models)
         edit = None
         if changes and all(change.kind in ("type_mismatch", "nullability_mismatch", "default_mismatch")
                            for change in changes):
@@ -126,9 +134,62 @@ def run_model_migration(args):
                 edit = sqlite_column_edit_proposal(
                     checked, models, args.database, db_file, forward=True,
                 )
-        if changes and edit is None and any(change.kind not in ("missing_column", "create_table")
+        if changes and edit is None and column_removal is None and any(change.kind not in ("missing_column", "create_table")
                                             for change in changes):
             raise ValueError("Unsupported model change; database unchanged")
+        if removal is not None:
+            if changes:
+                raise ValueError("Table removal cannot be combined with other schema changes")
+            table, count, witness = removal
+            print(f"AuroraSQL migration — {args.database} (SQLite)")
+            print(f"  DROP TABLE {table}; existing rows: {count}")
+            if not simple_confirm:
+                if not sys.stdin.isatty():
+                    raise PermissionError("Table removal requires confirmation; use --confirm yes")
+                if input("Remove this table? [y/N]: ").strip().lower() not in ("y", "yes"):
+                    print("Migration cancelled; no database changes made.")
+                    return 0
+            if count:
+                if not sys.stdin.isatty():
+                    raise PermissionError("Populated table removal requires interactive second confirmation")
+                print(f"WARNING: {count} row(s) will be permanently deleted.")
+                if input(f"Type the exact table name '{table}' to delete it: ").strip() != table:
+                    print("Migration cancelled; no database changes made.")
+                    return 0
+            from .sqlite_forward_history import migrate_table_removal
+            title = migration_title(args.title or "Untitled", "Untitled")
+            with closing(sqlite3.connect(db_file.as_uri() + "?mode=rw", uri=True,
+                                         isolation_level=None, timeout=5)) as writing:
+                result = migrate_table_removal(writing, root, db_file, models, title,
+                                               table, count, witness, acknowledged=bool(count))
+            print(f"Migration applied. Schema snapshot: {result}")
+            return 0
+        if column_removal is not None:
+            table, column, count, witness = column_removal
+            print(f"AuroraSQL migration — {args.database} (SQLite)")
+            print(f"  DROP COLUMN {table}.{column}; existing non-NULL values: {count}")
+            if not simple_confirm:
+                if not sys.stdin.isatty():
+                    raise PermissionError("Column removal requires confirmation; use --confirm yes")
+                if input("Remove this column? [y/N]: ").strip().lower() not in ("y", "yes"):
+                    print("Migration cancelled; no database changes made.")
+                    return 0
+            if count:
+                if not sys.stdin.isatty():
+                    raise PermissionError("Populated column removal requires interactive second confirmation")
+                print(f"WARNING: {count} stored non-NULL value(s) will be permanently deleted.")
+                target = f"{table}.{column}"
+                if input(f"Type the exact column identifier '{target}' to delete it: ").strip() != target:
+                    print("Migration cancelled; no database changes made.")
+                    return 0
+            from .sqlite_forward_history import migrate_column_removal
+            title = migration_title(args.title or "Untitled", "Untitled")
+            with closing(sqlite3.connect(db_file.as_uri() + "?mode=rw", uri=True,
+                                         isolation_level=None, timeout=5)) as writing:
+                result = migrate_column_removal(writing, root, db_file, models, title,
+                                                table, column, count, witness, acknowledged=bool(count))
+            print(f"Migration applied. Schema snapshot: {result}")
+            return 0
         if not changes:
             print(f"Database: {args.database} (SQLite) is already up to date; no migration needed.")
             return 0

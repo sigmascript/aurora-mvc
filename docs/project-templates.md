@@ -13,8 +13,8 @@ Aurora MVC includes four **repository examples** under `examples/`, but the `aur
 
 New minimal, MVC, and modular projects include `aurora_config.json` for
 nonsecret application defaults, in addition to their separate database and
-model manifests. The generated `app.py` loads this file explicitly using
-`Aurora.from_config(...)`; existing hand-written applications using
+model manifests. The generated `app.py` loads conventional project configuration and resources through
+`Aurora.from_project(__file__)`; existing hand-written applications using
 `Aurora(...)` remain valid. Read the [Application configuration guide](application-configuration.md)
 for the versioned JSON format and security rules.
 

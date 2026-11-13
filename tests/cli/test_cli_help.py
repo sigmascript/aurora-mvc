@@ -1,4 +1,4 @@
-"""Public CLI help documents canonical commands without breaking old scripts."""
+"""Only supported commands are accepted by the Aurora CLI."""
 import contextlib
 import io
 import unittest
@@ -28,6 +28,11 @@ class CLIHelpTests(unittest.TestCase):
             with self.subTest(group=group):
                 self.assertIn('usage: aurora ' + group, self.capture(group, '-h'))
 
-    def test_legacy_help_still_parses(self):
-        self.assertIn('usage: aurora create-app', self.capture('create-app', '-h'))
-        self.assertIn('usage: aurora add-app', self.capture('add-app', '-h'))
+    def test_retired_aliases_are_rejected(self):
+        for argv in (('create-app', 'news'), ('add-app', 'news'),
+                     ('db', 'plan'), ('model', 'register', 'models.User:User'),
+                     ('model', 'registered')):
+            with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as raised:
+                    main(list(argv))
+                self.assertEqual(raised.exception.code, 2)

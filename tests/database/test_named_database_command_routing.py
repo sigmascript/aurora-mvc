@@ -5,7 +5,7 @@ import pytest
 
 @pytest.mark.parametrize("command,extra,module_name,handler", [
     ("init", ["--title", "Accounting Initial"], "cli_init", "run_init_apply"),
-    ("plan", ["--format", "json", "--check"], "cli_plan", "run_plan"),
+    ("check", [], "cli_plan", "run_check"),
     ("migrate", ["--title", "Add invoices"], "cli_model_migration", "run_model_migration"),
     ("history", [], "cli_history", "run_history"),
 ])
@@ -33,8 +33,8 @@ def test_named_database_routes_existing_flags_unchanged(monkeypatch, command, ex
 
     if command == "init":
         assert received[0].title == "Accounting Initial"
-    elif command == "plan":
-        assert received[0].format == "json" and received[0].check
+    elif command == "check":
+        assert received[0].format == "text" and not received[0].check
     elif command == "migrate":
         assert received[0].title == "Add invoices"
     else:

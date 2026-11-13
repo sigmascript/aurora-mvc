@@ -16,7 +16,7 @@ class DatabaseSixCommandContractTests(unittest.TestCase):
         self.assertIn('{check,init,migrate,backup,restore,history}', output.getvalue())
 
     def test_obsolete_commands_are_rejected_before_execution(self):
-        obsolete = ('sync', 's', 'inspect', 'list', 'show', 'status',
+        obsolete = ('sync', 's', 'plan', 'inspect', 'list', 'show', 'status',
                     'validate', 'compat', 'policy', 'readiness', 'migration',
                     'mysql-create-table', 'mysql-add-column')
 
@@ -27,8 +27,8 @@ class DatabaseSixCommandContractTests(unittest.TestCase):
 
                 self.assertEqual(result.exception.code, 2)
 
-    def test_plan_and_migrate_help_remain_available(self):
-        for command in ('plan', 'migrate'):
+    def test_check_and_migrate_help_remain_available(self):
+        for command in ('check', 'migrate'):
             with self.subTest(command=command):
                 with contextlib.redirect_stdout(io.StringIO()) as output, self.assertRaises(SystemExit) as result:
                     main(['db', command, '--help'])

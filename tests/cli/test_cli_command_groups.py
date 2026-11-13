@@ -28,10 +28,10 @@ class GroupedCLITests(unittest.TestCase):
         self.assertIn('blog', self.invoke('app', 'list'))
         self.assertIn('App: blog', self.invoke('app', 'show', 'blog'))
 
-    def test_app_add_and_legacy_alias(self):
+    def test_app_add(self):
         self.invoke('app', 'add', 'news')
         self.assertTrue((self.root / 'apps/news/__init__.py').is_file())
-        self.invoke('create-app', 'events')
+        self.invoke('app', 'add', 'events')
         self.assertIn('events', self.invoke('app', 'list'))
 
     def test_controller_and_view_add(self):

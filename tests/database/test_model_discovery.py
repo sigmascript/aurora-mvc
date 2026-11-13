@@ -77,7 +77,7 @@ def test_simple_cli_initialization_discovers_shared_models_without_model_flag(
 
     assert main(["db", "init"]) == 0
     capsys.readouterr()
-    assert main(["db", "plan"]) == 0
+    assert main(["db", "check"]) == 0
     capsys.readouterr()
 
     with sqlite3.connect(project / "data.sqlite3") as connection:

@@ -141,7 +141,7 @@ class TestAddModularApp(unittest.TestCase):
             root = create_project("multi", directory=Path(tmp), modular=True)
 
             with patch("aurora.cli.Path.cwd", return_value=root):
-                self.assertEqual(main(["add-app", "news"]), 0)
+                self.assertEqual(main(["app", "add", "news"]), 0)
 
             self.assertTrue((root / "apps/news/controllers/News.py").is_file())
 
@@ -156,15 +156,15 @@ class TestAppCrudRead(unittest.TestCase):
             self.assertEqual(info["controllers"], ["Blog"])
             self.assertEqual(info["views"], ["index.html"])
 
-    def test_create_app_command_and_compatibility_alias(self):
+    def test_canonical_app_add_command(self):
         from aurora.cli import list_apps
 
         with tempfile.TemporaryDirectory() as tmp:
             root = create_project("multi", directory=Path(tmp), modular=True)
 
             with patch("aurora.cli.Path.cwd", return_value=root):
-                self.assertEqual(main(["create-app", "news"]), 0)
-                self.assertEqual(main(["add-app", "store"]), 0)
+                self.assertEqual(main(["app", "add", "news"]), 0)
+                self.assertEqual(main(["app", "add", "store"]), 0)
 
             self.assertEqual(list_apps(directory=root), ["blog", "home", "news", "store"])
 
@@ -175,8 +175,8 @@ class TestAppCrudRead(unittest.TestCase):
             root = create_project("multi", directory=Path(tmp), modular=True)
 
             with patch("aurora.cli.Path.cwd", return_value=root), patch("sys.stdout", new_callable=StringIO) as out:
-                self.assertEqual(main(["list-apps"]), 0)
-                self.assertEqual(main(["show-app", "home"]), 0)
+                self.assertEqual(main(["app", "list"]), 0)
+                self.assertEqual(main(["app", "show", "home"]), 0)
                 self.assertIn("blog", out.getvalue())
                 self.assertIn("index.html", out.getvalue())
 

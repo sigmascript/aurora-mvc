@@ -28,14 +28,15 @@ def test_forward_history_uses_forward_executor(monkeypatch, tmp_path, dialect, s
     monkeypatch.setattr(server_forward_history, "has_history", lambda conn: True)
     monkeypatch.setattr(server_forward_history, "read_history", lambda *args: ([{}], {}))
     seen = []
-    monkeypatch.setattr(cli, "_run_forward_migration", lambda *args: seen.append(args) or 0)
+    monkeypatch.setattr(cli, "_run_forward_migration", lambda *args, **kwargs: seen.append((args, kwargs)) or 0)
 
     args = SimpleNamespace(config="config", database="accounting", apply=True,
                            confirm="APPLY", approve="a" * 64, backup="backup.sql",
                            name="Migration2", login_path=None)
     assert cli.run_server_model_migration(args) == 0
     assert len(seen) == 1
-    assert seen[0][4] == connection_models
+    assert seen[0][0][4] == connection_models
+    assert seen[0][1]["verified_history"] == ([{}], {})
 
 @pytest.mark.parametrize("dialect", ["mysql", "postgresql"])
 def test_forward_widening_uses_existing_safe_reviewer(monkeypatch, tmp_path, dialect):
@@ -284,3 +285,23 @@ def test_public_migrate_explains_safe_refusal_without_driver_details(monkeypatch
     output = capsys.readouterr().err
     assert "VARCHAR narrowing is not supported" in output
     assert "ValueError" not in output
+
+@pytest.mark.parametrize("dialect", ["mysql", "postgresql"])
+def test_forward_dispatch_reuses_verified_history_without_second_read(
+        monkeypatch, tmp_path, dialect, capsys):
+    """A verified dispatch witness is reused, not read a second time."""
+    from aurora.database import server_forward_history, server_model_review
+    from aurora.database.snapshots import schema_snapshot
+    from tests.database.test_schema import Entry
+
+    models = [Entry]
+    history = ([{"id": 1}], {"models": schema_snapshot(Entry, dialect=dialect)["tables"]})
+    monkeypatch.setattr(server_forward_history, "read_history",
+                        lambda *args: pytest.fail("Duplicate history read"))
+    monkeypatch.setattr(server_model_review, "review_server_model_changes",
+                        lambda *args: pytest.fail("No review for unchanged models"))
+    args = SimpleNamespace(database="data", apply=False, confirm="yes")
+    connection = SimpleNamespace(dialect=dialect)
+    assert cli._run_forward_migration(args, None, tmp_path, connection,
+                                      models, object(), None, verified_history=history) == 0
+    assert "up to date" in capsys.readouterr().out

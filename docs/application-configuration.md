@@ -2,8 +2,7 @@
 
 Aurora projects can use **one small, optional general configuration file** called
 `aurora_config.json`. The file is not a database manifest, a Python module, or a
-user-preference store. This feature is in the `1.0.0a7` source candidate;
-it was not part of the published `1.0.0a6` package. Publication remains approval-gated.
+user-preference store. This document describes the unreleased Milestone 5 checkout; the published `1.0.0a7` package may differ from the current source. Any next release remains approval-gated.
 
 The generated minimal, MVC, and modular starters create the file alongside
 `app.py` and load it explicitly. Existing `Aurora(...)` constructors remain
@@ -34,12 +33,9 @@ unchanged and do not automatically search the filesystem.
 From `app.py`:
 
 ```python
-from pathlib import Path
 from aurora import Aurora
 
-ROOT = Path(__file__).resolve().parent
-app = Aurora.from_config(ROOT / "aurora_config.json",
-                         views_directory=ROOT / "views")
+app = Aurora.from_project(__file__)
 ```
 
 `app.settings["name"]` provides the configured name,
@@ -60,8 +56,9 @@ limit and does not provide secure media-upload processing.**
 
 ## Compatibility and validation
 
-- Direct `Aurora(...)` keyword construction is fully supported. No configuration
-  file is read unless the developer chooses `Aurora.from_config(...)`.
+- Direct `Aurora(...)` keyword construction is fully supported. The generated
+  starters use `Aurora.from_project(__file__)` to load project conventions;
+  `Aurora.from_config(...)` remains available for explicit configuration loading.
 - Python constructor arguments may provide settings such as `views_directory`,
   session managers, and database lifecycle components. Passing the same option
   both inside JSON and in Python is rejected instead of silently overriding.
@@ -88,4 +85,4 @@ Keep database credentials and session secrets in environment variables or an
 approved secret manager, and keep user preferences in protected application
 data. Do not make JSON files writable by untrusted users. A general application
 configuration file must not be treated as a database migration-operation file;
-`aurora db migrate -c/--changes` accepts a different, strictly validated format.
+`aurora db migrate -c/--change` accepts a different, strictly validated format.

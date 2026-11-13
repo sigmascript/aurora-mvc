@@ -1,6 +1,6 @@
 # AuroraSQL database operations and safety
 
-This guide describes the integrated **AuroraSQL** backend in the `1.0.0a7` source candidate. The former SQLAlchemy-backed `aurora.database` implementation is retired. AuroraSQL is alpha software, and a command's existence does **not** imply support for every database engine or schema operation. The SQLite explicit JSON workflow below is **not** part of the older published `1.0.0a6` release; `1.0.0a7` publication awaits approval.
+This guide describes the integrated **AuroraSQL** backend in the **unreleased Milestone 5 development checkout**, which extends the published `1.0.0a7` alpha. The former SQLAlchemy-backed `aurora.database` implementation is retired. AuroraSQL is alpha software; a command's existence does **not** imply support for every database engine or schema operation. Checkouts and published packages have different capability boundaries.
 
 ## Configuration and drivers
 
@@ -12,11 +12,11 @@ A normal Aurora project can use just one `default` database. Model directory loc
 
 | Command | Purpose | Important limit |
 | --- | --- | --- |
-| `init` | Initialize discovered/registered model tables | Only supported empty-schema initialization; never use to migrate an existing schema |
-| `plan` | Inspect selected schema and report differences | Read-only; inspection is not approval to write |
-| `migrate` | Preview/apply selected supported schema changes | Backend-specific scope, review, backup, and explicit approval gates |
+| `init` | Initialize discovered model tables | Only supported empty-schema initialization; never use to migrate an existing schema |
+| `check` | Inspect database readiness and model differences | Read-only; inspection is not approval to write |
+| `migrate` | Preview/apply selected supported schema changes | Backend-specific scope, review, and explicit approval gates; backups optional |
 | `backup` | Create a verified backup | SQLite and guarded native MySQL/PostgreSQL paths; backend tools and client prerequisites vary |
-| `restore` | Reserved recovery command | **Execution disabled**; refuses unsafe legacy fallback |
+| `restore` | Guarded SQLite restore into an absent file | Server restoration disabled |
 | `history` | Read migration records | Does not itself verify the entire database schema |
 
 There are exactly six public database commands.
@@ -25,17 +25,16 @@ There are exactly six public database commands.
 
 ```sh
 aurora db init
-aurora db plan
-aurora db plan --check
+aurora db check
 aurora db migrate
 aurora db history
 ```
 
-The first `init` command is appropriate only when its target is eligible for initialization. Ordinary interactive migrations review proposed changes and ask for confirmation; non-interactive automation has separate explicit approval prerequisites. Add `--database accounting` for a configured alias or `--title "..."` to name a migration where supported. Model discovery does not require a `--model MODULE:CLASS` argument. Server migrations support a narrowly reviewed single change at a time, including repeated guarded successors; history must be independently proved before every later change. **Migration3 was verified on disposable MySQL and PostgreSQL databases** with existing-row preservation, but no production recovery or universal migration parity is certified. Do **not** invent hashes or bypass history checks.
+The first `init` command is appropriate only when its target is eligible for initialization. Ordinary interactive migrations review proposed changes and ask for confirmation. Supported non-destructive changes may use `--confirm yes`; populated SQLite table/column deletion additionally requires interactive exact-target confirmation. Add `--database accounting` for a configured alias or `--title "..."` to name a migration where supported. Model discovery does not require a `--model MODULE:CLASS` argument. Server migrations support a narrowly reviewed single change at a time, including repeated guarded successors; history must be independently proved before every later change. **Migration3 was verified on disposable MySQL and PostgreSQL databases** with existing-row preservation, but no production recovery or universal migration parity is certified. Do **not** invent hashes or bypass history checks.
 
 ## Explicit schema operations: `aurora db migrate -c`
 
-**Purpose:** Describe an intentional, single-table rename in a small JSON file rather than guessing whether a removed model field was renamed. The new `-c` flag is short for `--changes`, not the existing `--config` database-connection flag.
+**Purpose:** Describe an intentional, single-table rename in a small JSON file rather than guessing whether a removed model field was renamed. The `-c` flag is short for `--change`.
 
 For two column renames on `users`:
 
@@ -64,32 +63,20 @@ For one table rename:
 
 One file selects **one operation type and one table**; it can rename several independent columns within that one table. The optional `format` field defaults to `aurorasql.operations.v1` for backward compatibility. Renames are never inferred automatically. Unknown JSON keys, invalid SQL identifiers, duplicate or chained renames, wrong aliases, and unrelated operations are rejected. The operation file does not contain executable SQL.
 
-### Review first, then execute if supported
+### Current public confirmation boundary
 
-```sh
-# Read only: inspect the selected schema and obtain its exact review fingerprint.
-aurora db migrate -c renames.json --dry-run --format json
+`aurora db migrate -c renames.json` selects one explicit JSON operation document. Public migration flags are deliberately minimal; the older `--dry-run`, `--apply`, `--approve`, `--backup` and review-digest arguments are not available. Do not infer broad rename or destructive-operation support from a JSON document. Unsupported operations fail closed, and MySQL/PostgreSQL explicit JSON execution is refused.
 
-# Optional automation check: exit 2 for supported pending change, 3 for refusal.
-aurora db migrate -c renames.json --dry-run --check
 
-# Example guarded SQLite execution only, after human review:
-# Replace REVIEW_SHA256 with the exact fingerprint from the first command.
-# The backup filename must not exist; its parent directory must already exist.
-aurora db migrate -c renames.json \
-  --apply --confirm APPLY --approve REVIEW_SHA256 \
-  --backup backups/before_rename.sqlite3
-```
+### Guarded model-driven deletion (unreleased checkout only)
 
-These commands are **not an instruction to run DDL on important or production data**. Examine the review and test a copy of the database first. The SQLite executor requires an existing, compatible `aurorasql_migration_intents_v2` journal; it never initializes journals implicitly. It performs a bounded in-memory same-engine rehearsal (maximum source database size 64 MiB), creates and verifies a new exclusive backup, rechecks the exact schema and review fingerprint under a write lock, then executes SQLite rename DDL and the intent journal in one transaction. It checks the final catalog, integrity, foreign keys and preserved row count.
+For a database with verified **forward-only SQLite history**, removing exactly one existing table or one column from the Python model can be reviewed through ordinary `aurora db check` and `aurora db migrate`. Aurora refuses unsupported dependencies, mixed changes, inconsistent history/snapshots, and changed data after review. Empty tables and columns with no non-NULL values require ordinary migration confirmation; populated tables and columns with existing non-NULL values additionally require typing the **exact table** or **`table.column`** identifier interactively. `--confirm yes` never bypasses that second confirmation. Execution rechecks reviewed data under SQLite's write lock and records approved potential data-loss warnings in `migrations.warnings`.
 
-The supported rename subset intentionally refuses tables with unresolved migration history, recorded historical table operations requiring reconciliation, foreign-key dependencies, views, triggers, target indexes or advanced table constructs. A refusal is a safety boundary, not permission to bypass it with manual flags. The backup is preserved after a failure. The operation file must be updated alongside the Python model declaration when the real table or field name changes.
-
-The **MySQL and PostgreSQL explicit-operation paths currently refuse execution**, and the preview reports backend inspection as unimplemented. MySQL DDL cannot be treated as universally rollbackable. Complex constraint changes, destructive drops, cross-database migrations, and PK changes remain unsupported here. The broader Milestone 4 model-change, configuration, and recovery work is not completed by this initial rename feature.
+Do **not** interpret this as arbitrary destructive DDL support. Lossy narrowing or constraint-incompatible changes remain refused; MySQL/PostgreSQL table and column deletion is not enabled. Use a disposable database for experimentation, never an important existing database.
 
 ## Current limits and recovery
 
-`aurora db restore` refuses execution. Recovery preflight or staging helper modules do not constitute an enabled, operationally verified restoration workflow. Maintain an independently tested recovery procedure before relying on AuroraSQL for important data.
+`aurora db restore` supports only bounded SQLite restoration into an absent file with matching verified snapshots. MySQL/PostgreSQL restoration remains disabled. Preflight and staging helpers do not certify server restoration. Maintain an independently tested recovery procedure before relying on AuroraSQL for important data.
 
 ### Recovery rehearsal design (not an enabled restore feature)
 

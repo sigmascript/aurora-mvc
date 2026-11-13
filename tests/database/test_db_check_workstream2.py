@@ -104,17 +104,10 @@ def test_unowned_existing_schema_not_adopted(tmp_path):
     assert path.read_bytes() == before
 
 
-def test_legacy_plan_is_accepted_but_not_advertised(tmp_path):
-    help_result = run_db(tmp_path, "-h")
-    assert help_result.returncode == 0
-    assert "    plan " not in help_result.stdout
-    assert "{check,init,migrate,backup,restore,history}" in help_result.stdout
-    setup_project(tmp_path)
-    with sqlite3.connect(tmp_path / "app.sqlite3"):
-        pass
-    legacy = run_db(tmp_path, "plan", "--format", "json")
-    assert legacy.returncode == 0, legacy.stderr
-    assert json.loads(legacy.stdout)["status"] == "DRIFT"
+def test_retired_plan_is_rejected(tmp_path):
+    result = run_db(tmp_path, "plan")
+    assert result.returncode == 2
+    assert "invalid choice" in result.stderr
 
 
 def test_check_rejects_review_export_and_change_aliases_parse(tmp_path):

@@ -6,7 +6,6 @@ import io
 import json
 import os
 from pathlib import Path
-from unittest.mock import patch
 import sqlite3
 import sys
 import tempfile
@@ -56,16 +55,25 @@ class DatabaseProjectImportTests(unittest.TestCase):
             # Other in-process CLI tests may leave a different temporary
             # models package cached. Simulate a fresh CLI invocation without
             # changing the interpreter's original module cache afterward.
-            with patch.dict(sys.modules):
-                for name in tuple(sys.modules):
-                    if name == "models" or name.startswith("models."):
-                        sys.modules.pop(name, None)
-
+            # Isolate only project models. Restoring the entire module cache
+            # can orphan Aurora modules imported during this invocation.
+            saved_models = {
+                name: module for name, module in sys.modules.items()
+                if name == "models" or name.startswith("models.")
+            }
+            for name in saved_models:
+                sys.modules.pop(name, None)
+            try:
                 with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
                     try:
                         result = main(list(args))
                     except SystemExit as exc:
                         result = exc.code
+            finally:
+                for name in tuple(sys.modules):
+                    if name == "models" or name.startswith("models."):
+                        sys.modules.pop(name, None)
+                sys.modules.update(saved_models)
 
             return result, stdout.getvalue(), stderr.getvalue()
         finally:
@@ -93,12 +101,12 @@ class DatabaseProjectImportTests(unittest.TestCase):
         with contextlib.closing(sqlite3.connect(self.root / "data.sqlite3")) as conn:
             self.assertEqual(conn.execute("SELECT count(*) FROM sqlite_master WHERE type='table'").fetchone()[0], 0)
 
-    def test_db_plan_can_import_project_model(self):
+    def test_db_check_can_import_project_model(self):
         with contextlib.closing(sqlite3.connect(self.root / "data.sqlite3")):
             pass
 
         code, output, error = self.invoke_without_project_on_path(
-            "db", "plan", "--model", f"models.{self.model_name}:{self.model_name}"
+            "db", "check"
         )
         self.assertEqual(code, 0, error)
         self.assertTrue(output.strip())

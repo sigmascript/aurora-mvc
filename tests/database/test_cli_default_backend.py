@@ -27,7 +27,7 @@ def test_public_model_defaults_to_aurorasql(tmp_path):
 
 
 def test_public_backend_flag_is_removed(tmp_path):
-    result = _run("db", "plan", "--backend", "legacy", cwd=tmp_path)
+    result = _run("db", "check", "--backend", "legacy", cwd=tmp_path)
     assert result.returncode != 0
 
     assert "unrecognized arguments" in result.stderr

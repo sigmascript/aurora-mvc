@@ -40,7 +40,7 @@ class ScaffoldNamingAndAssetsTests(unittest.TestCase):
 
             with patch("aurora.cli.Path.cwd", return_value=root), patch.dict(os.environ, {"AURORA_ENV": "production"}):
                 with self.assertRaises(SystemExit) as caught:
-                    main(["create-app", "news"])
+                    main(["app", "add", "news"])
 
             self.assertEqual(caught.exception.code, 1)
             self.assertFalse((root / "apps/news").exists())

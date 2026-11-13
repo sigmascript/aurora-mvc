@@ -25,66 +25,6 @@ def _run(cwd, *arguments):
 
 
 @pytest.mark.parametrize("layout", ["mvc", "modular"])
-def test_generated_project_alias_plan_from_external_directory(tmp_path, layout):
-    project = create_project(
-        "acceptance", directory=tmp_path,
-        mvc=layout == "mvc", modular=layout == "modular",
-    )
-    assert (project / "aurora_databases.json").is_file()
-
-    assert (project / "aurora_models.json").is_file()
-
-    assert not (project / "data.sqlite3").exists()
-
-    (project / "acceptance_model.py").write_text(
-        "from aurora.database import Model, column\n"
-        "class Entry(Model):\n"
-        "    id = column(int, primary_key=True)\n",
-        encoding="utf-8",
-    )
-    (project / "aurora_databases.json").write_text(json.dumps({
-        "databases": {
-            "default": {"url": "sqlite:///data.sqlite3"},
-            "archive": {"url": "sqlite:///archive.sqlite3"},
-        },
-    }), encoding="utf-8")
-    (project / "aurora_models.json").write_text(json.dumps({
-        "databases": {"archive": ["acceptance_model:Entry"]},
-    }), encoding="utf-8")
-
-    with sqlite3.connect(project / "archive.sqlite3") as database:
-        database.execute("CREATE TABLE entry (id INTEGER PRIMARY KEY)")
-
-    before = (project / "archive.sqlite3").read_bytes()
-    elsewhere = tmp_path / "elsewhere"
-    elsewhere.mkdir()
-    config = str(project / "aurora_databases.json")
-
-    plan = _run(elsewhere, "db", "plan", "--config", config,
-                "--database", "archive", "--format", "json")
-    assert plan.returncode == 0, plan.stderr
-
-    report = json.loads(plan.stdout)
-    assert report["backend"] == "aurorasql"
-
-    assert report["database_alias"] == "archive"
-
-    assert report["advisory_only"] is True
-
-    assert (project / "archive.sqlite3").read_bytes() == before
-
-    assert not (project / "data.sqlite3").exists()
-
-    missing = _run(elsewhere, "db", "plan", "--config", config,
-                   "--database", "default", "--format", "json")
-    assert missing.returncode != 0
-
-    assert not (project / "data.sqlite3").exists()
-
-    assert (project / "archive.sqlite3").read_bytes() == before
-
-
-@pytest.mark.parametrize("layout", ["mvc", "modular"])
 def test_generated_project_init_preflight_never_creates_database(tmp_path, layout):
     project = create_project(
         "acceptance", directory=tmp_path,
@@ -107,3 +47,48 @@ def test_generated_project_init_preflight_never_creates_database(tmp_path, layou
     assert "MISSING_DATABASE" in result.stdout
 
     assert not (project / "data.sqlite3").exists()
+
+@pytest.mark.parametrize("layout", ["mvc", "modular"])
+def test_generated_project_forward_migration_preserves_existing_rows(tmp_path, layout):
+    """Use the documented CLI on generated apps, not mocked migration handlers."""
+    project = create_project(
+        "acceptance", directory=tmp_path,
+        mvc=layout == "mvc", modular=layout == "modular",
+    )
+    result = _run(project, "model", "add", "Entry")
+    assert result.returncode == 0, result.stderr
+    assert not (project / "data.sqlite3").exists()
+
+    for command in (("db", "check"), ("db", "init", "--confirm", "yes"),
+                    ("db", "check"), ("db", "history")):
+        result = _run(project, *command)
+        assert result.returncode == 0, result.stderr
+
+    database = project / "data.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute("INSERT INTO entry (id) VALUES (7)")
+
+    model = project / "models" / "Entry.py"
+    model.write_text(model.read_text(encoding="utf-8") +
+                     "    description = column(str, nullable=True)\n", encoding="utf-8")
+
+    result = _run(project, "db", "migrate", "--confirm", "yes")
+    assert result.returncode == 0, result.stderr
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT id, description FROM entry").fetchall() == [(7, None)]
+        assert connection.execute("SELECT COUNT(*) FROM migrations").fetchone() == (2,)
+
+    result = _run(project, "db", "migrate", "--confirm", "yes")
+    assert result.returncode == 0, result.stderr
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM migrations").fetchone() == (2,)
+
+
+def test_minimal_project_remains_database_free(tmp_path):
+    """The default template must not acquire unnecessary database machinery."""
+    project = create_project("acceptance", directory=tmp_path)
+    assert (project / "app.py").exists()
+    assert not (project / "aurora_databases.json").exists()
+    assert not (project / "aurora_models.json").exists()
+    assert not (project / "models").exists()
+    assert not (project / "migrations").exists()

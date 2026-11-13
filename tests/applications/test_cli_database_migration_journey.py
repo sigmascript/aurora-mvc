@@ -1,8 +1,4 @@
-"""AuroraSQL-only project journey: canonical registration and refused writes.
-
-Legacy SQLAlchemy migration application belongs to the retired CLI contract.
-This suite checks the supported Alpha 9 boundary without removing safety tests.
-"""
+"""Generated model registration and safe handling of conflicting database schemas."""
 
 import contextlib
 import io
@@ -61,12 +57,7 @@ class ModelMigrationJourneyTests(unittest.TestCase):
 
     def test_complete_project_model_migration_journey(self):
         manifest = self.register_product()
-        code, _, error = self.invoke('model', 'register', 'journey.models.Product:Product')
-        self.assertEqual(code, 0, error)
         self.assertEqual(json.loads(manifest.read_text())['databases']['default'], ['models.Product:Product'])
-        code, output, error = self.invoke('model', 'registered')
-        self.assertEqual(code, 0, error)
-        self.assertEqual(output.strip(), 'models.Product:Product')
 
         before = (self.root / 'data.sqlite3').read_bytes()
         code, _, error = self.invoke('db', 'migrate', '--title', 'create_product', '--confirm', 'yes')
@@ -90,18 +81,15 @@ class ModelMigrationJourneyTests(unittest.TestCase):
         self.assertFalse((self.root / 'migrations' / 'declined.json').exists())
         self.assertFalse((self.root / 'backups' / 'declined.sqlite3').exists())
 
-    def test_manifest_registration_is_idempotent(self):
+    def test_duplicate_model_add_preserves_manifest(self):
         manifest = self.register_product()
         original = manifest.read_bytes()
 
         for _ in range(2):
-            code, _, error = self.invoke('model', 'register', 'journey.models.Product:Product')
-            self.assertEqual(code, 0, error)
+            code, _, _ = self.invoke('model', 'add', 'Product')
+            self.assertNotEqual(code, 0)
 
         self.assertEqual(manifest.read_bytes(), original)
-        code, output, error = self.invoke('model', 'registered')
-        self.assertEqual(code, 0, error)
-        self.assertEqual(output.strip(), 'models.Product:Product')
 
 
 if __name__ == '__main__':

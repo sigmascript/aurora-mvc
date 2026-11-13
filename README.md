@@ -2,7 +2,7 @@
 
 Aurora MVC is a lightweight, ASGI-first Python web framework for building practical applications with a clear MVC-friendly structure.
 
-**Current source version:** `1.0.0a7` (release candidate; publication requires separate approval). The previous published alpha, [`1.0.0a6`](https://pypi.org/project/aurora-mvc/1.0.0a6/), remains available on PyPI and [GitHub Releases](https://github.com/sigmascript/aurora-mvc/releases/tag/v1.0.0a6). The older `0.9.7` is the last established stable release. This alpha is intended for evaluation, and its APIs and behavior may change.
+**Published alpha:** [`1.0.0a7`](https://pypi.org/project/aurora-mvc/1.0.0a7/) is available on PyPI and [GitHub Releases](https://github.com/sigmascript/aurora-mvc/releases/tag/v1.0.0a7). The current development checkout includes later, **unreleased** Milestone 5 changes; installing `1.0.0a7` does not provide them. The older `0.9.7` is the last established stable release. Alpha APIs and behavior may change.
 
 ## Highlights
 
@@ -26,7 +26,7 @@ For a local checkout with development tools:
 python -m pip install -e '.[dev]'
 ```
 
-The version-pinned command above works **after** `1.0.0a7` is approved and uploaded to PyPI. Until then, install the source checkout with `python -m pip install -e '.[dev]'`. Optional drivers can be installed with:
+The version-pinned command installs the **published** `1.0.0a7` package. To evaluate the newer, unreleased Milestone 5 development source, install its checkout with `python -m pip install -e '.[dev]'`. Optional drivers for the published release can be installed with:
 
 ```sh
 python -m pip install "aurora-mvc[mysql]==1.0.0a7"
@@ -47,13 +47,13 @@ See [Getting started](docs/getting-started.md) for local setup and other layouts
 
 ## Database CLI
 
-The six public commands are `aurora db init`, `plan`, `migrate`, `backup`, `restore`, and `history`. **Not every command supports every backend or operation.** `plan` is read-only; schema writes require the supported backend-specific approval gates. **Restore execution is currently disabled** and must not be treated as a recovery solution. Use `aurora db COMMAND --help` and the [database safety guide](docs/database.md) for current constraints.
+The six public commands in the **current development checkout** are `aurora db check`, `init`, `migrate`, `backup`, `restore`, and `history`. The older `db plan` command is retired. **Not every command supports every backend or operation.** `check` is read-only; schema writes require backend-specific safeguards and approval. The newer checkout permits narrowly guarded SQLite restoration into an absent database file with matching snapshots; MySQL/PostgreSQL restore execution is disabled. Use `aurora db COMMAND --help` and the [database safety guide](docs/database.md) for current constraints.
 
-The migration system supports selected guarded operations, including reviewed repeatable MySQL/PostgreSQL model-driven successors. It is **not a general-purpose schema migration engine**. In particular, non-SQLite explicit JSON schema-operation execution, mixed drift, arbitrary renames, foreign-key changes, primary-key replacement, and destructive transformations are not supported.
+The migration system supports selected guarded operations, including repeatable MySQL/PostgreSQL model-driven successors. The **unreleased development checkout** also supports narrowly guarded single SQLite table/column deletion, with double confirmation for existing data and strict dependency/history verification. It is **not a general-purpose schema migration engine**. In particular, server-side DROP operations, non-SQLite explicit JSON execution, mixed drift, arbitrary renames, foreign-key changes, and primary-key replacement remain unsupported.
 
 ## Validation and maturity
 
-The `1.0.0a7` source candidate passed a full Linux Python 3.12 regression of **1,408 passed, 34 skipped, 250 subtests** before release-polish changes; the team also verified **1,405 passed, 37 skipped, 250 subtests** on Windows Python 3.11.9 at the Milestone 4 Batch B acceptance. Disposable MySQL/PostgreSQL Migration3 verification preserved existing rows and confirmed applied history, but did **not** test restoration. Environment-dependent tests are skipped in ordinary runs. These results do not guarantee production suitability; the final release-candidate test results must be recorded before publication.
+For the **unreleased Milestone 5 development checkout**, the team reported **1,593 passed, 37 skipped, 264 subtests passed** on Windows Python 3.11.9 (2026-11-13). Earlier bounded live MySQL/PostgreSQL migration verification preserved existing rows but did **not** demonstrate server restoration. These results are not evidence of production readiness, current CI, or full backend parity. A future release still requires separate acceptance and authorization.
 
 ## Documentation
 

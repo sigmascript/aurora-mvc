@@ -90,7 +90,8 @@ def run_server_model_migration(args):
     with config.connect(args.database) as connection:
         from .server_forward_history import has_history, read_history
         if hasattr(connection, "fetch_all") and has_history(connection):
-            _, latest = read_history(connection, root, args.database)
+            history = read_history(connection, root, args.database)
+            _, latest = history
 
             if requires_terminal:
                 from .snapshots import schema_snapshot
@@ -103,7 +104,7 @@ def run_server_model_migration(args):
                 raise PermissionError("Interactive server migration requires a terminal")
 
             return _run_forward_migration(args, config, root, connection, models, parsed,
-                                          login_path)
+                                          login_path, verified_history=history)
 
         if requires_terminal:
             raise PermissionError("Interactive server migration requires a terminal")
@@ -248,15 +249,17 @@ def run_server_model_migration(args):
     return 0
 
 
-def _run_forward_migration(args, config, root, connection, models, parsed, login_path):
-    """Review one supported safe operation against five-column history."""
+def _run_forward_migration(args, config, root, connection, models, parsed, login_path,
+                           verified_history=None):
+    """Review one supported change against already verified five-column history."""
     from .cli_init import _mysql_database_identity, _postgres_database_identity
     from .server_forward_history import read_history
     from .server_forward_migration import execute_server_forward_migration
     from .server_model_review import review_server_model_changes
     from .server_column_widening import review_server_column_widening
 
-    rows, latest = read_history(connection, root, args.database)
+    rows, latest = (verified_history if verified_history is not None else
+                    read_history(connection, root, args.database))
 
     # An unchanged, verified schema requires no review, backup, or DDL.
     # read_history already checked the recorded schema against the server.

@@ -227,6 +227,8 @@ def run_plan(args, *, public_check=False):
 
     server_review = None
     server_review_warning = None
+    table_removal_review = None
+    column_removal_review = None
 
     if parsed.scheme in ("sqlite", "sqlite+pysqlite"):
         db_file = _existing_sqlite_path(url, base_dir)
@@ -252,6 +254,27 @@ def run_plan(args, *, public_check=False):
                     recorded_tables = {item["name"] for item in recorded["models"]}
                     selected_tables = {model.__table_name__ for model in models}
                     missing_model_identities = sorted(recorded_tables - selected_tables)
+                    if (public_check and not missing_model_identities and
+                            sum(len(plan.changes) for plan in plans) == 1 and
+                            any(change.kind == "extra_column" for plan in plans
+                                for change in plan.changes)):
+                        from .sqlite_forward_history import review_column_removal
+                        try:
+                            table, column, count, _ = review_column_removal(
+                                connection._raw, base_dir, db_file, models)
+                            column_removal_review = {"table": table, "column": column,
+                                                     "values": count}
+                        except (ValueError, RuntimeError) as error:
+                            server_review_warning = f"Column removal refused: {error}"
+                    if public_check and missing_model_identities and not any(plan.changes for plan in plans):
+                        from .sqlite_forward_history import review_table_removal
+                        try:
+                            target, count, _ = review_table_removal(connection._raw, base_dir,
+                                                                 db_file, models)
+                            table_removal_review = {"table": target, "rows": count}
+                            missing_model_identities = []
+                        except (ValueError, RuntimeError) as error:
+                            server_review_warning = f"Table removal refused: {error}"
                 except (RuntimeError, ValueError) as error:
                     history_verified = False
                     missing_model_identities = [str(error)]
@@ -376,7 +399,7 @@ def run_plan(args, *, public_check=False):
         if connection.dialect not in ("mysql", "postgresql"):
             history_verified = None
 
-    drift = any(plan.changes for plan in plans)
+    drift = bool(table_removal_review or column_removal_review) or any(plan.changes for plan in plans)
     uncertain = (any(plan.warnings for plan in plans) or server_review_warning is not None or
                  history_verified is False or bool(missing_model_identities) or
                  (public_check and history_verified is None))
@@ -390,6 +413,8 @@ def run_plan(args, *, public_check=False):
         "table_rename_candidates": rename_candidates,
         "server_migration_review": server_review,
         "server_migration_warning": server_review_warning,
+        "table_removal_review": table_removal_review,
+        "column_removal_review": column_removal_review,
         "models": [
             {"reference": ref, "table": plan.table, "exists": plan.exists,
              "changes": [{"kind": c.kind, "column": c.column, "detail": c.detail}
@@ -413,6 +438,17 @@ def run_plan(args, *, public_check=False):
 
             for warning in item["warnings"]:
                 print(f"    [REVIEW] {warning}")
+
+        if table_removal_review is not None:
+            print(f"  [TABLE REMOVAL] {table_removal_review['table']}: "
+                  f"{table_removal_review['rows']} existing row(s); "
+                  "migration requires confirmation and dependency checks")
+
+        if column_removal_review is not None:
+            print(f"  [COLUMN REMOVAL] {column_removal_review['table']}."
+                  f"{column_removal_review['column']}: "
+                  f"{column_removal_review['values']} non-NULL value(s); "
+                  "migration requires confirmation and dependency checks")
 
         for candidate in rename_candidates:
             print(f"  [RENAME CANDIDATE] {candidate['from']} -> {candidate['to']} "

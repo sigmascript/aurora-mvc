@@ -71,7 +71,7 @@ class SafeScaffoldingTests(unittest.TestCase):
     def test_cli_production_guard(self):
         with patch.dict(os.environ, {'AURORA_ENV': 'production'}):
             with self.assertRaises(SystemExit) as caught:
-                main(['create-controller', 'home', 'Sample'])
+                main(['controller', 'add', 'home', 'Sample'])
 
         self.assertEqual(caught.exception.code, 1)
 

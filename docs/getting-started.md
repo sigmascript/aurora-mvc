@@ -1,10 +1,10 @@
 # Getting started
 
-**Status:** These instructions target the Aurora MVC `1.0.0a7` source release candidate. The previous `1.0.0a6` release is published, but **`1.0.0a7` publication has not been authorized**. The integrated AuroraSQL backend supports bounded reviewed migrations; public restore execution remains disabled.
+**Status:** These instructions target the **unreleased Milestone 5 development checkout**, not the published `1.0.0a7` package. The public `1.0.0a7` release remains available on PyPI. The newer checkout supports bounded AuroraSQL migrations and an absent-file SQLite restore; MySQL/PostgreSQL restore remains disabled.
 
 ## Requirements and installation
 
-Use Python 3.10 or newer. Once `1.0.0a7` is published, install the versioned package with `python -m pip install 'aurora-mvc==1.0.0a7'`. Until then, from the root of the Aurora MVC source checkout:
+Use Python 3.10 or newer. To install the **published** alpha, run `python -m pip install 'aurora-mvc==1.0.0a7'`. To use the newer **unreleased Milestone 5** source, run the following from the repository checkout instead:
 
 ```bash
 python -m pip install -e '.[dev]'
@@ -30,7 +30,7 @@ For automatic development reloads, use `aurora run` without `--no-reload`.
 
 Generated projects include `aurora_config.json`, which defines validated,
 nonsecret application defaults such as name and time zone. The generated
-`app.py` loads it using `Aurora.from_config(...)`. Existing applications
+`app.py` loads the project configuration and conventional resource paths using `Aurora.from_project(__file__)`. Existing applications
 may continue to construct `Aurora(...)` directly. See
 [Application configuration](application-configuration.md).
 
@@ -40,18 +40,13 @@ The `--mvc` generator includes `aurora_databases.json` (a default SQLite configu
 
 ```bash
 aurora db init
-aurora db plan
-aurora db history --verify-models
+aurora db check
+aurora db history
 ```
 
-Models in supported shared/app model directories are discovered automatically across the three generated layouts. If a model lives outside those locations, explicitly register its import reference in the optional manifest:
+Models in supported shared and modular-app model directories are discovered automatically. Optional explicit model selections belong in `aurora_models.json`; the retired `aurora model register` and `registered` commands are not supported.
 
-```bash
-aurora model register models.users:Users
-aurora model registered
-```
-
-`model register` only edits the manifest; it does not create or migrate database tables. Running `db init` again after all selected tables exist reports already initialized without changing the schema. For supported subsequent model changes use `aurora db plan` and interactive reviewed `aurora db migrate`; do not use `init` on partially initialized databases. See the [database guide](database.md).
+Re-running `aurora db init` on an initialized database makes no changes. For supported subsequent model changes, use read-only `aurora db check`, then `aurora db migrate` with its confirmation workflow. See the [database guide](database.md).
 
 ## Create an application manually
 
