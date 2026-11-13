@@ -14,6 +14,10 @@ from .cli_plan import _load_config, _select_models
 from .migration_titles import migration_title
 
 
+class UnsupportedServerChange(ValueError):
+    """A reviewed refusal with a fixed, credential-safe public explanation."""
+
+
 def run_server_model_migration(args):
     """Review and apply one narrowly supported successor to a server alias.
 
@@ -60,10 +64,12 @@ def run_server_model_migration(args):
                 or not getattr(args, "backup", None)
                 or not getattr(args, "name", None)):
             raise PermissionError("Automated server migration needs exact review, backup and confirmation")
-    elif not simple_confirm and (not sys.stdin.isatty() or any(
+    elif not simple_confirm and any(
             getattr(args, option, None)
-            for option in ("approve", "backup", "confirm", "name"))):
+            for option in ("approve", "backup", "confirm", "name")):
         raise PermissionError("Interactive server migration requires a terminal")
+
+    requires_terminal = not automated and not simple_confirm and not sys.stdin.isatty()
 
     config, root = _load_config(args.config)
     _, models = _select_models(args, root)
@@ -82,6 +88,26 @@ def run_server_model_migration(args):
         raise ValueError("MySQL login profiles are not supported by PostgreSQL")
 
     with config.connect(args.database) as connection:
+        from .server_forward_history import has_history, read_history
+        if hasattr(connection, "fetch_all") and has_history(connection):
+            _, latest = read_history(connection, root, args.database)
+
+            if requires_terminal:
+                from .snapshots import schema_snapshot
+
+                declared = schema_snapshot(*models, dialect=connection.dialect)["tables"]
+                if isinstance(latest.get("models"), list) and declared == latest["models"]:
+                    print(f"Database {args.database} is up to date; no migration needed.")
+                    return 0
+
+                raise PermissionError("Interactive server migration requires a terminal")
+
+            return _run_forward_migration(args, config, root, connection, models, parsed,
+                                          login_path)
+
+        if requires_terminal:
+            raise PermissionError("Interactive server migration requires a terminal")
+
         timeline = inspect_server_timeline(connection, args.database)
 
         if timeline is None or any(entry.status != "applied" for entry in timeline):
@@ -219,4 +245,86 @@ def run_server_model_migration(args):
                 connection, models, **kwargs)
 
     print(f"Applied {name} to {args.database}; operation {operation_id}; backup: {archive}")
+    return 0
+
+
+def _run_forward_migration(args, config, root, connection, models, parsed, login_path):
+    """Review one supported safe operation against five-column history."""
+    from .cli_init import _mysql_database_identity, _postgres_database_identity
+    from .server_forward_history import read_history
+    from .server_forward_migration import execute_server_forward_migration
+    from .server_model_review import review_server_model_changes
+    from .server_column_widening import review_server_column_widening
+
+    rows, latest = read_history(connection, root, args.database)
+
+    # An unchanged, verified schema requires no review, backup, or DDL.
+    # read_history already checked the recorded schema against the server.
+    from .snapshots import schema_snapshot
+
+    if isinstance(latest.get("models"), list):
+        declared = schema_snapshot(*models, dialect=connection.dialect)["tables"]
+        if declared == latest["models"]:
+            print(f"Database {args.database} is up to date; no migration needed.")
+            return 0
+
+    identity_fn = (_mysql_database_identity if connection.dialect == "mysql"
+                   else _postgres_database_identity)
+    identity = identity_fn(connection, parsed)
+    try:
+        proposal = review_server_model_changes(connection, models, args.database, identity)
+    except ValueError:
+        try:
+            proposal = review_server_column_widening(connection, models, args.database, identity)
+        except ValueError as error:
+            # Only known reviewer reasons reach the terminal. Arbitrary driver
+            # exception text may contain credentials or connection strings.
+            reasons = {
+                "VARCHAR narrowing or unchanged length is not supported":
+                    "VARCHAR narrowing is not supported; preserve or increase the length.",
+                "DECIMAL precision/scale cannot be reduced":
+                    "DECIMAL narrowing is not supported; preserve or increase precision and scale.",
+            }
+            explanation = reasons.get(
+                str(error),
+                "Only one new table, nullable column, or compatible column widening is supported.",
+            )
+            raise UnsupportedServerChange(explanation) from error
+
+    if len(proposal.operations) != 1 or len(proposal.statements) != 1:
+        raise ValueError("Server migration requires one reviewed operation")
+
+    kind = proposal.operations[0]["kind"]
+    if kind not in ("create_table", "add_column", "widen_column"):
+        raise ValueError("Server forward migration operation is not supported")
+
+    automated = bool(getattr(args, "apply", False))
+    approval = args.approve if automated else proposal.review_sha256
+    if not hmac.compare_digest(str(approval), proposal.review_sha256):
+        raise PermissionError("Server migration approval differs from the exact proposal")
+
+    title = migration_title(getattr(args, "title", None), "Untitled")
+    if not automated:
+        operation = proposal.operations[0]
+        target = operation["table"]
+        if operation.get("column"):
+            target += "." + operation["column"]
+        print(f"AuroraSQL migration — {args.database} ({connection.dialect})")
+        print(f"  {kind}: {target}")
+        print(f"  Reviewed SHA-256: {proposal.review_sha256}")
+        if getattr(args, "confirm", None) not in ("yes", "y"):
+            if input("Apply this reviewed migration? [y/N]: ").strip().lower() != "y":
+                print("Migration cancelled; no database changes made.")
+                return 0
+
+    # Five-column history uses optional backups. Automated callers may supply
+    # an explicit destination; ordinary migrations do not create archives.
+    backup_path = args.backup if automated else None
+
+    snapshot, archive = execute_server_forward_migration(
+        connection, models, root, args.database, identity=identity, parsed=parsed,
+        review=proposal, approval=approval, title=title, backup_path=backup_path,
+        config_path=args.config, login_path=login_path)
+    print(f"Applied Migration{len(rows) + 1} to {args.database}; "
+          f"snapshot: {snapshot.name}" + (f"; backup: {archive}" if archive else ""))
     return 0

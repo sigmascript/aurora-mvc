@@ -35,6 +35,20 @@ def _preflight(connection, models, alias, *, project_root=None):
     unexpected = existing - target
     verified_current = False
 
+    if dialect in ("mysql", "postgresql") and "migrations" in existing:
+        from .server_forward_history import read_history
+        from .snapshots import schema_snapshot
+        try:
+            _, latest = read_history(connection, project_root or Path.cwd(), alias)
+            unexpected -= {"migrations"}
+            verified_current = (not unexpected and not missing and not drift and
+                                latest["models"] ==
+                                schema_snapshot(*models, dialect=dialect)["tables"])
+        except (RuntimeError, ValueError, OSError) as error:
+            return {"database_alias": alias, "read_only": True, "status": "REFUSED",
+                    "reason": str(error), "existing_tables": sorted(existing),
+                    "missing_tables": missing, "unexpected_tables": sorted(unexpected),
+                    "review_warnings": warnings, "model_tables": sorted(target)}
     if dialect == "sqlite" and "migrations" in existing:
         from .sqlite_forward_history import read_history, matches_models
         from .cli_plan import _load_config
@@ -73,7 +87,7 @@ def _preflight(connection, models, alias, *, project_root=None):
             "model_tables": sorted(target)}
 
 
-def _postgres_read_only_preflight(connection, models, alias):
+def _postgres_read_only_preflight(connection, models, alias, *, project_root=None):
     """Inspect one PostgreSQL schema snapshot with server-enforced read-only access.
 
     AuroraSQL's PostgreSQL connections normally use autocommit. Explicitly
@@ -93,7 +107,7 @@ def _postgres_read_only_preflight(connection, models, alias):
     raw.execute("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
 
     try:
-        report = _preflight(connection, models, alias)
+        report = _preflight(connection, models, alias, project_root=project_root)
         report["transaction_mode"] = "REPEATABLE READ, READ ONLY"
         report["write_enabled"] = False
         return report
@@ -150,7 +164,7 @@ def run_init_check(args):
                 report = _preflight(connection, models, args.database, project_root=base_dir)
     elif parsed.scheme == "postgresql+psycopg":
         with config.connect(args.database) as connection:
-            report = _postgres_read_only_preflight(connection, models, args.database)
+            report = _postgres_read_only_preflight(connection, models, args.database, project_root=base_dir)
             report["write_enabled"] = False
             report["proposal_sha256"] = (
                 _postgres_approval_digest(models, args.database,
@@ -163,7 +177,7 @@ def run_init_check(args):
         # MySQL remains read-only by convention; a dedicated permission-limited
         # account is required until its own guarded preflight is implemented.
         with config.connect(args.database) as connection:
-            report = _preflight(connection, models, args.database)
+            report = _mysql_read_only_preflight(connection, models, args.database, project_root=base_dir)
 
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0 if report["status"] in ("EMPTY", "MISSING_DATABASE", "ALREADY_INITIALIZED") else 3
@@ -252,13 +266,13 @@ def _mysql_approval_digest(models, alias, identity):
     return sha256(proposal.encode("utf-8")).hexdigest()
 
 
-def _mysql_read_only_preflight(connection, models, alias):
+def _mysql_read_only_preflight(connection, models, alias, *, project_root=None):
     """Inspect MySQL without writes; DDL is not transactional."""
 
     if connection.dialect != "mysql":
         raise ValueError("MySQL preflight requires a MySQL connection")
 
-    report = _preflight(connection, models, alias)
+    report = _preflight(connection, models, alias, project_root=project_root)
     report["write_enabled"] = False
     report["transactional_ddl"] = False
     return report
@@ -454,22 +468,22 @@ def run_init_apply(args):
             identity = _postgres_database_identity(connection, parsed)
             digest = _postgres_approval_digest(models, args.database, identity)
 
-            report = _postgres_read_only_preflight(connection, models, args.database)
+            report = _postgres_read_only_preflight(connection, models, args.database, project_root=base_dir)
             decision, result = _server_initial_decision(args, report, digest, models, "PostgreSQL")
 
             if decision is None:
                 return result
 
-            from .postgres_init import execute_postgres_init
-            operation_ids = execute_postgres_init(
-                connection, models, approval=decision[0],
-                expected_approval=digest, alias=args.database,
-                expected_identity=identity, parsed=parsed, title=decision[1],
+            from .server_forward_init import execute_server_forward_init
+            snapshot = execute_server_forward_init(
+                connection, models, base_dir, args.database, approval=decision[0],
+                expected_approval=digest, expected_identity=identity,
+                parsed=parsed, title=decision[1],
             )
 
         print(json.dumps({"status": "INITIALIZED", "database_alias": args.database,
                           "tables": [model.__table_name__ for model in models],
-                          "operation_ids": list(operation_ids)}, indent=2, sort_keys=True))
+                          "snapshot": snapshot.name}, indent=2, sort_keys=True))
         return 0
 
     if parsed.scheme == "mysql+pymysql":
@@ -479,22 +493,22 @@ def run_init_apply(args):
             identity = _mysql_database_identity(connection, parsed)
             digest = _mysql_approval_digest(models, args.database, identity)
 
-            report = _mysql_read_only_preflight(connection, models, args.database)
+            report = _mysql_read_only_preflight(connection, models, args.database, project_root=base_dir)
             decision, result = _server_initial_decision(args, report, digest, models, "MySQL")
 
             if decision is None:
                 return result
 
-            from .mysql_init import execute_mysql_init
-            operation_ids = execute_mysql_init(
-                connection, models, approval=decision[0],
-                expected_approval=digest, alias=args.database,
-                expected_identity=identity, parsed=parsed, title=decision[1],
+            from .server_forward_init import execute_server_forward_init
+            snapshot = execute_server_forward_init(
+                connection, models, base_dir, args.database, approval=decision[0],
+                expected_approval=digest, expected_identity=identity,
+                parsed=parsed, title=decision[1],
             )
 
         print(json.dumps({"status": "INITIALIZED", "database_alias": args.database,
                           "tables": [model.__table_name__ for model in models],
-                          "operation_ids": list(operation_ids)}, indent=2, sort_keys=True))
+                          "snapshot": snapshot.name}, indent=2, sort_keys=True))
         return 0
 
     if parsed.scheme not in ("sqlite", "sqlite+pysqlite"):

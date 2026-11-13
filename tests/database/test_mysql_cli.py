@@ -26,7 +26,7 @@ def _setup(monkeypatch, *, status="EMPTY"):
     )
     monkeypatch.setattr(cli_init, "_load_config", lambda path: (config, None))
     monkeypatch.setattr(cli_init, "_select_models", lambda args, base_dir: (["unused:Entry"], [Entry]))
-    monkeypatch.setattr(cli_init, "_mysql_read_only_preflight", lambda *args: {
+    monkeypatch.setattr(cli_init, "_mysql_read_only_preflight", lambda *args, **kwargs: {
         "status": status, "review_warnings": [], "read_only": True,
         "transactional_ddl": False, "write_enabled": False,
     })
@@ -66,10 +66,10 @@ def test_mysql_delegates_only_exact_approval(monkeypatch, capsys):
     assert cli_init.run_init_apply(_args()) == 0
 
     digest = json.loads(capsys.readouterr().out)["approval_sha256"]
-    from aurora.database import mysql_init
+    from aurora.database import server_forward_init
     calls = []
-    monkeypatch.setattr(mysql_init, "execute_mysql_init", lambda conn, models, **kw: (
-        calls.append((conn, models, kw)) or ("operation-1",)
+    monkeypatch.setattr(server_forward_init, "execute_server_forward_init", lambda conn, models, root, alias, **kw: (
+        calls.append((conn, models, kw)) or __import__("pathlib").Path("20261112-000000.json")
     ))
     assert cli_init.run_init_apply(_args(digest, "APPLY")) == 0
 

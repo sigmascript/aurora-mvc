@@ -19,8 +19,8 @@ def test_read_only_snapshot_is_opened_and_closed(monkeypatch):
     connection = _connection()
     seen = []
 
-    def preflight(conn, models, alias):
-        seen.append((conn, models, alias))
+    def preflight(conn, models, alias, *, project_root=None):
+        seen.append((conn, models, alias, project_root))
         return {"status": "EMPTY", "read_only": True}
 
     monkeypatch.setattr(cli_init, "_preflight", preflight)
@@ -39,7 +39,7 @@ def test_read_only_snapshot_is_opened_and_closed(monkeypatch):
 def test_read_only_snapshot_rolls_back_on_inspection_failure(monkeypatch):
     connection = _connection()
 
-    def fail(*args):
+    def fail(*args, **kwargs):
         raise RuntimeError("catalog query failed")
 
     monkeypatch.setattr(cli_init, "_preflight", fail)

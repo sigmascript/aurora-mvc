@@ -177,7 +177,7 @@ def verify_server_declared_schema(connection, models, *, evidence_models=None,
                                   historical_exclusion=None, historical_type_override=None,
                                   historical_nullability_override=None,
                                   historical_default_exclusion=None,
-                                  include_observations=False):
+                                  include_observations=False, history_tables=None):
     """Verify all declared server tables, optionally fingerprinting a subset.
 
     Require no unexpected tables or views, no extra indexes/constraints, and
@@ -237,7 +237,8 @@ def verify_server_declared_schema(connection, models, *, evidence_models=None,
                 or not isinstance(historical_default_exclusion[1], str)):
             raise ValueError("Historical default evidence must identify a verified column")
 
-    expected = {model.__table_name__ for model in ordered} | _JOURNALS
+    expected = {model.__table_name__ for model in ordered} | (
+        _JOURNALS if history_tables is None else set(history_tables))
 
     if dialect == "mysql":
         objects = connection.fetch_all(

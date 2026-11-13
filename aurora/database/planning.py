@@ -144,9 +144,16 @@ def plan_schema(connection, model):
     if not table.uniqueness_verified:
         warnings.append("Single-column uniqueness has not been verified for this backend.")
 
-    # SQLite's automatic single-column UNIQUE indexes are already validated
-    # through inspect_table(). Preserve review for other index declarations.
-    if any(not index.startswith("sqlite_autoindex_") for index in table.indexes):
+    # Primary-key indexes are a normal consequence of model table creation.
+    # Retain manual review for all other indexes, including user-added ones.
+    primary_index = {
+        "mysql": "PRIMARY",
+        "postgresql": f"{table.name}_pkey",
+    }.get(connection.dialect)
+
+    if any(index != primary_index and not (
+        connection.dialect == "sqlite" and index.startswith("sqlite_autoindex_")
+    ) for index in table.indexes):
         warnings.append("Existing indexes require manual review; model index declarations are not supported.")
 
     if connection.dialect == "sqlite" and not table.constraints_verified:

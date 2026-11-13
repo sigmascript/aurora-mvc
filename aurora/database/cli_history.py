@@ -152,6 +152,17 @@ def run_history(args):
             report = _read_history(connection, args.database, models=models)
     else:
         with config.connect(args.database) as connection:
+            from .server_forward_history import has_history, read_history
+            if hasattr(connection, "fetch_all") and has_history(connection):
+                rows, _ = read_history(connection, base_dir, args.database)
+                print(f"Database: {args.database}")
+                print(f"Recorded migrations: {len(rows)}")
+                for row in reversed(rows[-10:]):
+                    print(f"  {row['id']}. {row['title']} — {row['date']} — {row['snapshot']}")
+                    if row["warnings"]:
+                        for warning in json.loads(row["warnings"]):
+                            print(f"     Confirmed warning: {warning}")
+                return 0
             report = _read_history(connection, args.database, models=models, parsed=parsed)
 
     if args.format == "json":

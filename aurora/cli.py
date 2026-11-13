@@ -414,6 +414,11 @@ def main(argv: list[str] | None = None) -> int:
         try:
             return run_model_migration(args)
         except Exception as exc:
+            from aurora.database.cli_server_model_migration import UnsupportedServerChange
+
+            if isinstance(exc, UnsupportedServerChange):
+                parser.exit(1, f"aurora: Model-driven migration refused. {exc}\n")
+
             diagnostic = _database_failure(exc, args, "migration")
             parser.exit(1, "aurora: Model-driven migration refused. " + diagnostic.removeprefix("aurora: "))
 

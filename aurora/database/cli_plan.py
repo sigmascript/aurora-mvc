@@ -551,4 +551,39 @@ def run_check(args):
 
             return 0
 
+    if dialect in ("mysql", "postgresql"):
+        from .cli_init import _mysql_read_only_preflight, _postgres_read_only_preflight
+
+        with config.connect(args.database) as connection:
+            if dialect == "postgresql":
+                report = _postgres_read_only_preflight(
+                    connection, models, args.database, project_root=base_dir
+                )
+            else:
+                report = _mysql_read_only_preflight(
+                    connection, models, args.database, project_root=base_dir
+                )
+
+        if report["status"] in ("EMPTY", "ALREADY_INITIALIZED"):
+            status = "READY" if report["status"] == "EMPTY" else "UP_TO_DATE"
+            if args.format == "json":
+                print(json.dumps({"database_alias": args.database, "status": status,
+                                  "read_only": True}, indent=2, sort_keys=True))
+            else:
+                print(f"Database: {args.database} (AuroraSQL; advisory only)")
+                print(f"Schema status: {status}")
+                print("No migration has been approved or executed.")
+            return 0
+
+        # Preserve existing drift reporting and refusal for unverified histories.
+        if report["status"] == "REFUSED":
+            reason = report.get("reason", "Server schema requires manual review")
+            if args.format == "json":
+                print(json.dumps({"database_alias": args.database, "status": "BLOCKED",
+                                  "read_only": True, "reason": reason}, indent=2,
+                                 sort_keys=True))
+            else:
+                print(f"Database: {args.database} — BLOCKED: {reason}")
+            return 3
+
     return run_plan(args, public_check=True)

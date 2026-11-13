@@ -21,13 +21,13 @@ def test_interactive_server_init_reviews_then_passes_title(monkeypatch, capsys, 
     calls = []
 
     if dialect == "mysql":
-        from aurora.database import mysql_init
-        monkeypatch.setattr(mysql_init, "execute_mysql_init", lambda conn, models, **kwargs:
-                            calls.append((conn, kwargs)) or ("operation-1",))
+        from aurora.database import server_forward_init
+        monkeypatch.setattr(server_forward_init, "execute_server_forward_init", lambda conn, models, root, alias, **kwargs:
+                            calls.append((conn, kwargs)) or __import__("pathlib").Path("20261112-000000.json"),)
     else:
-        from aurora.database import postgres_init
-        monkeypatch.setattr(postgres_init, "execute_postgres_init", lambda conn, models, **kwargs:
-                            calls.append((conn, kwargs)) or ("operation-1",))
+        from aurora.database import server_forward_init
+        monkeypatch.setattr(server_forward_init, "execute_server_forward_init", lambda conn, models, root, alias, **kwargs:
+                            calls.append((conn, kwargs)) or __import__("pathlib").Path("20261112-000000.json"),)
 
     args = Namespace(config="unused", database="default", model=[], models_config=None,
                      approve=None, confirm=None, title="Create application schema")
