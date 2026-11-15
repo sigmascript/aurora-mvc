@@ -15,6 +15,8 @@ import stat
 from types import MappingProxyType
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from aurora.security.sessions import SessionSettings
+
 
 _FORMAT = "aurora.application.v1"
 _MAX_FILE_BYTES = 65536
@@ -71,10 +73,54 @@ def _read_document(source):
     if not isinstance(document, dict) or document.get("format", _FORMAT) != _FORMAT:
         raise ValueError("Unsupported application configuration format")
 
-    if set(document) - {"format", "application", "limits", "constants", "statics", "strict", "server"}:
+    if set(document) - {"format", "application", "limits", "constants", "statics", "strict", "server", "sessions"}:
         raise ValueError("Unknown application configuration section")
 
     return document
+
+
+def _session_options(document, source):
+    """Validate explicit standalone session storage without provisioning it.
+
+    Database-alias-backed sessions are intentionally deferred until F06/F08
+    can provide a real backend and guarded table provisioning.
+    """
+    if "sessions" not in document:
+        return {}
+
+    config = document["sessions"]
+    if not isinstance(config, dict):
+        raise ValueError("sessions must be a JSON object")
+
+    allowed = {"enabled", "backend", "path", "cookie_name", "lifetime",
+               "secure", "samesite", "max_data_bytes"}
+    if set(config) - allowed:
+        raise ValueError("Unknown sessions setting")
+    if not isinstance(config.get("enabled"), bool):
+        raise ValueError("sessions.enabled must be a JSON boolean")
+    if not config["enabled"]:
+        if set(config) != {"enabled"}:
+            raise ValueError("Disabled sessions cannot specify storage or cookie options")
+        return {"sessions": False}
+
+    if config.get("backend", "standalone") != "standalone":
+        raise ValueError("Only standalone SQLite sessions are supported; database-alias sessions await F06/F08")
+    filename = config.get("path")
+    if not isinstance(filename, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.sqlite3?", filename):
+        raise ValueError("sessions.path must be a safe project-local .sqlite or .sqlite3 filename")
+    if filename.startswith(".") or ".." in filename:
+        raise ValueError("sessions.path must not contain traversal or hidden components")
+    path = Path(source).resolve().parent / filename
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise ValueError("Session storage must not be a symlink or non-file path")
+
+    fields = {"cookie_name", "lifetime", "secure", "samesite", "max_data_bytes"}
+    kwargs = {key: config[key] for key in fields if key in config}
+    try:
+        session_settings = SessionSettings(database_path=str(path), **kwargs)
+    except (TypeError, ValueError) as error:
+        raise ValueError("Invalid sessions settings: " + str(error)) from error
+    return {"sessions": session_settings}
 
 
 @dataclass(frozen=True)
@@ -158,7 +204,7 @@ def load_application_settings(source):
                 "Application timezone is unavailable; install time-zone data (tzdata on Windows)"
             ) from error
 
-    constructor_options = {}
+    constructor_options = _session_options(document, source)
 
     # Reuse the Application constructor's existing locale validation contract.
     if "locales" in application or "default_locale" in application:

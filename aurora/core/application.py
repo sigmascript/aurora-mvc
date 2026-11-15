@@ -119,6 +119,8 @@ class Application:
 
         configuration = load_application_settings(source)
         overlap = set(constructor_options).intersection(configuration.constructor_options)
+        if "sessions" in configuration.constructor_options:
+            overlap.update(set(constructor_options) & {"sessions", "session_settings"})
 
         if overlap:
             raise ValueError("Application options supplied in both JSON and Python: "
