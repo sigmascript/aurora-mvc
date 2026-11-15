@@ -38,7 +38,7 @@ def _header_value(value: str) -> bytes:
 
 
 class Response:
-    """Send string content as a UTF-8 encoded HTTP response.
+    """Send UTF-8 string content or raw bytes as an HTTP response.
 
     Set content_type to control the media type. Custom headers cannot
     override the generated Content-Type or Content-Length headers.
@@ -46,7 +46,7 @@ class Response:
 
     def __init__(
         self,
-        content: str = "",
+        content: str | bytes = "",
         status_code: int = 200,
         content_type: str = "text/plain; charset=utf-8",
         headers=None,
@@ -134,7 +134,12 @@ class Response:
 
     def prepare(self):
         """Validate and serialize both ASGI messages before transmission."""
-        body = self.content.encode("utf-8")
+        if isinstance(self.content, bytes):
+            body = self.content
+        elif isinstance(self.content, str):
+            body = self.content.encode("utf-8")
+        else:
+            raise TypeError("Response content must be str or bytes")
         body_forbidden = 100 <= self.status_code < 200 or self.status_code in {204, 304}
 
         # Bodyless status codes must not emit a payload or misleading entity

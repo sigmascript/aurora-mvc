@@ -143,5 +143,7 @@ async def serve_static_file(scope, send, *, root: Path, url_prefix: str):
     headers = [(b"content-type", b"text/plain; charset=utf-8"),
                (b"content-length", str(len(content)).encode("ascii")),
                (b"x-content-type-options", b"nosniff")]
+    if status == 405:
+        headers.append((b"allow", b"GET, HEAD"))
     await send({"type": "http.response.start", "status": status, "headers": headers})
     await send({"type": "http.response.body", "body": b"" if method == "HEAD" else content})

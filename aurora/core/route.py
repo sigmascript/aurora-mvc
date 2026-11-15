@@ -85,7 +85,10 @@ class Route:
         A matching path without parameters returns an empty dictionary.
         """
 
-        if request.method not in self.methods:
+        # GET also serves HEAD unless an explicit HEAD handler is selected.
+        if request.method not in self.methods and not (
+            request.method == "HEAD" and "GET" in self.methods
+        ):
             return None
 
         routing_path = request.routing_path

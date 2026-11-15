@@ -21,6 +21,10 @@ class Controller:
 
         if not isinstance(action_name, str) or not action_name.strip():
             raise ValueError("Action name must be a non-empty string")
+        if action_name.startswith("_") or not action_name.isidentifier():
+            raise ValueError(f"Controller action must be a public method: {action_name}")
+        if not callable(getattr(cls, action_name, None)):
+            raise ValueError(f"Controller action not found or not callable: {action_name}")
 
         def handler(request: Request, **params):
             controller = cls(request)
@@ -43,7 +47,12 @@ class Controller:
         if method not in {"get", "post", "put", "patch", "delete", "head", "options"}:
             raise HTTPException(405, "Method Not Allowed")
 
-        action = getattr(cls(request), method, None)
+        controller = cls(request)
+        action = getattr(controller, method, None)
+
+        # HTTP HEAD reuses GET when no explicit head() method exists.
+        if method == "head" and not callable(action):
+            action = getattr(controller, "get", None)
 
         if not callable(action):
             raise HTTPException(405, "Method Not Allowed")

@@ -4,6 +4,7 @@ from jinja2 import (
     FileSystemLoader,
     PrefixLoader,
     select_autoescape,
+    TemplateNotFound,
 )
 
 from aurora.view import View
@@ -46,5 +47,11 @@ class ViewRenderer:
 
         # An explicit extension wins; extensionless names default to HTML.
         name = view.name if "." in view.name.rsplit("/", 1)[-1] else f"{view.name}.html"
-        source = self.environment.get_template(name)
+        try:
+            source = self.environment.get_template(name)
+        except TemplateNotFound as error:
+            namespace = name.split("/", 1)[0] if "/" in name else "shared"
+            raise LookupError(
+                f"Template {name!r} was not found (namespace: {namespace})"
+            ) from error
         return source.render(**view.context)

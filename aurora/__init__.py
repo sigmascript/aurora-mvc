@@ -5,7 +5,7 @@ Aurora = Application
 from aurora.core.controller import Controller
 from aurora.core.response import redirect
 from aurora.view import View, view
-from aurora.urls import url_for
+from aurora.urls import url_for, with_query
 from aurora.validation import validate
 
 __version__ = "1.0.0a7"
@@ -18,5 +18,6 @@ __all__ = [
     "view",
     "redirect",
     "url_for",
+    "with_query",
     "validate",
 ]

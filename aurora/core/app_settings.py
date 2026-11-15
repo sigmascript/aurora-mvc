@@ -131,7 +131,7 @@ def load_application_settings(source):
     if not isinstance(application, dict) or not isinstance(limits, dict) or not isinstance(constants, dict):
         raise ValueError("Application, limits and constants must be JSON objects")
 
-    if set(application) - {"name", "timezone", "locales", "default_locale", "locale_cookie_name"}:
+    if set(application) - {"name", "timezone", "locales", "default_locale", "locale_cookie_name", "locale_entry_policy"}:
         raise ValueError("Unknown application setting")
 
     if set(limits) - {"max_request_body_bytes"}:
@@ -175,6 +175,12 @@ def load_application_settings(source):
         cookie_name = application["locale_cookie_name"]
         validate_locale_cookie(cookie_name, constructor_options.get("locales"), None)
         constructor_options["locale_cookie_name"] = cookie_name
+
+    if "locale_entry_policy" in application:
+        policy = application["locale_entry_policy"]
+        if not isinstance(policy, str) or policy not in {"explicit", "default", "remembered"}:
+            raise ValueError("Invalid locale_entry_policy")
+        constructor_options["locale_entry_policy"] = policy
 
     if "max_request_body_bytes" in limits:
         value = limits["max_request_body_bytes"]
