@@ -170,10 +170,8 @@ def main(argv: list[str] | None = None) -> int:
     backup.set_defaults(config="aurora_databases.json")
 
     restore = db_actions.add_parser(
-        "restore", help="Restore a verified SQLite backup into an absent database",
-        description=("Restore a verified SQLite backup to a database file that does not exist. "
-                     "Existing databases are never overwritten. "
-                     "The matching migration snapshots must already be present."),
+        "restore", help="Restore execution is disabled (always refused)",
+        description="Restore execution is disabled for all database backends. No database files are created or modified.",
     )
     restore.add_argument("--database", default="default", help="Database name from project settings")
     restore.add_argument("--from", dest="source", required=True, help="Backup file path")
@@ -264,28 +262,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "db" and args.action in ("backup", "restore") and args.backend == "aurorasql":
         if args.action == "restore":
-            from aurora.database.cli_plan import _load_config
-            from urllib.parse import urlsplit
-            try:
-                config, _ = _load_config(args.config)
-                if urlsplit(config.resolve(args.database)).scheme not in ("sqlite", "sqlite+pysqlite"):
-                    raise ValueError("Server database restore is not available")
-                from aurora.database.cli_empty_restore import restore_empty_sqlite
-                return restore_empty_sqlite(args.config, args.database, args.source)
-            except FileExistsError:
-                parser.exit(1, "aurora: Target database already exists; restore will not overwrite it.\n")
-            except Exception as exc:
-                # Do not echo raw connection URLs or filesystem-backed driver errors.
-                message = str(exc)
-                safe = ("Restore supports only a configured SQLite file", "In-memory databases cannot be restored",
-                        "Invalid SQLite database path", "Restore source and destination must be different",
-                        "Target directory must already exist", "Backup must be an existing regular SQLite file",
-                        "Database has SQLite journal/WAL files; restore refused",
-                        "Backup failed SQLite integrity verification", "Backup contains foreign-key violations",
-                        "Restore in production requires separate approval")
-                if message not in safe:
-                    message = "Restore refused: verify the backup, migration snapshots, and empty destination."
-                parser.exit(1, f"aurora: {message}\n")
+            parser.exit(1, "aurora: Database restore execution is disabled for all backends. No changes made.\n")
 
         from aurora.database.cli_plan import _load_config
         from urllib.parse import urlsplit

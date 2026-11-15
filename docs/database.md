@@ -16,7 +16,7 @@ A normal Aurora project can use just one `default` database. Model directory loc
 | `check` | Inspect database readiness and model differences | Read-only; inspection is not approval to write |
 | `migrate` | Preview/apply selected supported schema changes | Backend-specific scope, review, and explicit approval gates; backups optional |
 | `backup` | Create a verified backup | SQLite and guarded native MySQL/PostgreSQL paths; backend tools and client prerequisites vary |
-| `restore` | Guarded SQLite restore into an absent file | Server restoration disabled |
+| `restore` | Disabled restore command | Execution refused for every backend |
 | `history` | Read migration records | Does not itself verify the entire database schema |
 
 There are exactly six public database commands.
@@ -76,7 +76,7 @@ Do **not** interpret this as arbitrary destructive DDL support. Lossy narrowing 
 
 ## Current limits and recovery
 
-`aurora db restore` supports only bounded SQLite restoration into an absent file with matching verified snapshots. MySQL/PostgreSQL restoration remains disabled. Preflight and staging helpers do not certify server restoration. Maintain an independently tested recovery procedure before relying on AuroraSQL for important data.
+`aurora db restore` always refuses execution, including for an absent SQLite destination. Read-only recovery preflight remains available internally; it does not authorize restoration. The historical MySQL staging-import executor has been retired; read-only recovery preflight does not authorize any restore or staging write. Maintain an independently tested recovery procedure before relying on AuroraSQL for important data.
 
 ### Recovery rehearsal design (not an enabled restore feature)
 

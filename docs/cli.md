@@ -10,7 +10,7 @@ Aurora exposes project scaffolding and six public database commands. For exact f
 | `aurora db check` | Inspect database readiness and model changes without writes | No |
 | `aurora db migrate` | Preview or apply supported migrations using backend-specific gates | Only after required approvals |
 | `aurora db backup` | Create verified database backup | Writes backup file, not schema |
-| `aurora db restore` | Restore eligible SQLite backup into an absent file, with matching snapshots | SQLite only; MySQL/PostgreSQL restore execution refused |
+| `aurora db restore` | Disabled; always refuses execution | No |
 | `aurora db history` | Read applied migration records | No |
 
 There are **no database command aliases**. Legacy commands such as `sync`, `plan`, `inspect`, `status`, `policy`, `readiness`, `compat`, `migration`, `mysql-create-table`, and `mysql-add-column` are removed from the public CLI.
@@ -37,4 +37,4 @@ Ordinary interactive `migrate` reviews supported model differences and asks for 
 
 The JSON format, limitations and examples are documented in [Database and migrations](database.md). This guide targets the unreleased Milestone 5 checkout; do not assume its features are present in the published `1.0.0a7` package.
 
-`restore` supports only the bounded absent-file SQLite path with companion snapshot verification. MySQL/PostgreSQL restore execution remains disabled.
+`restore` always refuses execution on SQLite, MySQL, and PostgreSQL. It never creates a target database. Read-only recovery preflight remains an internal inspection capability, not authorization to restore.

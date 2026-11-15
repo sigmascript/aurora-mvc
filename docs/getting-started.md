@@ -1,6 +1,6 @@
 # Getting started
 
-**Status:** These instructions target the **unreleased Milestone 5 development checkout**, not the published `1.0.0a7` package. The public `1.0.0a7` release remains available on PyPI. The newer checkout supports bounded AuroraSQL migrations and an absent-file SQLite restore; MySQL/PostgreSQL restore remains disabled.
+**Status:** These instructions target the **unreleased Milestone 5 development checkout**, not the published `1.0.0a7` package. The public `1.0.0a7` release remains available on PyPI. The newer checkout supports bounded AuroraSQL migrations; database restore execution is disabled for all backends.
 
 ## Requirements and installation
 

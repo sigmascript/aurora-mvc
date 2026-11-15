@@ -32,7 +32,7 @@ class MySQLRestoreReport:
                 f"{'does not exist' if self.staging_available else 'already exists; choose another name'}.\n"
                 "UNVERIFIED: Dump provenance, SQL safety, logical consistency, privileges for future writes, "
                 "application downtime, and cutover safety.\n"
-                "NO SQL EXECUTED. No database changes made. This is a legacy read-only preflight; guarded staging-only import is a separate mode. Production restore remains unsupported.")
+                "NO SQL EXECUTED. No database changes made. All restore execution, including staging imports, is disabled. This report does not authorize recovery writes.")
 
 
 def _backup_file(source: str) -> tuple[Path, int]:

@@ -131,6 +131,30 @@ def _dialect_for_init_scheme(scheme):
     raise ValueError("Unsupported database driver for AuroraSQL initialization")
 
 
+def _sqlite_init_path(parsed, base_dir):
+    """Resolve SQLite initialization to the same file as the connection layer.
+
+    Three-slash URLs are project-relative; four-slash URLs are absolute.
+    Never follow a symbolic-link database target during initialization.
+    """
+    if parsed.scheme not in ("sqlite", "sqlite+pysqlite") or parsed.netloc or parsed.query or parsed.fragment:
+        raise ValueError("Initialization requires a SQLite file URL without host or URL options")
+
+    path = unquote(parsed.path)
+    if path == "/:memory:":
+        raise ValueError("In-memory initialization is not supported")
+    if path.startswith("//"):
+        target = Path(path[1:]).expanduser()
+    elif path.startswith("/"):
+        target = Path(base_dir) / path[1:]
+    else:
+        raise ValueError("Invalid SQLite initialization path")
+
+    if target.is_symlink() or (target.exists() and not target.is_file()):
+        raise ValueError("SQLite initialization requires an ordinary database file")
+    return target
+
+
 def run_init_check(args):
     """Inspect whether initialization is safe without applying schema changes."""
     config, base_dir = _load_config(args.config)
@@ -142,16 +166,7 @@ def run_init_check(args):
     models = validate_init_models(models, dialect=dialect)
 
     if parsed.scheme in ("sqlite", "sqlite+pysqlite"):
-        path = unquote(parsed.path)
-
-        if path == "/:memory:":
-            raise ValueError("Cannot inspect an in-memory database")
-
-        name = path[2:] if path.startswith("///") else path[1:]
-        db_file = Path(name).expanduser()
-
-        if not db_file.is_absolute():
-            db_file = base_dir / db_file
+        db_file = _sqlite_init_path(parsed, base_dir)
 
         if not db_file.is_file():
             report = {"database_alias": args.database, "read_only": True,
@@ -516,18 +531,7 @@ def run_init_apply(args):
 
     models = validate_init_models(models, dialect="sqlite")
 
-    if parsed.path == "/:memory:":
-        raise ValueError("In-memory initialization is not supported")
-
-    path = unquote(parsed.path)
-    name = path[2:] if path.startswith("///") else path[1:]
-    db_file = Path(name).expanduser()
-
-    if not db_file.is_absolute():
-        db_file = base_dir / db_file
-
-    if db_file.is_symlink() or (db_file.exists() and not db_file.is_file()):
-        raise ValueError("SQLite initialization requires an ordinary database file")
+    db_file = _sqlite_init_path(parsed, base_dir)
 
     digest = _approval_digest(models, args.database, db_file)
     confirm_value = getattr(args, "confirm", None)
