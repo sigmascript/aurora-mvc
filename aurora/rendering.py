@@ -18,17 +18,20 @@ class ViewRenderer:
 
     def __init__(self, views_directory, *, view_namespaces=None):
         # Namespace lookup is explicit; legacy filesystem view roots still work.
-        loader = FileSystemLoader(views_directory)
+        loaders = []
 
         if view_namespaces:
-            loader = ChoiceLoader(
-                [
-                    PrefixLoader(
-                        {name: FileSystemLoader(path) for name, path in view_namespaces.items()}
-                    ),
-                    loader,
-                ]
-            )
+            loaders.append(PrefixLoader(
+                {name: FileSystemLoader(path) for name, path in view_namespaces.items()}
+            ))
+
+        if views_directory is not None:
+            loaders.append(FileSystemLoader(views_directory))
+
+        if not loaders:
+            raise ValueError("A view directory or app view namespaces are required")
+
+        loader = ChoiceLoader(loaders) if len(loaders) > 1 else loaders[0]
 
         self.environment = Environment(
             loader=loader,

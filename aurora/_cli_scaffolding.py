@@ -107,21 +107,43 @@ def create_project(name: str, *, directory: Path | None = None, mvc: bool = Fals
 
         layout = "modular MVC" if modular else "MVC" if mvc else "minimal ASGI"
         guide = (f"# {name}\n\n{layout} Aurora project.\n\n"
-                 f"From the project directory:\n\n`aurora run`\n\n"
-                 f"Or from its parent directory:\n\n`aurora run {name}.app:app`\n\n"
-                 "Edit `app.py` to define your routes.\n")
+                 "## Start the application\n\n"
+                 "From the project directory, run `aurora run`. "
+                 "From its parent, run `aurora run " + name + ".app:app`.\n\n"
+                 "Both forms use this project's `aurora_config.json` for the "
+                 "development server. Explicit `--host`, `--port`, and "
+                 "`--reload` / `--no-reload` options take precedence.\n\n"
+                 "## Project conventions\n\n"
+                 "`app.py` is the application entry point; "
+                 "`aurora_config.json` holds validated application settings. "
+                 "Scaffolding does not create or migrate a database.\n")
 
-        if mvc:
-            guide += ("\n## Models and database\n\n"
-                      "Add a model using `aurora model add User`. Aurora discovers models "
-                      "from shared or module-local `models/`.\n"
-                      "Database initialization is explicit; scaffolding never creates a database.\n"
-                      "Migration and backup directories appear when first needed.\n")
+        if not mvc:
+            guide += ("\nDefine routes directly in `app.py`. This small layout "
+                      "does not generate controllers or templates.\n")
+        else:
+            guide += ("\nControllers define actions; views are templates. "
+                      "Use `aurora controller add Products` to add a controller "
+                      "and `aurora view add about` for a shared view.\n"
+                      "\n## Models and database\n\n"
+                      "Use `aurora model add User` to generate a model. "
+                      "The database is not changed automatically. "
+                      "Review `aurora db check` before `aurora db init` or "
+                      "`aurora db migrate`; recorded history is available "
+                      "through `aurora db history`.\n")
 
         if modular:
-            guide += ("\n## Modular views\n\n"
-                      "Use `View(\"blog/index\")` for an app-local view and "
-                      "`View(\"about\")` for a shared view. App view folders are discovered.\n")
+            guide += ("\n## Modular applications\n\n"
+                      "Use `aurora app list` or `aurora app add accounts` "
+                      "to inspect or add an application. "
+                      "`View(\"blog/index\")` resolves a template in "
+                      "`apps/blog/views/`; `View(\"about\")` uses the shared views "
+                      "directory when present. Routes are registered explicitly.\n"
+                      "Removing a CLI-generated app requires `strict: false`, "
+                      "an untouched scaffold, and explicit confirmation; "
+                      "customized apps must be removed manually.\n")
+
+        guide += "\nSee https://auroramvc.com/ for Aurora documentation.\n"
 
         (root / "README.md").write_text(guide, encoding="utf-8")
     except BaseException:
@@ -238,6 +260,163 @@ def add_app(name: str, *, directory: Path | None = None) -> Path:
 
 
 
+
+def _references_modular_app(source: str, name: str) -> bool:
+    """Recognize common package, template, and URL references conservatively."""
+    return bool(
+        re.search(r"\bapps\." + re.escape(name) + r"\b", source)
+        or re.search(r"\bapps[/\\]" + re.escape(name) + r"\b", source)
+        or re.search(r"\bfrom\s+apps\s+import\s+" + re.escape(name) + r"\b", source)
+        or re.search(r"[\"']/(?:" + re.escape(name) + r")/", source)
+        or re.search(r"[\"']" + re.escape(name) + r"/", source)
+    )
+
+
+def remove_app(name: str, *, directory: Path | None = None) -> Path | None:
+    """Remove an untouched CLI-added modular app after explicit approval.
+
+    Refuse custom files, external references, and unfamiliar registrations. This
+    operation never accesses a database or edits a model manifest.
+    """
+    _ensure_removal_allowed(directory)
+    root = Path(directory or Path.cwd()).resolve()
+    target = _scaffold_app_root(name, root)
+    app_file = root / "app.py"
+    source = app_file.read_text(encoding="utf-8")
+    class_name = "".join(part.capitalize() for part in name.split("_"))
+    module = f"apps.{name}.controllers.{class_name}"
+    tree = ast.parse(source)
+    imports = [node for node in tree.body if isinstance(node, ast.ImportFrom)
+               and node.module == module and len(node.names) == 1
+               and node.names[0].name == class_name and node.lineno == node.end_lineno]
+    if len(imports) != 1:
+        raise ValueError("App import is customized; remove references manually")
+    binding = imports[0].names[0].asname or class_name
+    routes = [node for node in tree.body if isinstance(node, ast.Expr)
+              and isinstance(node.value, ast.Call)
+              and isinstance(node.value.func, ast.Attribute)
+              and isinstance(node.value.func.value, ast.Name)
+              and node.value.func.value.id == "app"
+              and node.value.func.attr == "route"
+              and len(node.value.args) == 2
+              and isinstance(node.value.args[0], ast.Constant)
+              and node.value.args[0].value == f"/{name}/"
+              and isinstance(node.value.args[1], ast.Name)
+              and node.value.args[1].id == binding
+              and node.lineno == node.end_lineno]
+    if len(routes) != 1:
+        raise ValueError("App route is customized; remove references manually")
+
+    removed_lines = {imports[0].lineno, routes[0].lineno}
+    updated = "".join(line for i, line in enumerate(source.splitlines(keepends=True), 1)
+                      if i not in removed_lines)
+    ast.parse(updated)
+    if re.search(r"\b" + re.escape(binding) + r"\b", updated):
+        raise ValueError("App controller is referenced elsewhere; remove references manually")
+    if _references_modular_app(updated, name):
+        raise ValueError("App is referenced elsewhere; remove references manually")
+
+    # Only the exact files emitted by `app add` are owned by Aurora. Any new,
+    # edited, linked or otherwise unfamiliar file is developer-owned.
+    controller = (f'"""{class_name} controller."""\nfrom aurora import Controller, View\n\n\n'
+                  f'class {class_name}(Controller):\n'
+                  '    def get(self):\n'
+                  f'        return View("{name}/index", title="{name.replace("_", " ").title()}")\n')
+    view = ('{% extends "layout.html" %}\n'
+            '{% from "components.html" import action_link %}\n\n'
+            '{% block title %}{{ title }}{% endblock %}\n\n'
+            '{% block content %}\n'
+            '    <h1>{{ title }}</h1>\n'
+            '    <p>Your new Aurora app is ready.</p>\n'
+            '    {{ action_link("Back to home", "/") }}\n'
+            '{% endblock %}\n')
+    expected = {
+        "__init__.py": "",
+        "controllers/__init__.py": "",
+        f"controllers/{class_name}.py": controller,
+        "models/__init__.py": "",
+        "views/index.html": view,
+    }
+    expected_dirs = {"controllers", "models", "views"}
+    # Importing an app creates Python bytecode caches. These are not developer
+    # source files, but only known generated cache names are safe to discard.
+    cache_owners = {"": {"__init__"}, "controllers": {"__init__", class_name},
+                    "models": {"__init__"}}
+    caches = {f"{parent}/__pycache__".lstrip("/") for parent in cache_owners}
+    for item in target.rglob("*"):
+        if item.is_symlink():
+            raise ValueError("App contains a symbolic link; remove references manually")
+        relative = item.relative_to(target).as_posix()
+        if item.is_dir():
+            if relative not in expected_dirs and relative not in caches:
+                raise ValueError(f"App contains unrecognized directory: {relative}")
+            continue
+        parent = item.parent.relative_to(target).as_posix()
+        if parent in caches:
+            owner = item.stem.split(".cpython-")[0]
+            source_parent = parent.removesuffix("/__pycache__")
+            if parent == "__pycache__":
+                source_parent = ""
+            if (item.is_file() and item.suffix == ".pyc" and
+                    re.fullmatch(r"[A-Za-z0-9_]+\.cpython-[0-9]+(?:\.opt-[0-9]+)?\.pyc", item.name) and
+                    owner in cache_owners[source_parent]):
+                continue
+            raise ValueError(f"App contains unrecognized cache file: {relative}")
+        if (relative not in expected or not item.is_file()
+                or item.read_text(encoding="utf-8") != expected[relative]):
+            raise ValueError(f"App contains customized file: {relative}")
+    for relative in expected:
+        if not (target / relative).is_file():
+            raise ValueError(f"App scaffold is incomplete: {relative}")
+
+    # Any reference in other project source/configuration files needs manual
+    # attention. Only inspect text files; unreadable/unsafe paths fail closed.
+    for path in root.rglob("*"):
+        if path == app_file or target in path.parents:
+            continue
+        if path.is_symlink():
+            raise ValueError("Project contains a symbolic link; manual inspection required")
+        if path.is_dir():
+            continue
+        if path.suffix not in {".py", ".html", ".json", ".jinja", ".jinja2"}:
+            continue
+        content = path.read_text(encoding="utf-8")
+        if _references_modular_app(content, name):
+            raise ValueError(f"App is referenced by {path.relative_to(root)}; remove references manually")
+
+    print(f"Remove modular app: {target}")
+    print(f"Remove the generated route /{name}/ and these {len(expected)} scaffold files; database unchanged.")
+    if input("Remove this app? [y/N]: ").strip().lower() != "y":
+        print("Removal cancelled; no files changed.")
+        return None
+
+    import shutil
+    parked = target.with_name(f".{name}-removing")
+    if parked.exists() or parked.is_symlink():
+        raise ValueError("Removal staging path exists; no files changed")
+    temporary_app = None
+    moved = False
+    try:
+        target.rename(parked)
+        moved = True
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=root,
+                                         prefix=".aurora-route-", delete=False) as stream:
+            temporary_app = Path(stream.name)
+            stream.write(updated)
+        os.replace(temporary_app, app_file)
+        temporary_app = None
+    except BaseException:
+        if moved:
+            parked.rename(target)
+        raise
+    finally:
+        if temporary_app is not None:
+            temporary_app.unlink(missing_ok=True)
+    shutil.rmtree(parked)
+    return target
+
+
+
 def _modular_apps_directory(directory: Path | None = None) -> Path:
     """Locate an explicit modular project without importing developer code."""
     root = (directory or Path.cwd()).resolve()
@@ -320,31 +499,20 @@ def _controller_slug(name: str) -> str:
 
 
 def _existing_component(folder: Path, name: str, resource: str) -> Path | None:
-    """Resolve exact or legacy filenames without importing user code."""
-
+    """Resolve exact component identity; never select a case variant."""
     if not folder.is_dir() or folder.is_symlink():
         return None
 
-    candidates = {name.casefold()}
-
-    if resource == "controller":
-        candidates.add(name.lower().casefold())
-
-    if resource == "model":
-        candidates.add(re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower().casefold())
-
-    matches = [item for item in folder.iterdir()
-               if item.suffix == ".py" and item.name != "__init__.py"
-               and item.stem.casefold() in candidates]
-
-    if len(matches) > 1:
-        raise ValueError(f"Ambiguous {resource} name: {name}")
-
-    return matches[0] if matches else None
+    candidates = [item for item in folder.iterdir()
+                  if item.suffix == ".py" and item.name != "__init__.py"
+                  and item.stem == name and item.is_file() and not item.is_symlink()]
+    return candidates[0] if candidates else None
 
 
 def _reject_component_collision(folder: Path, name: str, resource: str) -> None:
-    existing = _existing_component(folder, name, resource)
+    existing = (next((item for item in folder.iterdir()
+                      if item.suffix == ".py" and item.stem.casefold() == name.casefold()), None)
+                if folder.is_dir() and not folder.is_symlink() else None)
 
     if existing is not None:
         raise FileExistsError(f"{resource.title()} already exists (existing file will not be overwritten): {existing}")
@@ -505,8 +673,41 @@ def _controller_binding(source: str, app_name: str, name: str) -> str:
 
     return alias
 
+_HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options"}
+
+
+def _controller_method_stubs(methods=None):
+    """Create placeholders only; never imply automatic CRUD implementation."""
+    verbs = ("get",) if methods is None else methods
+    return "\n".join(
+        f'    def {verb}(self):\n        return "TODO: implement this controller"\n'
+        for verb in verbs
+    )
+
+
+def parse_controller_methods(value):
+    if value is None:
+        return None
+
+    verbs = [verb.strip().lower() for verb in value.split(",")]
+
+    if not verbs or any(verb not in _HTTP_METHODS for verb in verbs):
+        raise ValueError("--methods accepts comma-separated HTTP verbs: "
+                         + ", ".join(sorted(_HTTP_METHODS)))
+
+    return tuple(dict.fromkeys(verbs))
+
+
+def _ensure_removal_allowed(directory=None):
+    from .core.app_settings import load_application_settings
+
+    config = Path(directory or Path.cwd()).resolve() / "aurora_config.json"
+    if load_application_settings(config).strict:
+        raise ValueError('Removal disabled by default. Set "strict": false in aurora_config.json to enable guarded removal.')
+
+
 def create_controller(app_name: str, name: str, *,
-                      directory: Path | None = None) -> Path:
+                      directory: Path | None = None, methods=None) -> Path:
     """Generate and register a controller in an anchored modular project."""
 
     if not re.fullmatch(r"[A-Z][A-Za-z0-9]*", name) or keyword.iskeyword(name):
@@ -537,8 +738,7 @@ def create_controller(app_name: str, name: str, *,
     content = (f'"""Controller {name} for app {app_name}."""\n'
                'from aurora import Controller\n\n\n'
                f'class {name}(Controller):\n'
-               '    def get(self):\n'
-               '        return "TODO: implement this controller"\n')
+               + _controller_method_stubs(methods))
     # Write the new module, then atomically replace app.py. Roll back the new
     # module if app.py cannot be published. Never overwrite an existing module.
     temp_app = None
@@ -581,7 +781,7 @@ def _standalone_controller_root(directory: Path | None = None) -> Path:
     return root
 
 
-def create_standalone_controller(name: str, *, directory: Path | None = None) -> Path:
+def create_standalone_controller(name: str, *, directory: Path | None = None, methods=None) -> Path:
     """Create and register a controller in a standalone MVC scaffold."""
 
     if not re.fullmatch(r"[A-Z][A-Za-z0-9]*", name) or keyword.iskeyword(name):
@@ -624,8 +824,7 @@ def create_standalone_controller(name: str, *, directory: Path | None = None) ->
     content = (f'"""{name} page controller."""\n'
                'from aurora import Controller\n\n\n'
                f'class {name}(Controller):\n'
-               '    def get(self):\n'
-               '        return "TODO: implement this controller"\n')
+               + _controller_method_stubs(methods))
     temp_app = None
     created = False
 
@@ -892,6 +1091,8 @@ def remove_component(resource: str, name: str, *, app_name: str | None = None,
     if resource not in ("controller", "view", "model"):
         raise ValueError("Unsupported component type")
 
+    _ensure_removal_allowed(directory)
+
     if app_name is not None:
         app_root = _scaffold_app_root(app_name, directory)
         project = app_root.parent.parent
@@ -908,6 +1109,12 @@ def remove_component(resource: str, name: str, *, app_name: str | None = None,
         target = folder / (name if name.endswith(".html") else name + ".html")
     else:
         target = _resolve_component(folder, name, resource)
+
+    if target.name != (name if name.endswith(".html") else name + ".html") and resource == "view":
+        raise ValueError(f"View not found: {name}")
+
+    if resource == "view" and target.name not in [p.name for p in folder.iterdir() if p.is_file()]:
+        raise ValueError(f"View not found: {name}")
 
     if target.is_symlink() or not target.is_file():
         raise ValueError(f"{resource.title()} not found: {name}")

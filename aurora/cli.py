@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import argparse
-from importlib.util import find_spec
+from importlib.machinery import PathFinder
 from importlib.metadata import PackageNotFoundError, version
 import os
 from pathlib import Path
@@ -12,6 +12,7 @@ import sys
 from ._cli_scaffolding import (
     create_project,
     add_app,
+    remove_app,
     _modular_apps_directory,
     list_apps,
     show_app,
@@ -36,6 +37,7 @@ from ._cli_scaffolding import (
     list_shared_components,
     show_shared_component,
     remove_component,
+    parse_controller_methods,
 )
 
 
@@ -101,15 +103,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub = parser.add_subparsers(dest="command", required=True, metavar="{new,app,controller,view,model,db,run}")
     new = sub.add_parser("new", help="Create a new Aurora project (minimal, --mvc, or --modular)")
-    new.add_argument("name", metavar="project", help="New Python-compatible project directory name")
+    new.add_argument("name", metavar="project", help="New Aurora project directory name")
     new.add_argument("--mvc", action="store_true", help="Create a minimal MVC project")
-    new.add_argument("--modular", action="store_true", help="Create an MVC project with an apps/ directory")
+    new.add_argument("--modular", action="store_true", help="Create a modular MVC project with application components")
 
-    app_group = sub.add_parser("app", help="Add, list, or inspect modular applications")
+    app_group = sub.add_parser("app", help="Add, list, inspect, or safely remove modular applications")
     app_actions = app_group.add_subparsers(dest="action", required=True)
     app_actions.add_parser("add", help="Add a modular application").add_argument("name", metavar="app", help="New modular application name")
     app_actions.add_parser("list", help="List modular applications")
     app_actions.add_parser("show", help="Inspect a modular application").add_argument("name", metavar="app", help="Existing modular application name")
+    app_actions.add_parser("remove", help="Remove an untouched generated modular application with confirmation").add_argument("name", metavar="app", help="Existing modular application name")
 
     for resource in ("controller", "view", "model"):
         group = sub.add_parser(resource, help=f"Manage {resource} components")
@@ -129,6 +132,9 @@ def main(argv: list[str] | None = None) -> int:
                                      help="Component name when the first argument identifies a modular app")
 
             command.add_argument("--app", dest="app_option", metavar="APP", help="Target modular application")
+
+            if resource == "controller" and verb == "add":
+                command.add_argument("--methods", metavar="VERBS", help="Generate selected HTTP method stubs (comma-separated)")
 
     # Database commands use explicit safety gates; check is read-only.
     db_group = sub.add_parser("db", help="Check and manage your project databases")
@@ -229,9 +235,13 @@ def main(argv: list[str] | None = None) -> int:
     # Destructive operations remain deliberately unavailable.
     run = sub.add_parser("run", help="Run an ASGI application with Uvicorn")
     run.add_argument("application", nargs="?", default="app:app", help="ASGI import path (default: app:app); run from the project directory")
-    run.add_argument("--host", default="127.0.0.1")
-    run.add_argument("--port", type=int, default=8000)
-    run.add_argument("--no-reload", action="store_true", help="Disable automatic reload (enabled by default)")
+    run.add_argument("--host", default=None)
+    run.add_argument("--port", type=int, default=None)
+    reload_flags = run.add_mutually_exclusive_group()
+    reload_flags.add_argument("--reload", dest="reload", action="store_true", default=None,
+                              help="Enable automatic reload")
+    reload_flags.add_argument("--no-reload", dest="reload", action="store_false",
+                              help="Disable automatic reload")
     args = parser.parse_args(argv)
 
     # AuroraSQL is the only public CLI database engine. Legacy internals remain
@@ -420,7 +430,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Route grouped commands to their component handlers.
     if args.command == "app":
-        args.command = {"add": "app-add", "list": "app-list", "show": "app-show"}[args.action]
+        args.command = {"add": "app-add", "list": "app-list", "show": "app-show", "remove": "app-remove"}[args.action]
     elif args.command in ("controller", "view", "model"):
         resource = args.command
 
@@ -444,15 +454,18 @@ def main(argv: list[str] | None = None) -> int:
 
         try:
             if args.action == "add":
+                methods = parse_controller_methods(args.methods) if resource == "controller" else None
+
                 if resource == "model":
                     backend = args.backend
                     destination = (create_shared_component("model", name, backend=backend)
                                    if app_name is None else create_model(app_name, name, backend=backend))
                 elif app_name is None:
-                    destination = (create_standalone_controller(name) if resource == "controller"
+                    destination = (create_standalone_controller(name, methods=methods) if resource == "controller"
                                    else create_shared_component(resource, name))
                 else:
-                    destination = {"controller": create_controller, "view": create_view}[resource](app_name, name)
+                    destination = (create_controller(app_name, name, methods=methods) if resource == "controller"
+                               else create_view(app_name, name))
 
                 note = {"controller": " (route registered)", "view": " (routes unchanged)",
                         "model": " (database unchanged; import model explicitly)"}[resource]
@@ -504,6 +517,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Created {destination}\nRoute: /{args.name}")
         return 0
 
+    if args.command == "app-remove":
+        if os.environ.get("AURORA_ENV", "development").lower() == "production":
+            parser.exit(1, "aurora: Refusing to modify project in production environment.\n")
+        try:
+            removed = remove_app(args.name)
+        except (OSError, ValueError, SyntaxError) as exc:
+            parser.exit(1, f"aurora: {exc}\n")
+        if removed is not None:
+            print(f"Removed {removed} (database unchanged)")
+        return 0
+
     if args.command == "app-list":
         try:
             names = list_apps()
@@ -524,7 +548,33 @@ def main(argv: list[str] | None = None) -> int:
         print("Views: " + (", ".join(info["views"]) or "(none)"))
         return 0
 
-    if not 1 <= args.port <= 65535:
+    from aurora.core.app_settings import load_application_settings
+
+    # A dotted local project entry (e.g. news.app:app) uses that project's
+    # settings, not unrelated settings from the invoking parent directory.
+    # No Python imports or user code execution are needed for this resolution.
+    module_name = args.application.partition(":")[0]
+    segments = module_name.split(".")
+    local_project = (len(segments) >= 2 and all(part.isidentifier() for part in segments)
+                     and (Path.cwd() / segments[0]).is_dir()
+                     and (Path.cwd() / segments[0] / "__init__.py").is_file())
+    project = Path.cwd() / segments[0] if local_project else Path.cwd()
+    config = project / "aurora_config.json"
+    try:
+        if config.exists() or config.is_symlink():
+            settings = load_application_settings(config)
+            defaults = settings.server
+        else:
+            defaults = {"host": "127.0.0.1", "port": 8000, "reload": True}
+    except (OSError, ValueError) as exc:
+        # The settings validator emits bounded, non-secret diagnostics.
+        parser.exit(1, f"aurora: Invalid application configuration: {exc}\n")
+
+    host = args.host if args.host is not None else defaults["host"]
+    port = args.port if args.port is not None else defaults["port"]
+    reload = args.reload if args.reload is not None else defaults["reload"]
+
+    if not 1 <= port <= 65535:
         parser.error("--port must be between 1 and 65535")
 
     try:
@@ -543,22 +593,31 @@ def main(argv: list[str] | None = None) -> int:
 
     # Check simple modules consistently with and without reload. Do not import
     # developer code during preflight; dotted modules remain Uvicorn-owned.
-    module_name = args.application.partition(":")[0]
+    if local_project:
+        module_file = Path.cwd().joinpath(*segments).with_suffix(".py")
+        package_file = Path.cwd().joinpath(*segments, "__init__.py")
+        if not module_file.is_file() and not package_file.is_file():
+            parser.exit(1, f"aurora: Cannot find project application module '{module_name}'. "
+                           "Check the target's spelling and generated project files.\n")
 
     if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", module_name):
-        try:
-            module_spec = find_spec(module_name)
-        except (ImportError, ValueError, AttributeError):
-            module_spec = None
-
-        if module_spec is None:
+        # Preflight must check the requested filesystem location, not Python's
+        # sys.modules cache (which may contain an unrelated app from elsewhere).
+        local = ((Path.cwd() / f"{module_name}.py").is_file()
+                 or (Path.cwd() / module_name / "__init__.py").is_file())
+        # The conventional default specifically means the current project's
+        # app, never an unrelated installed distribution named `app`.
+        external = (module_name != "app" and
+                    PathFinder.find_spec(module_name, [entry for entry in sys.path
+                                                       if entry not in ("", cwd)]) is not None)
+        if not local and not external:
             parser.exit(
                 1,
                 f"aurora: Cannot find application module '{module_name}'. "
                 f"Check the target '{args.application}' or run from your project directory.\n",
             )
 
-    uvicorn.run(args.application, host=args.host, port=args.port, reload=not args.no_reload)
+    uvicorn.run(args.application, host=host, port=port, reload=reload)
     return 0
 
 

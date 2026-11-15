@@ -89,7 +89,7 @@ class Application:
         self.view_headers = dict(view_headers or {})
 
         # Templates are optional for API-only applications.
-        if views_directory is not None:
+        if views_directory is not None or view_namespaces:
             self.renderer = ViewRenderer(views_directory, view_namespaces=view_namespaces)
             self.renderer.environment.globals["url_for"] = self.url_for
 
@@ -149,8 +149,8 @@ class Application:
         if views.is_dir() and not views.is_symlink():
             options.setdefault("views_directory", views)
 
-            if namespaces:
-                options.setdefault("view_namespaces", namespaces)
+        if namespaces:
+            options.setdefault("view_namespaces", namespaces)
 
         from aurora.core.app_settings import load_application_settings
 

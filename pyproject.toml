@@ -38,3 +38,6 @@ aurora = "aurora.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["aurora*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

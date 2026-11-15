@@ -54,5 +54,17 @@ jobs:
           aurora --version
           python -m aurora --version
 
-      - name: Run complete test suite
-        run: python -m pytest tests -q --tb=short
+      - name: Verify release documentation
+        run: python scripts/prepare_pypi_readme.py --check
+
+      - name: Run active contract suite
+        run: python -m pytest -q --tb=short
+
+      - name: Preserve critical historical security coverage during transition
+        run: >-
+          python -m pytest
+          tests_legacy/security/test_framework_csrf.py
+          tests_legacy/security/test_session_integrity.py
+          tests_legacy/security/test_password_security.py
+          tests_legacy/database/test_direct_read_api.py
+          -q --tb=short

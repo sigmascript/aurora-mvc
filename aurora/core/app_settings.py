@@ -71,7 +71,7 @@ def _read_document(source):
     if not isinstance(document, dict) or document.get("format", _FORMAT) != _FORMAT:
         raise ValueError("Unsupported application configuration format")
 
-    if set(document) - {"format", "application", "limits", "constants", "statics"}:
+    if set(document) - {"format", "application", "limits", "constants", "statics", "strict", "server"}:
         raise ValueError("Unknown application configuration section")
 
     return document
@@ -87,6 +87,8 @@ class ApplicationSettings:
     constants: object
     constructor_options: object
     statics: str | None
+    strict: bool
+    server: object
 
 
 def load_application_settings(source):
@@ -96,6 +98,30 @@ def load_application_settings(source):
     limits = document.get("limits", {})
     constants = document.get("constants", {})
     statics = document.get("statics")
+    strict = document.get("strict", True)
+    server = document.get("server", {})
+
+    if not isinstance(strict, bool):
+        raise ValueError("strict must be a JSON boolean")
+
+    if not isinstance(server, dict):
+        raise ValueError("server must be a JSON object")
+
+    if set(server) - {"host", "port", "reload"}:
+        raise ValueError("Unknown server setting")
+
+    host = server.get("host", "127.0.0.1")
+    port = server.get("port", 8000)
+    reload = server.get("reload", True)
+
+    if not isinstance(host, str) or not host or len(host) > 255 or any(ord(c) < 33 for c in host):
+        raise ValueError("server.host must be a nonempty host string")
+
+    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+        raise ValueError("server.port must be an integer between 1 and 65535")
+
+    if not isinstance(reload, bool):
+        raise ValueError("server.reload must be a JSON boolean")
 
     if statics is not None:
         if (not isinstance(statics, str) or not statics or
@@ -179,4 +205,6 @@ def load_application_settings(source):
         constants=MappingProxyType(dict(constants)),
         constructor_options=MappingProxyType(constructor_options),
         statics=statics,
+        strict=strict,
+        server=MappingProxyType({"host": host, "port": port, "reload": reload}),
     )
