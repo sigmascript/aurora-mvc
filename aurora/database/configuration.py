@@ -5,8 +5,9 @@ No SQLAlchemy dependency, implicit connections, or schema changes.
 from collections.abc import Mapping
 import os
 import re
+from pathlib import Path
 from types import MappingProxyType
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from .core import connect
 
@@ -14,6 +15,35 @@ from .core import connect
 _ALIAS = re.compile(r"^[a-z][a-z0-9_]*$")
 _ENV = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _DRIVERS = frozenset(("sqlite", "sqlite+pysqlite", "mysql+pymysql", "postgresql+psycopg"))
+
+
+def _destination_identity(parsed):
+    """Prove selected URL destinations equal; never contact a database server.
+
+    A matching identity establishes a collision. Different identities do not
+    prove that different hostnames or filesystem mounts reach distinct storage.
+    """
+    if parsed.scheme.startswith("sqlite"):
+        # Match core.connect's SQLite path interpretation, including percent
+        # decoding and the difference between relative and absolute URLs.
+        path = unquote(parsed.path)
+        if path == "/:memory:":
+            return None  # Independent connection-local databases.
+        if path.startswith("///"):
+            database = path[2:]
+        elif path.startswith("//"):
+            database = path[1:]
+        else:
+            database = path[1:]
+        if not database:
+            return None  # SQLite's temporary unnamed database.
+        return ("sqlite", os.path.normcase(str(Path(database).resolve(strict=False))))
+
+    # Same driver family, server endpoint and database name is a collision
+    # regardless of which credentials are used. Do not include secrets.
+    backend = parsed.scheme.split("+", 1)[0]
+    port = parsed.port or {"mysql": 3306, "postgresql": 5432}[backend]
+    return (backend, parsed.hostname.rstrip("."), port, unquote(parsed.path.lstrip("/")))
 
 
 class DatabaseConfiguration:
@@ -29,6 +59,7 @@ class DatabaseConfiguration:
 
         # Resolve aliases eagerly so later lookups cannot depend on changed environment values.
         resolved = {}
+        destinations = {}
 
         for alias, entry in databases.items():
             if not isinstance(alias, str) or not _ALIAS.fullmatch(alias):
@@ -75,6 +106,16 @@ class DatabaseConfiguration:
                     raise ValueError
             except ValueError:
                 raise ValueError(f"Database '{alias}' has an invalid or unsupported URL") from None
+
+            identity = _destination_identity(parsed)
+            if identity is not None:
+                previous = destinations.get(identity)
+                if previous is not None:
+                    raise ValueError(
+                        f"Database '{alias}' resolves to the same destination as "
+                        f"database '{previous}'; configure one canonical name"
+                    )
+                destinations[identity] = alias
 
             resolved[alias] = url
 
