@@ -67,4 +67,17 @@ def discover_model_refs(project_root, manifest, database="default"):
             if assignments.get(ref, "default") == database:
                 found.add(ref)
 
-    return tuple(sorted(found | set(mapping.get(database, ()))))
+    refs = tuple(sorted(found | set(mapping.get(database, ()))))
+    by_name = {}
+
+    for ref in refs:
+        name = ref.rsplit(":", 1)[1]
+        previous = by_name.get(name)
+        if previous is not None:
+            raise ValueError(
+                f"Duplicate model name {name!r} in database {database!r}: "
+                f"{previous} and {ref}"
+            )
+        by_name[name] = ref
+
+    return refs

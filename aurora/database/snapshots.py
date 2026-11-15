@@ -6,11 +6,12 @@ No live database is inspected and Python defaults are never invoked.
 
 from datetime import date, datetime
 
-from .schema import _default_literal, create_table_sql
+from .schema import _default_literal, create_table_sql, _resolved_foreign_keys
 from .sql_types import parse_sql_type
 
 
 _FORMAT = "aurorasql.schema.v1"
+_FORMAT_V2 = "aurorasql.schema.v2"
 _DIALECTS = ("sqlite", "mysql", "postgresql")
 _COLUMN_KEYS = frozenset({
     "name", "type", "length", "primary_key", "nullable", "unique",
@@ -31,17 +32,23 @@ def _default_description(value):
     raise TypeError("Unsupported model default for snapshot")
 
 
-def schema_snapshot(*models, dialect):
+def schema_snapshot(*models, dialect, allow_v2=False):
     """Describe model declarations in stable order, without database access."""
 
     if not models:
         raise ValueError("At least one model is required")
 
+    extended = any(field.model_reference or field.on_update != "NO ACTION" or
+                   field.on_delete != "NO ACTION" for model in models
+                   for field in model.__columns__.values())
+    if extended and not allow_v2:
+        raise ValueError("Extended foreign keys require explicit v2 snapshot review; legacy migration path refused")
     tables = []
     names = set()
 
     for model in models:
-        ddl = create_table_sql(model, dialect)
+        ddl = create_table_sql(model, dialect, models=models if extended else None)
+        resolved = _resolved_foreign_keys(model, models) if extended else {}
         name = model.__table_name__
 
         if name in names:
@@ -51,7 +58,7 @@ def schema_snapshot(*models, dialect):
         columns = []
 
         for field_name, field in sorted(model.__columns__.items()):
-            columns.append({
+            declaration = {
                 "name": field_name,
                 "type": "sql:" + field.sql_type if field.sql_type else field.python_type.__name__,
                 "length": field.length,
@@ -63,16 +70,22 @@ def schema_snapshot(*models, dialect):
                 # while representing new constant defaults as SQL-side intent.
                 "python_default": _default_description(None),
                 "server_default": _default_literal(field, dialect) or field.server_default,
-            })
+            }
+            if extended:
+                target = resolved.get(field_name)
+                declaration["references"] = (f"{target[0]}.{target[1]}" if target else None)
+                declaration["on_update"] = target[2] if target else None
+                declaration["on_delete"] = target[3] if target else None
+            columns.append(declaration)
 
         tables.append({"name": name, "columns": columns, "create_sql_preview": ddl})
 
-    return {"format": _FORMAT, "dialect": dialect,
+    return {"format": _FORMAT_V2 if extended else _FORMAT, "dialect": dialect,
             "tables": sorted(tables, key=lambda table: table["name"])}
 
 
 def _snapshot_tables(snapshot):
-    """Validate the public v1 shape before comparing any declarations."""
+    """Validate historical v1 evidence; migration executors reject v2."""
 
     if not isinstance(snapshot, dict) or snapshot.get("format") != _FORMAT:
         raise ValueError("Unsupported schema snapshot format")
@@ -149,14 +162,53 @@ def _snapshot_tables(snapshot):
     return result
 
 
+def _snapshot_tables_v2(snapshot):
+    """Validate v2 action evidence without authorizing an executable migration."""
+    if not isinstance(snapshot, dict) or set(snapshot) != {"format", "dialect", "tables"} or snapshot["format"] != _FORMAT_V2:
+        raise ValueError("Invalid v2 schema format")
+    v1_copy = {**snapshot, "format": _FORMAT, "tables": []}
+    for table in snapshot.get("tables", []):
+        if not isinstance(table, dict) or set(table) != {"name", "columns", "create_sql_preview"} or not isinstance(table["columns"], list):
+            raise ValueError("Invalid v2 table")
+        if not isinstance(table["create_sql_preview"], str):
+            raise ValueError("Invalid v2 SQL preview")
+        columns = []
+        for column in table["columns"]:
+            if not isinstance(column, dict) or set(column) != _COLUMN_KEYS | {"on_update", "on_delete"}:
+                raise ValueError("Invalid v2 column evidence")
+            ref = column["references"]
+            if ref is not None:
+                from .models import _identifier
+                if not isinstance(ref, str) or ref.count(".") != 1:
+                    raise ValueError("Invalid v2 physical foreign-key target")
+                for identifier in ref.split("."):
+                    _identifier(identifier)
+            for action in ("on_update", "on_delete"):
+                value = column[action]
+                if (value is None) != (ref is None):
+                    raise ValueError("Incomplete v2 foreign-key action evidence")
+                if value is not None and value not in (
+                    "NO ACTION", "RESTRICT", "CASCADE", "SET NULL", "SET DEFAULT"
+                ):
+                    raise ValueError("Unsupported v2 foreign-key action")
+            columns.append({key: column[key] for key in _COLUMN_KEYS})
+        v1_copy["tables"].append({**table, "columns": columns})
+    _snapshot_tables(v1_copy)
+    return {table["name"]: {field["name"]: field for field in table["columns"]}
+            for table in snapshot["tables"]}
+
+
 def compare_snapshots(before, after):
     """Report declaration differences; never infer renames or execute DDL.
 
     Every change requires human review. Risk labels prioritize review but do
     not authorize applying changes, even when labelled 'additive'.
     """
-    old = _snapshot_tables(before)
-    new = _snapshot_tables(after)
+    if not isinstance(before, dict) or not isinstance(after, dict) or before.get("format") != after.get("format"):
+        raise ValueError("Cross-version schema comparisons require explicit migration review")
+    reader = _snapshot_tables_v2 if before.get("format") == _FORMAT_V2 else _snapshot_tables
+    old = reader(before)
+    new = reader(after)
 
     if before["dialect"] != after["dialect"]:
         raise ValueError("Cannot compare snapshots from different dialects")

@@ -60,7 +60,58 @@ def _default_literal(field, dialect):
     raise TypeError("Unsupported database default literal")
 
 
-def create_table_sql(model, dialect):
+def _resolved_foreign_keys(model, models):
+    """Resolve declared targets within only the explicitly selected model set."""
+    selected = tuple(models or ())
+    if models is not None and model not in selected:
+        raise ValueError("DDL model must belong to selected database models")
+    by_name = {}
+    by_table = {}
+    for candidate in selected:
+        if not isinstance(candidate, type) or not issubclass(candidate, Model) or candidate is Model:
+            raise TypeError("Expected AuroraSQL Model subclasses")
+        if candidate.__name__ in by_name or candidate.__table_name__ in by_table:
+            raise ValueError("Ambiguous model identity in selected database")
+        by_name[candidate.__name__] = candidate
+        by_table[candidate.__table_name__] = candidate
+
+    result = {}
+    for field_name, field in model.__columns__.items():
+        if field.references is None:
+            continue
+        table_name, column_name = field.references.split(".")
+        if field.model_reference:
+            if not selected:
+                raise ValueError("Model-qualified reference requires selected database models")
+            target = by_name.get(table_name)
+            if target is None:
+                raise ValueError("Unknown model-qualified foreign-key target")
+        else:
+            target = by_table.get(table_name)
+            if selected and target is None:
+                raise ValueError("Foreign key target is outside selected database models")
+        if target is not None:
+            referenced = target.__columns__.get(column_name)
+            if referenced is None or not (referenced.primary_key or referenced.unique):
+                raise ValueError("Foreign-key target must be a primary or unique column")
+            if referenced.python_type is not field.python_type:
+                raise ValueError("Foreign-key target type mismatch")
+            def declared_type(column):
+                if column.sql_type is not None:
+                    return column.sql_type
+                if column.python_type is str:
+                    return f"VARCHAR({column.length})" if column.length else "TEXT"
+                return None
+
+            source_sql, target_sql = declared_type(field), declared_type(referenced)
+            if (source_sql is not None or target_sql is not None) and source_sql != target_sql:
+                raise ValueError("Foreign key SQL column declarations do not match")
+            table_name = target.__table_name__
+        result[field_name] = (table_name, column_name, field.on_update, field.on_delete)
+    return result
+
+
+def create_table_sql(model, dialect, *, models=None):
     """Generate CREATE TABLE DDL without connecting to a database."""
 
     if not isinstance(model, type) or not issubclass(model, Model) or model is Model:
@@ -77,6 +128,14 @@ def create_table_sql(model, dialect):
     if len(primary_keys) > 1:
         raise ValueError("Composite primary keys are not supported yet")
 
+    extended = any(field.model_reference or field.on_update != "NO ACTION" or
+                   field.on_delete != "NO ACTION" for field in model.__columns__.values())
+    if extended and models is None:
+        raise ValueError("Extended foreign keys require an explicit selected model set")
+    if dialect == "mysql" and any("SET DEFAULT" in (field.on_update, field.on_delete)
+                                 for field in model.__columns__.values()):
+        raise ValueError("MySQL does not support SET DEFAULT foreign-key actions")
+    resolved = _resolved_foreign_keys(model, models)
     declarations = []
     foreign_keys = []
 
@@ -122,10 +181,13 @@ def create_table_sql(model, dialect):
         declarations.append(" ".join(parts))
 
         if field.references is not None:
-            referenced_table, referenced_column = field.references.split(".")
+            referenced_table, referenced_column, update, delete = resolved[name]
+            action_sql = ""
+            if update != "NO ACTION" or delete != "NO ACTION":
+                action_sql = f" ON UPDATE {update} ON DELETE {delete}"
             foreign_keys.append(
                 f"FOREIGN KEY ({_quote(name, dialect)}) "
-                f"REFERENCES {_quote(referenced_table, dialect)}({_quote(referenced_column, dialect)})"
+                f"REFERENCES {_quote(referenced_table, dialect)}({_quote(referenced_column, dialect)}){action_sql}"
             )
 
     declarations.extend(foreign_keys)
@@ -151,5 +213,8 @@ def create_tables(connection, *models):
     if not models:
         raise ValueError("At least one model is required")
 
-    for model in models:
-        create_table(connection, model)
+    from .init_validation import validate_init_models
+    ordered = validate_init_models(models, dialect=connection.dialect, allow_extended=True)
+    statements = [create_table_sql(model, connection.dialect, models=ordered) for model in ordered]
+    for sql in statements:
+        connection.execute_write(sql)

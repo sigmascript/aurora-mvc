@@ -30,6 +30,7 @@ class TableInfo:
     constraints_verified: bool = False
     uniqueness_verified: bool = False
     foreign_keys: tuple[tuple[str, str, str], ...] = ()
+    foreign_key_actions: tuple[tuple[str, str, str], ...] | None = None
 
 
 def inspect_table(connection, table_name):
@@ -53,6 +54,7 @@ def inspect_table(connection, table_name):
         unique_columns = set()
         index_names = []
         foreign_keys = []
+        foreign_key_actions = []
 
         # Composite foreign keys need separate structural intent; never infer
         # equivalence from one member of a multi-column constraint.
@@ -70,6 +72,7 @@ def inspect_table(connection, table_name):
 
             member = members[0]
             foreign_keys.append((member["from"], member["table"], member["to"]))
+            foreign_key_actions.append((member["from"], member["on_update"], member["on_delete"]))
 
         for index in index_rows:
             index_name = index["name"]
@@ -93,6 +96,7 @@ def inspect_table(connection, table_name):
             ) for row in rows),
             tuple(sorted(unique_columns)), tuple(sorted(index_names)),
             foreign_keys_verified, True, tuple(sorted(foreign_keys)),
+            tuple(sorted(foreign_key_actions)),
         )
 
     if dialect == "mysql":
@@ -134,10 +138,45 @@ def inspect_table(connection, table_name):
                     and members[0]["column_name"] is not None):
                 unique_columns.add(members[0]["column_name"])
 
+        fk_rows = connection.fetch_all(
+            "SELECT k.CONSTRAINT_NAME AS constraint_name, "
+            "k.COLUMN_NAME AS source_column, k.REFERENCED_TABLE_NAME AS target_table, "
+            "k.REFERENCED_COLUMN_NAME AS target_column, "
+            "k.REFERENCED_TABLE_SCHEMA AS target_schema, "
+            "k.TABLE_SCHEMA AS source_schema, "
+            "r.UPDATE_RULE AS update_rule, r.DELETE_RULE AS delete_rule, "
+            "(SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE members "
+            "WHERE members.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA "
+            "AND members.TABLE_NAME = k.TABLE_NAME "
+            "AND members.CONSTRAINT_NAME = k.CONSTRAINT_NAME) AS column_count "
+            "FROM information_schema.KEY_COLUMN_USAGE k "
+            "JOIN information_schema.REFERENTIAL_CONSTRAINTS r "
+            "ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA "
+            "AND r.TABLE_NAME = k.TABLE_NAME "
+            "AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME "
+            "WHERE k.TABLE_SCHEMA = DATABASE() AND k.TABLE_NAME = :name "
+            "AND k.REFERENCED_TABLE_NAME IS NOT NULL",
+            {"name": table_name},
+        )
+        allowed_actions = {"NO ACTION", "RESTRICT", "CASCADE", "SET NULL", "SET DEFAULT"}
+        fk_verified = all(
+            int(row["column_count"]) == 1
+            and row["target_schema"] == row["source_schema"]
+            and all(row[key] is not None for key in (
+                "source_column", "target_table", "target_column", "update_rule", "delete_rule"))
+            and row["update_rule"].upper() in allowed_actions
+            and row["delete_rule"].upper() in allowed_actions
+            for row in fk_rows
+        )
+        fk_targets = tuple(sorted((row["source_column"], row["target_table"], row["target_column"])
+                                  for row in fk_rows)) if fk_verified else ()
+        fk_actions = tuple(sorted((row["source_column"], row["update_rule"].upper(), row["delete_rule"].upper())
+                                  for row in fk_rows)) if fk_verified else None
         return TableInfo(table_name, True, tuple(
             ColumnInfo(row["name"], row["sql_type"], row["nullable"] == "YES", row["column_key"] == "PRI", row["default_sql"])
             for row in rows
-        ), tuple(sorted(unique_columns)), tuple(sorted(groups)), False, True)
+        ), tuple(sorted(unique_columns)), tuple(sorted(groups)), fk_verified, True,
+            fk_targets, fk_actions)
 
     if dialect == "postgresql":
         # Resolve via the connection's current search_path, without concatenating
@@ -187,9 +226,46 @@ def inspect_table(connection, table_name):
             and not row["is_expression"] and row["key_count"] == 1
             and row["column_name"] is not None
         }))
+        fk_rows = connection.fetch_all(
+            "SELECT c.conname AS constraint_name, "
+            "array_length(c.conkey, 1) AS column_count, "
+            "src.attname AS source_column, target.relname AS target_table, "
+            "source_ns.oid = target.relnamespace AS same_schema, "
+            "dest.attname AS target_column, c.confupdtype AS update_code, "
+            "c.confdeltype AS delete_code, c.convalidated AS validated, "
+            "c.condeferrable AS deferrable, c.confmatchtype AS match_type "
+            "FROM pg_catalog.pg_constraint c "
+            "JOIN pg_catalog.pg_class target ON target.oid = c.confrelid "
+            "JOIN pg_catalog.pg_class source ON source.oid = c.conrelid "
+            "JOIN pg_catalog.pg_namespace source_ns ON source_ns.oid = source.relnamespace "
+            "LEFT JOIN pg_catalog.pg_attribute src "
+            "ON src.attrelid = c.conrelid AND src.attnum = c.conkey[1] "
+            "LEFT JOIN pg_catalog.pg_attribute dest "
+            "ON dest.attrelid = c.confrelid AND dest.attnum = c.confkey[1] "
+            "WHERE c.conrelid = to_regclass(:name) AND c.contype = 'f'",
+            {"name": table_name},
+        )
+        actions = {"a": "NO ACTION", "r": "RESTRICT", "c": "CASCADE",
+                   "n": "SET NULL", "d": "SET DEFAULT"}
+        fk_verified = all(
+            int(row["column_count"]) == 1
+            and row["same_schema"] is True
+            and row["validated"] is True
+            and row["deferrable"] is False
+            and row["match_type"] == "s"
+            and all(row[key] is not None for key in (
+                "source_column", "target_table", "target_column"))
+            and row["update_code"] in actions and row["delete_code"] in actions
+            for row in fk_rows
+        )
+        fk_targets = tuple(sorted((row["source_column"], row["target_table"], row["target_column"])
+                                  for row in fk_rows)) if fk_verified else ()
+        fk_actions = tuple(sorted((row["source_column"], actions[row["update_code"]], actions[row["delete_code"]])
+                                  for row in fk_rows)) if fk_verified else None
         return TableInfo(table_name, True, tuple(
             ColumnInfo(row["name"], row["sql_type"], bool(row["nullable"]), bool(row["primary_key"]), row["default_sql"])
             for row in rows
-        ), unique_columns, tuple(sorted({row["index_name"] for row in index_rows})), False, True)
+        ), unique_columns, tuple(sorted({row["index_name"] for row in index_rows})),
+            fk_verified, True, fk_targets, fk_actions)
 
     raise ValueError("Unsupported database dialect")

@@ -6,7 +6,7 @@ import re
 
 from .inspection import inspect_table
 from .models import Model
-from .schema import _default_literal, _SQL_TYPES, create_table_sql
+from .schema import _default_literal, _SQL_TYPES, create_table_sql, _resolved_foreign_keys
 
 
 @dataclass(frozen=True)
@@ -111,7 +111,7 @@ def _declared_type(field, dialect):
     return _SQL_TYPES[dialect][field.python_type]
 
 
-def plan_schema(connection, model):
+def plan_schema(connection, model, *, models=None):
     """Compare model columns with an existing table; NEVER execute DDL.
 
     A missing table receives a CREATE TABLE preview. For existing tables,
@@ -122,7 +122,8 @@ def plan_schema(connection, model):
     if not isinstance(model, type) or not issubclass(model, Model) or model is Model:
         raise TypeError("Expected an AuroraSQL Model subclass")
     # Validate that the model can be represented by the requested dialect.
-    preview = create_table_sql(model, connection.dialect)
+    preview = create_table_sql(model, connection.dialect, models=models)
+    resolved = _resolved_foreign_keys(model, models)
     table = inspect_table(connection, model.__table_name__)
 
     if not table.exists:
@@ -156,8 +157,31 @@ def plan_schema(connection, model):
     ) for index in table.indexes):
         warnings.append("Existing indexes require manual review; model index declarations are not supported.")
 
-    if connection.dialect == "sqlite" and not table.constraints_verified:
-        warnings.append("Composite or unsupported foreign-key constraints require manual review.")
+    if not table.constraints_verified:
+        if connection.dialect == "sqlite":
+            warnings.append("Composite or unsupported foreign-key constraints require manual review.")
+        elif table.foreign_key_actions is not None:
+            warnings.append("Unverified foreign-key constraints require manual review.")
+
+    # MySQL/PostgreSQL inspection currently inventories columns and indexes,
+    # but does not verify FK targets or referential actions. Never report a
+    # matching schema without recording this unresolved constraint evidence.
+    if (connection.dialect in ("mysql", "postgresql")
+            and not table.constraints_verified
+            and any(field.references is not None for field in model.__columns__.values())):
+        warnings.append(
+            "Foreign-key targets and ON UPDATE/ON DELETE actions have not been "
+            "verified for this backend; manual schema review is required."
+        )
+
+    # Historical/constructed SQLite TableInfo may lack action evidence.
+    if (connection.dialect == "sqlite" and table.constraints_verified
+            and table.foreign_key_actions is None
+            and any(field.references is not None for field in model.__columns__.values())):
+        warnings.append(
+            "Foreign-key ON UPDATE/ON DELETE actions were not inspected; "
+            "manual schema review is required."
+        )
 
     actual = {field.name: field for field in table.columns}
 
@@ -218,8 +242,9 @@ def plan_schema(connection, model):
                     "Expected unique column" if field.unique else "Unexpected unique column",
                 ))
 
-        if connection.dialect == "sqlite" and table.constraints_verified:
-            expected_reference = field.references
+        if table.constraints_verified:
+            reference = resolved.get(name)
+            expected_reference = f"{reference[0]}.{reference[1]}" if reference else None
             actual_reference = next(
                 ((target, target_column) for source, target, target_column in table.foreign_keys
                  if source == name), None,
@@ -230,6 +255,21 @@ def plan_schema(connection, model):
                 changes.append(SchemaChange(
                     "foreign_key_mismatch", name,
                     "Foreign-key target differs or is missing",
+                ))
+
+            # Compare both actions against the explicitly resolved declaration.
+            # This planner never approves or executes DDL.
+            if table.foreign_key_actions is not None and expected_reference and actual_reference:
+                actual_actions = [
+                    (update, delete) for source, update, delete in table.foreign_key_actions
+                    if source == name
+                ]
+            else:
+                actual_actions = None
+            if actual_actions is not None and actual_actions != [(field.on_update, field.on_delete)]:
+                changes.append(SchemaChange(
+                    "foreign_key_action_mismatch", name,
+                    "Existing foreign-key ON UPDATE/ON DELETE actions differ from the model declaration",
                 ))
 
         if connection.dialect == "sqlite" and field.server_default is None:
