@@ -679,7 +679,8 @@ class ModelOperations:
 
     def read(self, where=None, *, order_by=None, limit=None, offset=0):
         """Execute a read and return plain dictionaries with normalized values."""
-        query = self.legacy_query(where, order_by=order_by, limit=limit, offset=offset)
+        ordering = _normalize_ordering(order_by, self.model.__columns__)
+        query = Query(self, where, ordering=ordering, limit=limit, offset=offset)
         rows = [vars(row) for row in query.all()]
         columns = {name: name for name in self.model.__columns__}
 

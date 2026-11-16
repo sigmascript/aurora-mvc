@@ -85,7 +85,7 @@ def execute_model_join(operations, models, *, cols=None, where=None, order_by=No
     else:
         raise ValueError("on must provide one (left, right) pair per joined model")
 
-    query = operations.legacy_query()
+    query = Query(operations)
     available = [operations.model]
 
     for model, pair in zip(models, explicit):
