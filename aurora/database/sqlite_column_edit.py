@@ -1,4 +1,4 @@
-"""Constrained model-driven edits to ordinary SQLite columns."""
+"""Constrained model-driven edits to ordinary SQLite columns and uniqueness."""
 
 from hashlib import sha256
 import hmac
@@ -65,7 +65,8 @@ def sqlite_column_edit_proposal(connection, models, alias, db_file, *, forward=F
         if target is not None or not plan.exists:
             return None
 
-        accepted = {"type_mismatch", "nullability_mismatch", "default_mismatch"}
+        accepted = {"type_mismatch", "nullability_mismatch", "default_mismatch",
+                    "unique_mismatch"}
 
         if any(change.kind not in accepted for change in plan.changes):
             return None
@@ -92,11 +93,30 @@ def sqlite_column_edit_proposal(connection, models, alias, db_file, *, forward=F
             if other.__table_name__ == table and keys or any(row[2] == table for row in keys):
                 raise RuntimeError("Column edit with foreign-key dependencies is unsupported")
 
+        # A unique-constraint transition is reviewed separately from column
+        # type/default/nullability edits, so its data and index effects remain clear.
+        unique_changes = [change for change in plan.changes
+                          if change.kind == "unique_mismatch"]
+        if unique_changes and len(plan.changes) != 1:
+            return None
+
         for change in plan.changes:
             field = model.__columns__[change.column]
             current = observed[change.column]
 
-            if field.primary_key or field.unique or field.references is not None or field.server_default is not None:
+            if change.kind == "unique_mismatch":
+                if field.primary_key or field.references is not None:
+                    raise ValueError("Key or foreign-key changes need separate reviewed intent")
+                if field.unique:
+                    quoted_column = '"' + change.column + '"'
+                    duplicate = connection._raw.execute(
+                        f'SELECT 1 FROM {quoted} WHERE {quoted_column} IS NOT NULL '
+                        f'GROUP BY {quoted_column} HAVING COUNT(*) > 1 LIMIT 1'
+                    ).fetchone()
+                    if duplicate:
+                        raise ValueError("Existing duplicate values prevent UNIQUE constraint")
+            elif (field.primary_key or field.unique or field.references is not None or
+                  field.server_default is not None):
                 raise ValueError("Key or constraint editing needs separate reviewed intent")
 
             if change.kind == "type_mismatch":

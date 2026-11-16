@@ -238,7 +238,7 @@ def run_plan(args, *, public_check=False):
                               isolation_level=None)
 
         with Connection(raw, "sqlite") as connection:
-            plans = [plan_schema(connection, model) for model in models]
+            plans = [plan_schema(connection, model, models=models) for model in models]
             from .migration_timeline import inspect_native_history
             from .model_identity import table_rename_candidates
 
@@ -314,7 +314,7 @@ def run_plan(args, *, public_check=False):
                         })
     else:
         with config.connect(args.database) as connection:
-            plans = [plan_schema(connection, model) for model in models]
+            plans = [plan_schema(connection, model, models=models) for model in models]
 
             if connection.dialect in ("mysql", "postgresql"):
                 from .server_migration_timeline import (inspect_server_timeline,
@@ -503,8 +503,35 @@ def run_check(args):
     parsed = urlsplit(url)
     dialect = _dialect_for_init_scheme(parsed.scheme)
 
-    for model in models:
-        create_table_sql(model, dialect)
+    # A fresh SQLite init can resolve extended FKs from this selected model set.
+    from .init_validation import validate_init_models
+
+    try:
+        validate_init_models(models, dialect=dialect, allow_extended=(dialect == "sqlite"))
+    except ValueError as error:
+        # Only Aurora's known static validation messages are safe to surface.
+        safe_reasons = {
+            "Unknown model-qualified foreign-key target":
+                "Foreign-key target model is not selected. Check aurora_models.json and reference=.",
+            "Foreign key references a table outside the selected model set":
+                "Foreign-key target table is not selected. Check aurora_models.json.",
+            "Foreign-key target must be a primary or unique column":
+                "Foreign-key target must be a primary or unique column.",
+            "Foreign-key target type mismatch":
+                "Foreign-key column type does not match its target.",
+            "Foreign key SQL column declarations do not match":
+                "Foreign-key SQL column declarations do not match.",
+        }
+        reason = safe_reasons.get(str(error),
+                                  "Selected model declarations are invalid or unsupported; review model fields and references.")
+        report = {"backend": "aurorasql", "database_alias": args.database,
+                  "status": "BLOCKED", "read_only": True, "reason": reason}
+        if args.format == "json":
+            print(json.dumps(report, indent=2, sort_keys=True))
+        else:
+            print(f"Database: {args.database} — BLOCKED: {reason}")
+
+        return 3
 
     if parsed.scheme in ("sqlite", "sqlite+pysqlite"):
         # Match initialization's filesystem preflight before resolving paths.
@@ -559,11 +586,17 @@ def run_check(args):
             from .init_validation import validate_init_models
 
             try:
-                validate_init_models(models, dialect=dialect)
+                validate_init_models(models, dialect=dialect, allow_extended=(dialect == "sqlite"))
                 if dialect == "sqlite":
-                    from .sqlite_forward_history import TABLE, _OLD
-                    if any(m.__table_name__ in (_OLD | {TABLE}) for m in models):
-                        raise ValueError("Model table name is reserved for migration history")
+                    from .sqlite_forward_history import TABLE, LEGACY_TABLE, _OLD
+                    reserved = _OLD | {TABLE, LEGACY_TABLE}
+                else:
+                    from .server_forward_history import TABLE, LEGACY_TABLE
+                    reserved = {TABLE, LEGACY_TABLE}
+                if any(m.__table_name__ in reserved or
+                       (dialect != "sqlite" and m.__table_name__.startswith("aurorasql_"))
+                       for m in models):
+                    raise ValueError("Model table name is reserved for migration history")
             except (TypeError, ValueError) as error:
                 report = {"backend": "aurorasql", "database_alias": args.database,
                           "status": "BLOCKED", "read_only": True,

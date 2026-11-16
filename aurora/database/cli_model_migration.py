@@ -101,13 +101,29 @@ def run_model_migration(args):
             print(f"Migration history converted. Original snapshot: {converted}")
             return 0
 
+    def finish_noop():
+        from .sqlite_forward_history import LEGACY_TABLE, history_table, adopt_history
+        with closing(sqlite3.connect(db_file.as_uri() + "?mode=ro", uri=True)) as probe:
+            old = history_table(probe) == LEGACY_TABLE
+        if old:
+            if not simple_confirm:
+                print("Verified legacy migration history uses 'migrations'. "
+                      "Run 'aurora db migrate --confirm yes' to adopt '__migrations__'.")
+                return 0
+            with closing(sqlite3.connect(db_file.as_uri() + "?mode=rw", uri=True,
+                                         isolation_level=None, timeout=5)) as writing:
+                count = adopt_history(writing, root, db_file)
+            print(f"Adopted __migrations__ without changing {count} history record(s) or application data.")
+        print(f"Database: {args.database} (SQLite) is already up to date; no migration needed.")
+        return 0
+
     if forward:
         if args.dry_run or args.apply or args.backup:
             raise ValueError("Advanced migration options are not supported by forward-only SQLite history")
         if os.environ.get("AURORA_ENV", "development").lower() == "production":
             raise PermissionError("Model migration is disabled in production")
         from .init_validation import validate_init_models
-        models = validate_init_models(models, dialect="sqlite")
+        models = validate_init_models(models, dialect="sqlite", allow_extended=True)
         # Inspection and approval precede every schema-writing connection.
         from .planning import plan_schema
         with Connection(sqlite3.connect(db_file.as_uri() + "?mode=ro", uri=True), "sqlite") as checked:
@@ -118,8 +134,16 @@ def run_model_migration(args):
             if removed_tables:
                 from .sqlite_forward_history import review_table_removal
                 removal = review_table_removal(checked._raw, root, db_file, models)
-            plans = [plan_schema(checked, model) for model in models]
+            plans = [plan_schema(checked, model, models=models) for model in models]
             changes = [change for plan in plans for change in plan.changes]
+            if any(field.model_reference or field.on_update != "NO ACTION" or
+                   field.on_delete != "NO ACTION" for model in models
+                   for field in model.__columns__.values()):
+                from .sqlite_forward_history import matches_models
+                if not changes and not removed_tables and not any(plan.warnings for plan in plans):
+                    matches_models(checked._raw, models)
+                    return finish_noop()
+                raise ValueError("Changes to existing foreign-key schemas require a separately reviewed migration")
             if any(plan.warnings and plan.exists for plan in plans):
                 raise ValueError("Unsupported schema drift; migration refused")
         column_removal = None
@@ -128,8 +152,9 @@ def run_model_migration(args):
             with closing(sqlite3.connect(db_file.as_uri() + "?mode=ro", uri=True)) as checked:
                 column_removal = review_column_removal(checked, root, db_file, models)
         edit = None
-        if changes and all(change.kind in ("type_mismatch", "nullability_mismatch", "default_mismatch")
-                           for change in changes):
+        supported_edits = {"type_mismatch", "nullability_mismatch",
+                           "default_mismatch", "unique_mismatch"}
+        if changes and all(change.kind in supported_edits for change in changes):
             with Connection(sqlite3.connect(db_file.as_uri() + "?mode=ro", uri=True), "sqlite") as checked:
                 edit = sqlite_column_edit_proposal(
                     checked, models, args.database, db_file, forward=True,
@@ -191,8 +216,7 @@ def run_model_migration(args):
             print(f"Migration applied. Schema snapshot: {result}")
             return 0
         if not changes:
-            print(f"Database: {args.database} (SQLite) is already up to date; no migration needed.")
-            return 0
+            return finish_noop()
         print(f"AuroraSQL migration — {args.database} (SQLite)")
         for plan in plans:
             for change in plan.changes:

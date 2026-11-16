@@ -28,19 +28,19 @@ def _preflight(connection, models, alias, *, project_root=None):
         existing = {row["name"] for row in rows}
 
     target = {model.__table_name__ for model in models}
-    plans = [plan_schema(connection, model) for model in models]
+    plans = [plan_schema(connection, model, models=models) for model in models]
     missing = [p.table for p in plans if not p.exists]
     warnings = [warning for p in plans for warning in p.warnings]
     drift = [p.table for p in plans if p.exists and (p.changes or p.warnings)]
     unexpected = existing - target
     verified_current = False
 
-    if dialect in ("mysql", "postgresql") and "migrations" in existing:
+    if dialect in ("mysql", "postgresql") and existing.intersection({"migrations", "__migrations__"}):
         from .server_forward_history import read_history
         from .snapshots import schema_snapshot
         try:
             _, latest = read_history(connection, project_root or Path.cwd(), alias)
-            unexpected -= {"migrations"}
+            unexpected -= {"migrations", "__migrations__"}
             verified_current = (not unexpected and not missing and not drift and
                                 latest["models"] ==
                                 schema_snapshot(*models, dialect=dialect)["tables"])
@@ -49,7 +49,7 @@ def _preflight(connection, models, alias, *, project_root=None):
                     "reason": str(error), "existing_tables": sorted(existing),
                     "missing_tables": missing, "unexpected_tables": sorted(unexpected),
                     "review_warnings": warnings, "model_tables": sorted(target)}
-    if dialect == "sqlite" and "migrations" in existing:
+    if dialect == "sqlite" and existing.intersection({"migrations", "__migrations__"}):
         from .sqlite_forward_history import read_history, matches_models
         from .cli_plan import _load_config
         # Do not confuse a malformed or incomplete single-table history with
@@ -58,7 +58,7 @@ def _preflight(connection, models, alias, *, project_root=None):
             database_path = connection._raw.execute("PRAGMA database_list").fetchall()[0][2]
             base_dir = Path(project_root) if project_root is not None else Path.cwd()
             read_history(connection._raw, base_dir, database_path)
-            unexpected -= {"migrations"}
+            unexpected -= {"migrations", "__migrations__"}
             verified_current = (not unexpected and not missing and not drift and
                                 matches_models(connection._raw, models))
         except (RuntimeError, ValueError, sqlite3.Error) as error:
@@ -163,7 +163,7 @@ def run_init_check(args):
     url = config.resolve(args.database)
     parsed = urlsplit(url)
     dialect = _dialect_for_init_scheme(parsed.scheme)
-    models = validate_init_models(models, dialect=dialect)
+    models = validate_init_models(models, dialect=dialect, allow_extended=(dialect == "sqlite"))
 
     if parsed.scheme in ("sqlite", "sqlite+pysqlite"):
         db_file = _sqlite_init_path(parsed, base_dir)
@@ -204,7 +204,7 @@ def _approval_digest(models, alias, db_path):
     from .schema import create_table_sql
 
     reviewed = "\n".join([alias, str(db_path.resolve()),
-                          *(create_table_sql(model, "sqlite") for model in models)])
+                          *(create_table_sql(model, "sqlite", models=models) for model in models)])
     return sha256(reviewed.encode("utf-8")).hexdigest()
 
 
@@ -529,7 +529,7 @@ def run_init_apply(args):
     if parsed.scheme not in ("sqlite", "sqlite+pysqlite"):
         raise ValueError("Guarded initialization is not enabled for this database driver")
 
-    models = validate_init_models(models, dialect="sqlite")
+    models = validate_init_models(models, dialect="sqlite", allow_extended=True)
 
     db_file = _sqlite_init_path(parsed, base_dir)
 

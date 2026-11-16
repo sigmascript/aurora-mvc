@@ -13,6 +13,8 @@ from .inspection import inspect_table
 _SAFE_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,79}\Z")
 _FILE = re.compile(r"\d{8}-\d{6}(?:-\d{1,3})?\.json\Z")
 _COLUMNS = ("id", "title", "snapshot", "date", "warnings")
+TABLE = "__migrations__"
+LEGACY_TABLE = "migrations"
 
 
 def _objects(connection):
@@ -38,7 +40,7 @@ def _physical(connection):
     """Independently observe current tables, columns, keys and indexes."""
     result = []
     for name in _objects(connection):
-        if name == "migrations":
+        if name in (TABLE, LEGACY_TABLE):
             continue
         table = inspect_table(connection, name)
         if not table.exists or not table.uniqueness_verified:
@@ -67,24 +69,32 @@ def _directory(root, alias):
     return folder
 
 
+def history_table(connection):
+    present = set(_objects(connection)) & {TABLE, LEGACY_TABLE}
+    if len(present) > 1:
+        raise RuntimeError("Both migrations and __migrations__ exist; manual history reconciliation required")
+    return next(iter(present), None)
+
+
 def has_history(connection):
-    return "migrations" in _objects(connection)
+    return history_table(connection) is not None
 
 
-def _verify_table(connection):
+def _verify_table(connection, name):
     # Compare the exact public field order, not merely the presence of the names.
     if connection.dialect == "mysql":
         rows = connection.fetch_all(
             "SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS "
-            "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='migrations' ORDER BY ORDINAL_POSITION")
+            "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=:table ORDER BY ORDINAL_POSITION",
+            {"table": name})
     else:
         rows = connection.fetch_all(
             "SELECT a.attname AS name FROM pg_catalog.pg_attribute a "
-            "WHERE a.attrelid=to_regclass('migrations') AND a.attnum>0 "
-            "AND NOT a.attisdropped ORDER BY a.attnum")
+            "WHERE a.attrelid=to_regclass(:table) AND a.attnum>0 "
+            "AND NOT a.attisdropped ORDER BY a.attnum", {"table": name})
     if tuple(row["name"] for row in rows) != _COLUMNS:
         raise RuntimeError("Server migrations history has an unexpected table definition")
-    table = inspect_table(connection, "migrations")
+    table = inspect_table(connection, name)
     if not table.exists or tuple(column.name for column in table.columns) != _COLUMNS:
         raise RuntimeError("Server migrations history columns are invalid")
     if (not table.columns[0].primary_key
@@ -98,11 +108,12 @@ def _verify_table(connection):
 def read_history(connection, root, alias):
     """Read all snapshots and compare the latest physical witness; never write."""
     objects = _objects(connection)
-    if "migrations" not in objects or any(name.startswith("aurorasql_") for name in objects):
+    selected = history_table(connection)
+    if selected is None or any(name.startswith("aurorasql_") for name in objects):
         raise RuntimeError("Unrecognized or mixed server migration histories")
-    _verify_table(connection)
+    _verify_table(connection, selected)
     rows = connection.fetch_all(
-        "SELECT id,title,snapshot,date,warnings FROM migrations ORDER BY id")
+        f"SELECT id,title,snapshot,date,warnings FROM {selected} ORDER BY id")
     if not rows:
         raise RuntimeError("Server history has no successful initial migration")
     directory = _directory(root, alias)

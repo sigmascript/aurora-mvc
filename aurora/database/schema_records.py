@@ -32,7 +32,7 @@ def _record_directory(project_root, database_file):
 def prepare_schema_record(project_root, database_file, models):
     """Check that a schema record can be written before approving database DDL."""
     directory = _record_directory(project_root, database_file)
-    snapshot = schema_snapshot(*models, dialect="sqlite") if models else {"tables": []}
+    snapshot = schema_snapshot(*models, dialect="sqlite", allow_v2=True) if models else {"tables": []}
 
     if not directory.parent.parent.is_dir():
         raise ValueError("Project directory is missing")

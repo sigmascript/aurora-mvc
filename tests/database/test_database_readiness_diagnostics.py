@@ -1,0 +1,127 @@
+"""Real MVC foreign-key initialization and actionable readiness boundaries."""
+
+import json
+import sqlite3
+
+import pytest
+
+from aurora.cli import main
+
+
+def _mvc_models(tmp_path, *, relationship):
+    models = tmp_path / "models"
+    models.mkdir()
+    (models / "__init__.py").write_text("", encoding="utf-8")
+    (models / "Users.py").write_text(
+        "from aurora.database import Model, column\n"
+        "class Users(Model):\n"
+        "    id = column(int, primary_key=True)\n"
+        "    username = column(str, length=50)\n", encoding="utf-8"
+    )
+    ref = ', reference="Users.id"' if relationship else ''
+    (models / "Messages.py").write_text(
+        "from aurora.database import Model, column\n"
+        "class Messages(Model):\n"
+        "    id = column(int, primary_key=True)\n"
+        f"    user_id = column(int{ref})\n", encoding="utf-8"
+    )
+    (tmp_path / "aurora_databases.json").write_text(json.dumps({
+        "databases": {"default": {"url": "sqlite:///data.sqlite3"}}
+    }), encoding="utf-8")
+    (tmp_path / "aurora_models.json").write_text(json.dumps({
+        "databases": {"default": ["models.Users:Users", "models.Messages:Messages"]}
+    }), encoding="utf-8")
+
+
+def test_mvc_foreign_key_init_check_history_and_noop(tmp_path, monkeypatch, capsys):
+    _mvc_models(tmp_path, relationship=True)
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["db", "check"]) == 0
+    assert "READY for initialization review" in capsys.readouterr().out
+    assert not (tmp_path / "data.sqlite3").exists()
+
+    with pytest.raises(SystemExit) as exc:
+        main(["db", "migrate"])
+    assert exc.value.code == 1
+    assert "aurora db init" in capsys.readouterr().err
+
+    assert main(["db", "init", "--confirm", "yes"]) == 0
+    assert "Initialized 2 table(s)" in capsys.readouterr().out
+
+    with sqlite3.connect(tmp_path / "data.sqlite3") as db:
+        db.execute("PRAGMA foreign_keys=ON")
+        db.execute("INSERT INTO users(id, username) VALUES (1, 'Ada')")
+        db.execute("INSERT INTO messages(id, user_id) VALUES (1, 1)")
+        with pytest.raises(sqlite3.IntegrityError):
+            db.execute("INSERT INTO messages(id, user_id) VALUES (2, 999)")
+        assert db.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert db.execute('SELECT COUNT(*) FROM "__migrations__"').fetchone()[0] == 1
+
+    assert main(["db", "check"]) == 0
+    assert "UP_TO_DATE" in capsys.readouterr().out
+    assert main(["db", "migrate", "--confirm", "yes"]) == 0
+    assert "no migration needed" in capsys.readouterr().out
+    assert main(["db", "history"]) == 0
+    assert "Recorded migrations: 1" in capsys.readouterr().out
+    assert main(["db", "init", "--confirm", "yes"]) == 0
+    assert "already initialized" in capsys.readouterr().out
+    assert len(list((tmp_path / "migrations" / "data").glob("*.json"))) == 1
+    # A verified older five-column history remains readable and can be adopted
+    # explicitly, preserving the original history row and snapshot file.
+    with sqlite3.connect(tmp_path / "data.sqlite3", isolation_level=None) as db:
+        original = db.execute('SELECT * FROM "__migrations__"').fetchall()
+        db.execute('ALTER TABLE "__migrations__" RENAME TO "migrations"')
+    assert main(["db", "check"]) == 0
+    capsys.readouterr()
+    assert main(["db", "history"]) == 0
+    assert "Recorded migrations: 1" in capsys.readouterr().out
+    assert main(["db", "migrate"]) == 0
+    assert "Run 'aurora db migrate --confirm yes'" in capsys.readouterr().out
+    with sqlite3.connect(tmp_path / "data.sqlite3") as db:
+        assert db.execute('SELECT name FROM sqlite_master WHERE name="migrations"').fetchone()
+    assert main(["db", "migrate", "--confirm", "yes"]) == 0
+    assert "Adopted __migrations__" in capsys.readouterr().out
+    with sqlite3.connect(tmp_path / "data.sqlite3") as db:
+        assert db.execute('SELECT * FROM "__migrations__"').fetchall() == original
+        assert db.execute('SELECT name FROM sqlite_master WHERE name="migrations"').fetchone() is None
+        assert db.execute('SELECT COUNT(*) FROM messages').fetchone()[0] == 1
+    assert len(list((tmp_path / "migrations" / "data").glob("*.json"))) == 1
+
+
+def test_missing_fk_target_refused_before_file_creation(tmp_path, monkeypatch, capsys):
+    _mvc_models(tmp_path, relationship=True)
+    model_path = tmp_path / "models" / "Messages.py"
+    model_path.write_text(model_path.read_text().replace('Users.id', 'Unknown.id'))
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["db", "check"]) == 3
+    assert "BLOCKED" in capsys.readouterr().out
+    with pytest.raises(SystemExit) as exc:
+        main(["db", "init", "--confirm", "yes"])
+    assert exc.value.code == 1
+    assert not (tmp_path / "data.sqlite3").exists()
+    assert not (tmp_path / "migrations").exists()
+
+
+def test_simple_missing_database_remains_ready_for_initialization(tmp_path, monkeypatch, capsys):
+    _mvc_models(tmp_path, relationship=False)
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["db", "check"]) == 0
+    assert "READY for initialization review" in capsys.readouterr().out
+    assert not (tmp_path / "data.sqlite3").exists()
+
+
+def test_history_before_initialization_explains_next_action(tmp_path, monkeypatch, capsys):
+    _mvc_models(tmp_path, relationship=True)
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(SystemExit) as exc:
+        main(["db", "history"])
+    assert exc.value.code == 1
+    message = capsys.readouterr().err
+    assert "SQLite database file does not exist" in message
+    assert "aurora db init" in message
+    assert not (tmp_path / "data.sqlite3").exists()
+    assert not (tmp_path / "migrations").exists()

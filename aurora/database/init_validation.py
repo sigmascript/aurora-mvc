@@ -10,8 +10,8 @@ from .schema import create_table_sql, _resolved_foreign_keys
 def validate_init_models(models, dialect="sqlite", *, allow_extended=False):
     """Validate all models before DDL and return dependency-first table order.
 
-    Foreign keys are checked for internal consistency but remain unsupported by
-    the current write-capable CLI pilot. No approval is issued by this function.
+    Extended relationships require explicit create-only opt-in. This validation
+    never authorizes changes to existing tables or historical migrations.
     """
 
     if not models:

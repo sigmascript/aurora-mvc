@@ -16,8 +16,9 @@ from .schema_records import prepare_schema_record
 from .snapshots import schema_snapshot
 
 
-TABLE = "migrations"
-DDL = ('CREATE TABLE "migrations" ('
+TABLE = "__migrations__"
+LEGACY_TABLE = "migrations"
+DDL = ('CREATE TABLE "__migrations__" ('
        '"id" INTEGER PRIMARY KEY, "title" TEXT NOT NULL, '
        '"snapshot" TEXT NOT NULL, "date" TEXT NOT NULL, "warnings" TEXT)')
 _SNAPSHOT = re.compile(r"[0-9]{8}-[0-9]{6}(?:-[0-9]{1,3})?\.json\Z")
@@ -30,8 +31,16 @@ def _tables(raw):
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
 
 
+def history_table(raw):
+    """Select one history table; never guess between conflicting histories."""
+    found = _tables(raw) & {TABLE, LEGACY_TABLE}
+    if len(found) > 1:
+        raise RuntimeError("Both migrations and __migrations__ exist; manual history reconciliation required")
+    return next(iter(found), None)
+
+
 def has_forward_history(raw):
-    return TABLE in _tables(raw)
+    return history_table(raw) is not None
 
 
 def _physical(raw):
@@ -39,18 +48,19 @@ def _physical(raw):
             for kind, name, table, sql in raw.execute(
                 "SELECT type,name,tbl_name,sql FROM sqlite_master "
                 "WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name")
-            if name not in _OLD and name != TABLE]
+            if name not in _OLD and name not in (TABLE, LEGACY_TABLE)]
 
 
 def read_history(raw, project_root, db_file):
     """Read and verify the latest successful schema witness; never mutate."""
     tables = _tables(raw)
-    if TABLE not in tables or tables.intersection(_OLD):
+    selected = history_table(raw)
+    if selected is None or tables.intersection(_OLD):
         raise RuntimeError("Database does not contain a recognized single-table migration history")
-    columns = raw.execute('PRAGMA table_info("migrations")').fetchall()
+    columns = raw.execute(f'PRAGMA table_info("{selected}")').fetchall()
     if [item[1] for item in columns] != ["id", "title", "snapshot", "date", "warnings"] or columns[0][5] != 1:
         raise RuntimeError("Migration history table definition is unrecognized")
-    records = raw.execute('SELECT id,title,snapshot,date,warnings FROM "migrations" ORDER BY id').fetchall()
+    records = raw.execute(f'SELECT id,title,snapshot,date,warnings FROM "{selected}" ORDER BY id').fetchall()
     if not records:
         raise RuntimeError("Migration history has no initial record")
     directory, _ = prepare_schema_record(project_root, db_file, ())
@@ -107,6 +117,35 @@ def read_history(raw, project_root, db_file):
     return records, last_snapshot
 
 
+def adopt_history(raw, root, db_file):
+    """Explicitly adopt verified five-column SQLite history without rewriting records.
+
+    This is an internal-table rename, not a new application schema migration.
+    Existing JSON witnesses remain intact. Never reset or invent history.
+    """
+    if raw.in_transaction:
+        raise RuntimeError("History adoption requires its own transaction")
+    if history_table(raw) != LEGACY_TABLE:
+        raise RuntimeError("There is no legacy history table to adopt")
+    before, snapshot = read_history(raw, root, db_file)
+    raw.execute("PRAGMA foreign_keys=ON")
+    try:
+        raw.execute("BEGIN IMMEDIATE")
+        if history_table(raw) != LEGACY_TABLE or read_history(raw, root, db_file) != (before, snapshot):
+            raise RuntimeError("History changed during adoption; retry only after review")
+        raw.execute(f'ALTER TABLE "{LEGACY_TABLE}" RENAME TO "{TABLE}"')
+        after, verified = read_history(raw, root, db_file)
+        if after != before or verified != snapshot:
+            raise RuntimeError("History adoption verification failed")
+        if raw.execute("PRAGMA integrity_check").fetchone() != ("ok",):
+            raise RuntimeError("SQLite integrity verification failed during history adoption")
+        raw.commit()
+    except BaseException:
+        raw.rollback()
+        raise
+    return len(before)
+
+
 def matches_models(raw, models):
     """Compare physical structure independently, without trusting a snapshot alone."""
     from .sqlite_additive_migration import _verify_result_catalog
@@ -116,7 +155,7 @@ def matches_models(raw, models):
     with sqlite3.connect(":memory:") as expected:
         expected.execute("PRAGMA foreign_keys=ON")
         for model in models:
-            expected.execute(create_table_sql(model, "sqlite"))
+            expected.execute(create_table_sql(model, "sqlite", models=models))
         with sqlite3.connect(":memory:") as observed:
             for item in _physical(raw):
                 if item["type"] == "table":
@@ -163,7 +202,7 @@ def _new_record(raw, root, db_file, models, title, warnings=()):
         raise RuntimeError("No available migration snapshot filename")
     date = datetime.now(timezone.utc).isoformat(timespec="seconds")
     try:
-        raw.execute('INSERT INTO "migrations" (title,snapshot,date,warnings) VALUES (?,?,?,?)',
+        raw.execute(f'INSERT INTO "{history_table(raw)}" (title,snapshot,date,warnings) VALUES (?,?,?,?)',
                     (title, name, date, json.dumps(list(warnings)) if warnings else None))
     except BaseException:
         path.unlink(missing_ok=True)
@@ -173,7 +212,7 @@ def _new_record(raw, root, db_file, models, title, warnings=()):
 
 def initialize(raw, root, db_file, models, title):
     """Create a complete fresh schema and its first history record atomically."""
-    if any(m.__table_name__ == TABLE or m.__table_name__ in _OLD for m in models):
+    if any(m.__table_name__ in (TABLE, LEGACY_TABLE) or m.__table_name__ in _OLD for m in models):
         raise ValueError("A model table name is reserved for Aurora migration history")
     if raw.in_transaction or _tables(raw):
         raise RuntimeError("Initialization requires an empty database")
@@ -187,7 +226,7 @@ def initialize(raw, root, db_file, models, title):
             raise RuntimeError("Database changed before initialization")
         raw.execute(DDL)
         for model in models:
-            raw.execute(create_table_sql(model, "sqlite"))
+            raw.execute(create_table_sql(model, "sqlite", models=models))
         matches_models(raw, models)
         path = _new_record(raw, root, db_file, models, title)
         raw.commit()
@@ -205,8 +244,8 @@ def migrate_additions(raw, root, db_file, models, title):
     from .planning import plan_schema
     from .core import Connection
     from .sqlite_additive_migration import _column_sql
-    validate_init_models(models, dialect="sqlite")
-    if any(m.__table_name__ == TABLE or m.__table_name__ in _OLD for m in models):
+    validate_init_models(models, dialect="sqlite", allow_extended=True)
+    if any(m.__table_name__ in (TABLE, LEGACY_TABLE) or m.__table_name__ in _OLD for m in models):
         raise ValueError("A model table name is reserved for Aurora migration history")
     path = None
     raw.execute("PRAGMA foreign_keys=ON")
@@ -461,7 +500,7 @@ def legacy_initial_review(raw, root, db_file, models, alias):
     from .snapshots import schema_snapshot
 
     tables = _tables(raw)
-    if TABLE in tables or "aurorasql_migration_timeline" not in tables:
+    if tables & {TABLE, LEGACY_TABLE} or "aurorasql_migration_timeline" not in tables:
         return None
     timeline, entries, findings = inspect_native_history(Connection(raw, "sqlite"), alias)
     if not timeline or findings or not timeline[-1]["physical_history_consistent"]:
@@ -546,7 +585,7 @@ def convert_legacy_initial(raw, root, db_file, models, alias):
             raise RuntimeError("Legacy history changed before conversion")
         raw.execute(DDL)
         for ident, (title, filename, date) in enumerate(proposal, 1):
-            raw.execute('INSERT INTO "migrations" (id,title,snapshot,date,warnings) VALUES (?,?,?,?,NULL)',
+            raw.execute(f'INSERT INTO "{TABLE}" (id,title,snapshot,date,warnings) VALUES (?,?,?,?,NULL)',
                         (ident, title, filename, date))
         for name in sorted(_tables(raw) & _OLD):
             raw.execute(f'DROP TABLE {_quote(name, "sqlite")}')
@@ -564,9 +603,9 @@ def convert_legacy_initial(raw, root, db_file, models, alias):
 def migrate_column_edit(raw, root, db_file, models, title, proposal):
     """Rebuild one ordinary table under the same forward-history transaction.
 
-    The proposal only admits compatible widening, validated defaults and
-    nullability changes without dependent indexes or foreign keys. Never
-    replay a proposal against an unverified or concurrently changed schema.
+    The proposal admits compatible widening, validated defaults, nullability
+    and isolated single-column uniqueness changes without dependent objects.
+    Never replay a proposal against unverified or concurrently changed schema.
     """
     from .cli_explicit_operations import _catalog, _rehearse_sqlite
     from .core import Connection

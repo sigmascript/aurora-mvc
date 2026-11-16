@@ -44,6 +44,8 @@ class FakeConnection:
 def stub_dependencies(monkeypatch):
     from aurora.database import cli_init
 
+    monkeypatch.setattr(subject, "history_table", lambda _: "__migrations__")
+
     state = {"current_identity": "verified", "fresh_review": None, "read_count": 0}
     monkeypatch.setattr(cli_init, "_mysql_database_identity", lambda *_: state["current_identity"])
     monkeypatch.setattr(cli_init, "_postgres_database_identity", lambda *_: state["current_identity"])

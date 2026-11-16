@@ -10,7 +10,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 from .coordination import _PG_LOCK_KEY, migration_lock
-from .server_forward_history import read_history
+from .server_forward_history import read_history, history_table
 from .server_forward_init import _write_snapshot
 from .server_initial_verification import verify_server_declared_schema
 from .server_model_review import review_server_model_changes
@@ -59,6 +59,7 @@ def execute_server_forward_migration(connection, models, root, alias, *,
             raise RuntimeError("Server database identity changed after review")
 
         rows, _ = read_history(connection, root, alias)
+        history_name = history_table(connection)
         if review.operations[0]["kind"] == "widen_column":
             fresh = review_server_column_widening(connection, models, alias, identity)
         else:
@@ -73,7 +74,7 @@ def execute_server_forward_migration(connection, models, root, alias, *,
         # reconciliation rather than suggesting a safe automatic retry.
         try:
             connection.execute_write(fresh.statements[0])
-            verify_server_declared_schema(connection, models, history_tables={"migrations"})
+            verify_server_declared_schema(connection, models, history_tables={history_name})
             snapshot = _write_snapshot(connection, root, alias, models, title)
             record = {
                 "id": len(rows) + 1,
@@ -83,7 +84,7 @@ def execute_server_forward_migration(connection, models, root, alias, *,
                 "warnings": None,
             }
             connection.execute_write(
-                "INSERT INTO migrations (id,title,snapshot,date,warnings) "
+                f"INSERT INTO {history_name} (id,title,snapshot,date,warnings) "
                 "VALUES (:id,:title,:snapshot,:date,:warnings)",
                 record,
             )
