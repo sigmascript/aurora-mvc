@@ -47,6 +47,105 @@ def _database_failure(exc, args, action):
     Only a traceback frame within the configured project is eligible for a
     source location. Database/driver exception text is deliberately hidden.
     """
+    # Configuration failures originate in Aurora's own restricted validators.
+    # Map only recognized, bounded messages: never echo arbitrary exceptions,
+    # driver errors, credentials or connection URLs.
+    if type(exc) in (ValueError, TypeError):
+        detail = str(exc)
+        alias_match = re.fullmatch(r"Database '([a-z][a-z0-9_]*)' (.+)", detail)
+        if alias_match:
+            alias, reason = alias_match.groups()
+            environment = re.fullmatch(
+                r"requires (?:a )?nonempty environment variable '([A-Za-z_][A-Za-z0-9_]*)'", reason
+            )
+            if environment:
+                variable = environment.group(1)
+                return (f"aurora: Database {action} refused: database '{alias}' needs "
+                        f"environment variable '{variable}'. Set it, or use a literal "
+                        "password or URL in an untracked local configuration. "
+                        "No database changes were made.\n")
+            known = {
+                "requires engine sqlite, mysql, or postgresql":
+                    "Set 'engine' to sqlite, mysql, or postgresql",
+                "SQLite settings require only engine and database":
+                    "SQLite accepts only 'engine' and 'database'",
+                "has an invalid SQLite database path":
+                    "Specify a valid SQLite 'database' file path",
+                "requires engine, database and username":
+                    "MySQL/PostgreSQL readable settings require 'engine', 'database', "
+                    "and 'username'; remove any unknown fields",
+                "must choose password or password_env":
+                    "Use either 'password' (literal) or 'password_env' (environment variable name), not both",
+                "has an invalid host": "Specify a valid 'host' (default: localhost)",
+                "requires a TCP port from 1 to 65535":
+                    "Set 'port' to an integer from 1 to 65535",
+                "has an invalid database name or username":
+                    "Provide nonempty 'database' and 'username' values without URL delimiters",
+                "has an invalid password environment variable name":
+                    "Set 'password_env' to a valid environment variable name",
+                "has an invalid password": "Set 'password' to a string",
+                "must be a mapping": "Define this database using a JSON object",
+                "cannot mix URL and readable connection settings":
+                    "Use either 'url'/'url_env' or readable 'engine' connection settings, not both",
+                "has an invalid environment variable name":
+                    "Set 'url_env' to a valid environment variable name",
+                "requires a nonempty string URL":
+                    "Provide a nonempty 'url' string, or use 'url_env'",
+                "has an invalid or unsupported URL":
+                    "Use a supported SQLite, MySQL or PostgreSQL connection URL; see docs/database.md",
+            }
+            if reason in known:
+                return (f"aurora: Database {action} refused: database '{alias}': "
+                        f"{known[reason]}. No database changes were made.\n")
+            collision = re.fullmatch(
+                r"resolves to the same destination as database '([a-z][a-z0-9_]*)'; configure one canonical name",
+                reason,
+            )
+            if collision:
+                return (f"aurora: Database {action} refused: '{alias}' and "
+                        f"'{collision.group(1)}' select the same database. "
+                        "Use one canonical alias. No database changes were made.\n")
+        top_level = {
+            "DATABASES must be a mapping": "'databases' must contain a JSON object of named databases",
+            "DATABASES must define a 'default' database": "Add a 'default' entry to 'databases'",
+            "Database aliases must be lowercase identifiers":
+                "Use lowercase database aliases containing letters, digits or underscores",
+            "Cannot read database configuration":
+                "Check that aurora_databases.json exists and contains valid JSON",
+            "Expected only a databases mapping":
+                "The database configuration must contain one top-level 'databases' object",
+            "Duplicate model table names":
+                "Two selected models use the same table name; rename one or adjust aurora_models.json",
+            "Model table name is reserved for migration history":
+                "A model uses the reserved history table name; rename its table",
+        }
+        if detail in top_level:
+            return (f"aurora: Database {action} refused: {top_level[detail]}. "
+                    "No database changes were made.\n")
+    # Never show raw driver exception text; it may include endpoints or credentials.
+    kind = type(exc)
+    module = kind.__module__
+    mysql_code = (exc.args[0] if exc.args and type(exc.args[0]) is int else None)
+    if module.startswith("pymysql"):
+        hints = {
+            1049: "The selected MySQL database does not exist. Run 'aurora db init' to create and initialize it using the configured account (CREATE DATABASE permission required), then run 'aurora db check'.",
+            1045: "MySQL authentication was refused. Check the username, password and database permissions.",
+            1044: "The MySQL account lacks access to the selected database. Check its grants.",
+            2003: "Cannot connect to MySQL. Check the host, port and whether the server is running.",
+            2005: "The MySQL hostname could not be resolved. Check host.",
+        }
+        if mysql_code in hints:
+            return f"aurora: Database {action} failed: {hints[mysql_code]} No database changes were made by this command.\n"
+    if module.startswith("psycopg"):
+        hints = {
+            "3D000": "The selected PostgreSQL database does not exist. Run 'aurora db init' to create and initialize it using the configured account (CREATE DATABASE permission required), then run 'aurora db check'.",
+            "28P01": "PostgreSQL authentication was refused. Check the username and password.",
+            "42501": "The PostgreSQL account lacks sufficient privileges. Check its grants.",
+        }
+        code = getattr(exc, "sqlstate", None)
+        if code in hints:
+            return f"aurora: Database {action} failed: {hints[code]} No database changes were made by this command.\n"
+
     import traceback
 
     project = Path(getattr(args, "config", "aurora_databases.json")).resolve().parent
@@ -97,6 +196,20 @@ def _database_failure(exc, args, action):
                     "foreign-key relationship, but this initialization/migration route "
                     "does not yet support it. The model was not changed; no DDL was "
                     "executed. Do not remove the relationship to bypass this guard.\n")
+    from aurora.database.server_provisioning import ProvisioningUncertain
+    if isinstance(exc, ProvisioningUncertain):
+        return ("aurora: Database creation outcome is uncertain. Inspect the server "
+                "catalog before retrying; Aurora will not delete or retry it automatically.\n")
+    if type(exc) is RuntimeError and str(exc) == (
+        "Server database was created, but schema initialization did not finish. "
+        "Preserve the database and inspect its schema and history; do not delete or blindly retry."
+    ):
+        return f"aurora: {exc}\n"
+    if type(exc) is ValueError and str(exc) in (
+        "Database creation requires --confirm yes or an interactive review",
+        "Database creation needs an interactive terminal or --confirm yes",
+    ):
+        return f"aurora: Database {action} refused: {exc}. No database changes were made.\n"
     if isinstance(exc, (ValueError, PermissionError)):
         # Do not echo arbitrary exception text: URLs and credentials may be embedded.
         return (f"aurora: Database {action} refused ({type(exc).__name__}). "
@@ -356,7 +469,29 @@ def main(argv: list[str] | None = None) -> int:
 
             try:
                 return run_explicit_operations(args)
-            except Exception:
+            except Exception as exc:
+                from aurora.database.explicit_model_rename import ModelSourceRenameError
+                if isinstance(exc, ModelSourceRenameError):
+                    parser.exit(1, f"aurora: Explicit model-source rename refused: {exc}. No database changes were committed.\n")
+                # Only literal, reviewed messages from Aurora's index validators
+                # are safe to surface. Never forward raw driver/JSON errors.
+                messages = {
+                    "Index name is already in use":
+                        "An index or schema object already uses this name. Choose another index name or drop the existing ordinary index first.",
+                    "Index name already exists":
+                        "An index or schema object already uses this name. Choose another index name or drop the existing ordinary index first.",
+                    "Only a recorded ordinary index on the selected table may be dropped":
+                        "The named ordinary index does not exist on the selected table, or is not eligible for removal. Check the index name and table; do not repeat a completed drop.",
+                    "Index target is not a registered application table":
+                        "The target table is not registered in aurora_models.json for this database.",
+                    "Index column is not declared by the selected model":
+                        "The requested index column is not declared by the selected table model.",
+                    "Unique indexes require the dedicated UNIQUE migration path":
+                        "Ordinary index operations cannot create UNIQUE indexes. Use the supported UNIQUE migration path.",
+                }
+                guidance = messages.get(str(exc)) if type(exc) is ValueError else None
+                if guidance:
+                    parser.exit(1, f"aurora: Explicit schema operation refused: {guidance} No database changes were made.\n")
                 parser.exit(1, "aurora: Explicit schema operation refused; inspect JSON, alias and schema.\n")
 
         from aurora.database.cli_model_migration import run_model_migration
@@ -364,11 +499,40 @@ def main(argv: list[str] | None = None) -> int:
         try:
             return run_model_migration(args)
         except Exception as exc:
+            from aurora.database.sqlite_forward_history import UnsafeTableTransition
+            if isinstance(exc, UnsafeTableTransition):
+                parser.exit(1, f"aurora: Model-driven migration refused: {exc}.\n")
             from aurora.database.cli_server_model_migration import UnsupportedServerChange
 
             if isinstance(exc, UnsupportedServerChange):
                 parser.exit(1, f"aurora: Model-driven migration refused. {exc}\n")
 
+            # Only our own validated column-addition refusal is eligible for
+            # detailed guidance. Do not expose arbitrary exception/driver text.
+            addition = (re.fullmatch(
+                r"Cannot add ([a-z][a-z0-9_]*)\.([a-z][a-z0-9_]*): "
+                r"the column must be nullable or have a database default, "
+                r"and cannot introduce a new constraint", str(exc))
+                if type(exc) is ValueError else None)
+            if addition:
+                parser.exit(1, f"aurora: Model-driven migration refused: "
+                            f"Cannot add {addition.group(1)}.{addition.group(2)}. "
+                            "For existing tables, use column(..., default=VALUE) "
+                            "or column(..., not_null=False); adding new constraints "
+                            "needs separate migration review. No database changes were made.\n")
+            narrowing = (re.fullmatch(
+                r"Cannot narrow ([a-z][a-z0-9_]*)\.([a-z][a-z0-9_]*) "
+                r"to VARCHAR\(([1-9][0-9]*)\): existing value contains "
+                r"([1-9][0-9]*) characters; narrowing would truncate data\. "
+                r"No database changes were made\.", str(exc))
+                if type(exc) is ValueError else None)
+            if narrowing:
+                table, column, target_length, actual_length = narrowing.groups()
+                parser.exit(1, f"aurora: Model-driven migration refused: "
+                            f"Cannot narrow {table}.{column} to VARCHAR({target_length}): "
+                            f"an existing value has {actual_length} characters. "
+                            "Only values fitting the new length are safe; "
+                            "the schema and history were not changed.\n")
             diagnostic = _database_failure(exc, args, "migration")
             parser.exit(1, "aurora: Model-driven migration refused. " + diagnostic.removeprefix("aurora: "))
 

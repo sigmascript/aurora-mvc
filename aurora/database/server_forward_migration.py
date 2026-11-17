@@ -35,7 +35,7 @@ def execute_server_forward_migration(connection, models, root, alias, *,
     if not identity or parsed is None or not isinstance(title, str) or not title.strip():
         raise ValueError("Verified database identity and migration title are required")
     if (len(review.operations) != 1 or len(review.statements) != 1
-            or review.operations[0]["kind"] not in ("create_table", "add_column", "widen_column")
+            or review.operations[0]["kind"] not in ("create_table", "add_column", "add_columns", "widen_column", "alter_columns")
             or not hmac.compare_digest(str(approval), review.review_sha256)):
         raise PermissionError("One exact approved safe server operation is required")
 

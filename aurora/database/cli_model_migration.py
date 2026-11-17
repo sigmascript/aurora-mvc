@@ -4,6 +4,7 @@ import hmac
 from contextlib import closing
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 import sqlite3
 import sys
@@ -134,32 +135,83 @@ def run_model_migration(args):
             if removed_tables:
                 from .sqlite_forward_history import review_table_removal
                 removal = review_table_removal(checked._raw, root, db_file, models)
-            plans = [plan_schema(checked, model, models=models) for model in models]
+            trusted_indexes = {item["name"] for item in prior["physical_schema"]
+                               if item["type"] == "index" and item["sql"] is not None}
+            plans = [plan_schema(checked, model, models=models,
+                                 trusted_indexes=trusted_indexes) for model in models]
             changes = [change for plan in plans for change in plan.changes]
             if any(field.model_reference or field.on_update != "NO ACTION" or
                    field.on_delete != "NO ACTION" for model in models
                    for field in model.__columns__.values()):
-                from .sqlite_forward_history import matches_models
                 if not changes and not removed_tables and not any(plan.warnings for plan in plans):
-                    matches_models(checked._raw, models)
+                    from .sqlite_forward_history import matches_models_with_indexes
+                    matches_models_with_indexes(checked._raw, models)
                     return finish_noop()
-                raise ValueError("Changes to existing foreign-key schemas require a separately reviewed migration")
+                # Existing relationships may remain untouched during an
+                # ordinary column addition or a separately verified default edit.
+                if (any(plan.warnings for plan in plans if plan.exists) or
+                        any(change.kind not in ("missing_column", "default_mismatch", "type_mismatch", "nullability_mismatch", "unique_mismatch", "foreign_key_mismatch", "foreign_key_action_mismatch", "create_table", "extra_column") for change in changes)):
+                    raise ValueError("Schema transition with foreign keys includes unsupported changes; no database changes made")
             if any(plan.warnings and plan.exists for plan in plans):
                 raise ValueError("Unsupported schema drift; migration refused")
+            # Reject unsafe additions during read-only preflight, before the
+            # confirmation prompt. Apply this consistently to FK and plain tables.
+            from .sqlite_additive_migration import _column_sql
+            for plan in plans:
+                model = next(model for model in models if model.__table_name__ == plan.table)
+                for change in plan.changes:
+                    if change.kind == "missing_column":
+                        try:
+                            _column_sql(model, change.column)
+                        except ValueError as exc:
+                            raise ValueError(
+                                f"Cannot add {plan.table}.{change.column}: "
+                                "the column must be nullable or have a database default, "
+                                "and cannot introduce a new constraint"
+                            ) from exc
         column_removal = None
-        if len(changes) == 1 and changes[0].kind == "extra_column" and removal is None:
+        mixed_removal = bool(changes and any(change.kind == "extra_column" for change in changes)
+                             and any(change.kind != "extra_column" for change in changes))
+        if changes and any(change.kind == "extra_column" for change in changes) and removal is None:
             from .sqlite_forward_history import review_column_removal
             with closing(sqlite3.connect(db_file.as_uri() + "?mode=ro", uri=True)) as checked:
-                column_removal = review_column_removal(checked, root, db_file, models)
+                column_removal = review_column_removal(checked, root, db_file, models,
+                                                       allow_mixed=mixed_removal)
         edit = None
+        ordinary_edit = None
+        length_edit = None
+        table_transition = None
+        if changes and (len(changes) > 1 or changes[0].kind in ("foreign_key_mismatch", "foreign_key_action_mismatch")) and all(change.kind in (
+                "type_mismatch", "default_mismatch", "nullability_mismatch", "unique_mismatch",
+                "foreign_key_mismatch", "foreign_key_action_mismatch", "missing_column", "extra_column") for change in changes):
+            from .sqlite_forward_history import review_table_transition
+            with closing(sqlite3.connect(db_file.as_uri() + "?mode=ro", uri=True)) as checked:
+                table_transition = review_table_transition(checked, root, db_file, models)
+        if len(changes) == 1 and changes[0].kind == "unique_mismatch":
+            from .sqlite_forward_history import review_unique_change
+            with closing(sqlite3.connect(db_file.as_uri() + "?mode=ro", uri=True)) as checked:
+                ordinary_edit = review_unique_change(checked, root, db_file, models)
+        if len(changes) == 1 and changes[0].kind == "type_mismatch":
+            from .sqlite_forward_history import review_length_change
+            with closing(sqlite3.connect(db_file.as_uri() + "?mode=ro", uri=True)) as checked:
+                length_edit = review_length_change(checked, root, db_file, models)
+        if len(changes) == 1 and changes[0].kind == "nullability_mismatch":
+            from .sqlite_forward_history import review_nullability_change
+            with closing(sqlite3.connect(db_file.as_uri() + "?mode=ro", uri=True)) as checked:
+                ordinary_edit = review_nullability_change(checked, root, db_file, models)
+        if len(changes) == 1 and changes[0].kind == "default_mismatch":
+            from .sqlite_forward_history import review_default_change
+            with closing(sqlite3.connect(db_file.as_uri() + "?mode=ro", uri=True)) as checked:
+                ordinary_edit = review_default_change(checked, root, db_file, models)
         supported_edits = {"type_mismatch", "nullability_mismatch",
-                           "default_mismatch", "unique_mismatch"}
-        if changes and all(change.kind in supported_edits for change in changes):
+                           "default_mismatch", "unique_mismatch", "foreign_key_mismatch",
+                           "foreign_key_action_mismatch"}
+        if ordinary_edit is None and length_edit is None and table_transition is None and changes and all(change.kind in supported_edits for change in changes):
             with Connection(sqlite3.connect(db_file.as_uri() + "?mode=ro", uri=True), "sqlite") as checked:
                 edit = sqlite_column_edit_proposal(
                     checked, models, args.database, db_file, forward=True,
                 )
-        if changes and edit is None and column_removal is None and any(change.kind not in ("missing_column", "create_table")
+        if changes and edit is None and ordinary_edit is None and length_edit is None and table_transition is None and column_removal is None and any(change.kind not in ("missing_column", "create_table")
                                             for change in changes):
             raise ValueError("Unsupported model change; database unchanged")
         if removal is not None:
@@ -174,45 +226,117 @@ def run_model_migration(args):
                 if input("Remove this table? [y/N]: ").strip().lower() not in ("y", "yes"):
                     print("Migration cancelled; no database changes made.")
                     return 0
+            verified_backup = None
             if count:
                 if not sys.stdin.isatty():
-                    raise PermissionError("Populated table removal requires interactive second confirmation")
-                print(f"WARNING: {count} row(s) will be permanently deleted.")
-                if input(f"Type the exact table name '{table}' to delete it: ").strip() != table:
-                    print("Migration cancelled; no database changes made.")
+                    from .sqlite_forward_history import UnsafeTableTransition
+                    raise UnsafeTableTransition(
+                        f"Populated table {args.database}.{table} requires interactive "
+                        "target-specific authorization and a verified backup; "
+                        "--confirm yes cannot bypass this gate"
+                    )
+                # The independent SQLite backup command validates source identity,
+                # snapshot history, integrity, and an exclusive destination.
+                backup_root = Path(root) / "backups"
+                if backup_root.is_symlink():
+                    raise PermissionError("Backup directory must not be a symbolic link")
+                backup_root.mkdir(exist_ok=True)
+                backup_dir = backup_root / db_file.stem
+                if backup_dir.is_symlink():
+                    raise PermissionError("Database backup directory must not be a symbolic link")
+                backup_dir.mkdir(exist_ok=True)
+                stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+                for suffix in range(1000):
+                    name = stamp + (f"-{suffix}" if suffix else "") + ".sqlite3"
+                    candidate = backup_dir / name
+                    if not candidate.exists() and not candidate.is_symlink():
+                        break
+                else:
+                    raise RuntimeError("No free backup filename; table removal refused")
+                run_backup(SimpleNamespace(config=args.config, database=args.database,
+                                           to=str(candidate)))
+                verified_backup = candidate
+                target_name = f"{args.database}.{table}"
+                phrase = f"DELETE {target_name}"
+                print(f"DANGEROUS MIGRATION: permanently delete {count} row(s) in {target_name}")
+                print(f"Verified pre-migration SQLite backup: {verified_backup}")
+                if input(f"Type exactly '{phrase}' to authorize deletion: ").strip() != phrase:
+                    print("Migration cancelled; database unchanged. Verified backup retained.")
                     return 0
             from .sqlite_forward_history import migrate_table_removal
             title = migration_title(args.title or "Untitled", "Untitled")
             with closing(sqlite3.connect(db_file.as_uri() + "?mode=rw", uri=True,
                                          isolation_level=None, timeout=5)) as writing:
                 result = migrate_table_removal(writing, root, db_file, models, title,
-                                               table, count, witness, acknowledged=bool(count))
+                                               table, count, witness, acknowledged=bool(count),
+                                               verified_backup=verified_backup)
             print(f"Migration applied. Schema snapshot: {result}")
             return 0
         if column_removal is not None:
-            table, column, count, witness = column_removal
             print(f"AuroraSQL migration — {args.database} (SQLite)")
-            print(f"  DROP COLUMN {table}.{column}; existing non-NULL values: {count}")
+            for table, column, count, _ in column_removal:
+                print(f"  DROP COLUMN {table}.{column}; existing non-NULL values: {count}")
+            if table_transition is not None:
+                for plan in plans:
+                    for change in plan.changes:
+                        if change.kind != "extra_column":
+                            print(f"  {change.kind}: {plan.table}.{change.column or '*'}")
             if not simple_confirm:
                 if not sys.stdin.isatty():
                     raise PermissionError("Column removal requires confirmation; use --confirm yes")
-                if input("Remove this column? [y/N]: ").strip().lower() not in ("y", "yes"):
+                if input("Remove these column(s)? [y/N]: ").strip().lower() not in ("y", "yes"):
                     print("Migration cancelled; no database changes made.")
                     return 0
-            if count:
+            dangerous = [(table, column, count) for table, column, count, _ in column_removal if count]
+            verified_backup = None
+            authorized = []
+            if dangerous:
                 if not sys.stdin.isatty():
-                    raise PermissionError("Populated column removal requires interactive second confirmation")
-                print(f"WARNING: {count} stored non-NULL value(s) will be permanently deleted.")
-                target = f"{table}.{column}"
-                if input(f"Type the exact column identifier '{target}' to delete it: ").strip() != target:
-                    print("Migration cancelled; no database changes made.")
-                    return 0
-            from .sqlite_forward_history import migrate_column_removal
+                    from .sqlite_forward_history import UnsafeTableTransition
+                    targets = ", ".join(f"{args.database}.{table}.{column}" for table, column, _ in dangerous)
+                    raise UnsafeTableTransition(
+                        f"Populated column(s) {targets} require interactive target-specific "
+                        "authorization and a verified backup; --confirm yes cannot bypass this gate")
+                backup_root = Path(root) / "backups"
+                if backup_root.is_symlink():
+                    raise PermissionError("Backup directory must not be a symbolic link")
+                backup_root.mkdir(exist_ok=True)
+                backup_dir = backup_root / db_file.stem
+                if backup_dir.is_symlink():
+                    raise PermissionError("Database backup directory must not be a symbolic link")
+                backup_dir.mkdir(exist_ok=True)
+                stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+                for suffix in range(1000):
+                    name = stamp + (f"-{suffix}" if suffix else "") + ".sqlite3"
+                    candidate = backup_dir / name
+                    if not candidate.exists() and not candidate.is_symlink():
+                        break
+                else:
+                    raise RuntimeError("No free backup filename; column removal refused")
+                run_backup(SimpleNamespace(config=args.config, database=args.database,
+                                           to=str(candidate)))
+                verified_backup = candidate
+                print(f"Verified pre-migration SQLite backup: {verified_backup}")
+                for table, column, count in dangerous:
+                    target = f"{args.database}.{table}.{column}"
+                    phrase = f"DELETE {target}"
+                    print(f"DANGEROUS MIGRATION: permanently delete {count} non-NULL value(s) in {target}")
+                    if input(f"Type exactly '{phrase}' to authorize deletion: ").strip() != phrase:
+                        print("Migration cancelled; database unchanged. Verified backup retained.")
+                        return 0
+                    authorized.append((table, column))
+            from .sqlite_forward_history import migrate_column_removal, migrate_table_transition
             title = migration_title(args.title or "Untitled", "Untitled")
             with closing(sqlite3.connect(db_file.as_uri() + "?mode=rw", uri=True,
                                          isolation_level=None, timeout=5)) as writing:
-                result = migrate_column_removal(writing, root, db_file, models, title,
-                                                table, column, count, witness, acknowledged=bool(count))
+                if table_transition is not None:
+                    result = migrate_table_transition(writing, root, db_file, models, title,
+                                                      table_transition, reviewed_removals=column_removal,
+                                                      acknowledged=authorized, verified_backup=verified_backup)
+                else:
+                    result = migrate_column_removal(writing, root, db_file, models, title,
+                                                    column_removal, acknowledged=authorized,
+                                                    verified_backup=verified_backup)
             print(f"Migration applied. Schema snapshot: {result}")
             return 0
         if not changes:
@@ -230,7 +354,20 @@ def run_model_migration(args):
         title = migration_title(args.title or "Untitled", "Untitled")
         with closing(sqlite3.connect(db_file.as_uri() + "?mode=rw", uri=True,
                                      isolation_level=None, timeout=5)) as writing:
-            if edit is not None:
+            if table_transition is not None:
+                from .sqlite_forward_history import migrate_table_transition
+                result = migrate_table_transition(writing, root, db_file, models, title, table_transition)
+            elif length_edit is not None:
+                from .sqlite_forward_history import migrate_length_change
+                result = migrate_length_change(writing, root, db_file, models, title, length_edit)
+            elif ordinary_edit is not None:
+                from .sqlite_forward_history import migrate_default_change
+                result = migrate_default_change(writing, root, db_file, models, title, ordinary_edit,
+                                                kind=("unique_mismatch" if any(change.kind == "unique_mismatch" for change in changes)
+                                                      else "nullability_mismatch" if any(
+                                                          change.kind == "nullability_mismatch" for change in changes
+                                                      ) else "default_mismatch"))
+            elif edit is not None:
                 from .sqlite_forward_history import migrate_column_edit
                 result = migrate_column_edit(writing, root, db_file, models, title, edit)
             else:

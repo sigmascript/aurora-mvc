@@ -40,10 +40,22 @@ def _preflight(connection, models, alias, *, project_root=None):
         from .snapshots import schema_snapshot
         try:
             _, latest = read_history(connection, project_root or Path.cwd(), alias)
+            # An index recorded in the verified physical history is not
+            # unreviewed drift. The history reader already compared that
+            # entire witness with the current server catalog.
+            indexed = {item["table"]: set(item["indexes"])
+                       for item in latest["physical_schema"]}
+            plans = [plan_schema(connection, model, models=models,
+                                 trusted_indexes=indexed.get(model.__table_name__, ()))
+                     for model in models]
+            missing = [plan.table for plan in plans if not plan.exists]
+            warnings = [warning for plan in plans for warning in plan.warnings]
+            drift = [plan.table for plan in plans
+                     if plan.exists and (plan.changes or plan.warnings)]
             unexpected -= {"migrations", "__migrations__"}
             verified_current = (not unexpected and not missing and not drift and
                                 latest["models"] ==
-                                schema_snapshot(*models, dialect=dialect)["tables"])
+                                schema_snapshot(*models, dialect=dialect, allow_v2=True)["tables"])
         except (RuntimeError, ValueError, OSError) as error:
             return {"database_alias": alias, "read_only": True, "status": "REFUSED",
                     "reason": str(error), "existing_tables": sorted(existing),
@@ -163,7 +175,7 @@ def run_init_check(args):
     url = config.resolve(args.database)
     parsed = urlsplit(url)
     dialect = _dialect_for_init_scheme(parsed.scheme)
-    models = validate_init_models(models, dialect=dialect, allow_extended=(dialect == "sqlite"))
+    models = validate_init_models(models, dialect=dialect, allow_extended=True)
 
     if parsed.scheme in ("sqlite", "sqlite+pysqlite"):
         db_file = _sqlite_init_path(parsed, base_dir)
@@ -244,7 +256,7 @@ def _postgres_approval_digest(models, alias, database_identity):
         "version": "aurorasql-postgresql-init-preview-v1",
         "alias": alias,
         "database_identity": database_identity,
-        "ordered_ddl": [create_table_sql(model, "postgresql") for model in models],
+        "ordered_ddl": [create_table_sql(model, "postgresql", models=models) for model in models],
     }, sort_keys=True, separators=(",", ":"))
     return sha256(proposal.encode("utf-8")).hexdigest()
 
@@ -276,7 +288,7 @@ def _mysql_approval_digest(models, alias, identity):
     proposal = json.dumps({
         "version": "aurorasql-mysql-init-v1", "alias": alias,
         "database_identity": identity,
-        "ordered_ddl": [create_table_sql(model, "mysql") for model in models],
+        "ordered_ddl": [create_table_sql(model, "mysql", models=models) for model in models],
     }, sort_keys=True, separators=(",", ":"))
     return sha256(proposal.encode("utf-8")).hexdigest()
 
@@ -469,7 +481,44 @@ def _server_initial_decision(args, report, digest, models, dialect):
 
 
 def run_init_apply(args):
-    """Initialize supported schemas after backend-specific review and approval."""
+    """Create an absent configured database if authorized, then initialize schema."""
+    try:
+        return _run_init_apply_existing(args)
+    except Exception as error:
+        from .server_provisioning import (is_missing_database, is_verified_missing_postgres,
+                                          provision_database)
+        config, _ = _load_config(args.config)
+        url = config.resolve(args.database)
+        scheme = urlsplit(url).scheme
+        if not (is_missing_database(error, scheme) or
+                (scheme == "postgresql+psycopg" and
+                 is_verified_missing_postgres(error, url))):
+            raise
+        from .init_validation import validate_init_models
+        _, models = _select_models(args, Path(args.config).resolve().parent)
+        models = validate_init_models(models, dialect="mysql" if scheme.startswith("mysql") else "postgresql", allow_extended=True)
+        created = provision_database(url, models, alias=args.database,
+                                     confirm=getattr(args, "confirm", None))
+        if not created:
+            return 0
+        try:
+            # The creation review already approved initialization of the listed
+            # models. Do not ask a second question after creating the database.
+            from copy import copy
+            approved = copy(args)
+            if getattr(approved, "approve", None) is None:
+                approved.confirm = "yes"
+            return _run_init_apply_existing(approved)
+        except Exception as failure:
+            # Preserve the cause for diagnostics while never printing raw driver text.
+            raise RuntimeError(
+                "Server database was created, but schema initialization did not finish. "
+                "Preserve the database and inspect its schema and history; do not delete or blindly retry."
+            ) from failure
+
+
+def _run_init_apply_existing(args):
+    """Initialize a verified existing database using the original guarded path."""
     config, base_dir = _load_config(args.config)
     refs, models = _select_models(args, base_dir)
     from .init_validation import validate_init_models
@@ -477,7 +526,7 @@ def run_init_apply(args):
     parsed = urlsplit(url)
 
     if parsed.scheme == "postgresql+psycopg":
-        models = validate_init_models(models, dialect="postgresql")
+        models = validate_init_models(models, dialect="postgresql", allow_extended=True)
 
         with config.connect(args.database) as connection:
             identity = _postgres_database_identity(connection, parsed)
@@ -496,13 +545,13 @@ def run_init_apply(args):
                 parsed=parsed, title=decision[1],
             )
 
-        print(json.dumps({"status": "INITIALIZED", "database_alias": args.database,
-                          "tables": [model.__table_name__ for model in models],
-                          "snapshot": snapshot.name}, indent=2, sort_keys=True))
+        print(f"Initialized database: {args.database} (PostgreSQL).")
+        print(f"Created {len(models)} table(s): {', '.join(model.__table_name__ for model in models)}.")
+        print(f"Schema snapshot: {snapshot}")
         return 0
 
     if parsed.scheme == "mysql+pymysql":
-        models = validate_init_models(models, dialect="mysql")
+        models = validate_init_models(models, dialect="mysql", allow_extended=True)
 
         with config.connect(args.database) as connection:
             identity = _mysql_database_identity(connection, parsed)
@@ -521,9 +570,9 @@ def run_init_apply(args):
                 parsed=parsed, title=decision[1],
             )
 
-        print(json.dumps({"status": "INITIALIZED", "database_alias": args.database,
-                          "tables": [model.__table_name__ for model in models],
-                          "snapshot": snapshot.name}, indent=2, sort_keys=True))
+        print(f"Initialized database: {args.database} (MySQL).")
+        print(f"Created {len(models)} table(s): {', '.join(model.__table_name__ for model in models)}.")
+        print(f"Schema snapshot: {snapshot}")
         return 0
 
     if parsed.scheme not in ("sqlite", "sqlite+pysqlite"):

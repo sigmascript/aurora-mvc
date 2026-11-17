@@ -2,7 +2,7 @@
 
 Aurora projects can use **one small, optional general configuration file** called
 `aurora_config.json`. The file is not a database manifest, a Python module, or a
-user-preference store. This document describes the unreleased Milestone 5 checkout; the published `1.0.0a7` package may differ from the current source. Any next release remains approval-gated.
+user-preference store. This document describes the unreleased Milestone 6 checkout; the published `1.0.0a7` package may differ from the current source. Any next release remains approval-gated.
 
 The generated minimal, MVC, and modular starters create the file alongside
 `app.py` and load it explicitly. Existing `Aurora(...)` constructors remain
@@ -71,6 +71,22 @@ limit and does not provide secure media-upload processing.**
   `tzdata` separately. Aurora does **not** modify the operating system clock.
 - Configured constants and settings views are read-only. User-editable values
   are application data and should be stored in the database or suitable sessions.
+
+
+## Development HTTP server versus database server
+
+The optional `"server"` object in **`aurora_config.json`** controls only `aurora run` (Uvicorn HTTP development settings). It does **not** identify a MySQL/PostgreSQL server or choose AuroraSQL's `default` database.
+
+```json
+{
+  "application": {"name": "MyApp", "timezone": "UTC"},
+  "server": {"host": "127.0.0.1", "port": 9000, "reload": true}
+}
+```
+
+Here `port: 9000` is where the *web application* listens for HTTP requests. Without this optional section, Aurora uses host `127.0.0.1`, HTTP port `8000`, and reload enabled. Explicit `aurora run --host`, `--port`, `--reload` and `--no-reload` options override corresponding settings. This is a local development server, not a production-deployment recipe.
+
+For MySQL or PostgreSQL use **`aurora_databases.json`** and its `engine`, `host`, `port`, `database`, `user`, `password_env` fields; the default MySQL port is 3306 and PostgreSQL is 5432. See [database configuration examples](database.md#configuration-and-drivers). These two different `host`/`port` concepts must not be confused. Neither loading application settings nor starting the HTTP server automatically initializes database tables.
 
 ## Three distinct responsibilities
 

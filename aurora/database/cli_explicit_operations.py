@@ -154,6 +154,14 @@ def load_explicit_operations(source):
         _unique_names(columns)
         normalized = {"kind": "create_index", "table": table, "name": name,
                       "columns": columns, "unique": unique}
+    elif operations == {"drop_index"}:
+        spec = document["drop_index"]
+        if not isinstance(spec, dict) or set(spec) != {"table", "name"}:
+            raise ValueError("drop_index requires exactly 'table' and 'name'")
+        table, name = _identifier(spec.get("table")), _identifier(spec.get("name"))
+        if table.casefold() in _RESERVED_TABLES:
+            raise ValueError("Migration history indexes cannot be changed")
+        normalized = {"kind": "drop_index", "table": table, "name": name}
     else:
         raise ValueError("Exactly one supported schema operation is required")
 
@@ -332,6 +340,9 @@ def _sql_statements(operation):
         columns = ", ".join(_quote(name) for name in operation["columns"])
         prefix = "CREATE UNIQUE INDEX" if operation["unique"] else "CREATE INDEX"
         return [f'{prefix} {_quote(operation["name"])} ON {table} ({columns})']
+
+    if operation["kind"] == "drop_index":
+        return [f'DROP INDEX {_quote(operation["name"])}']
 
     return [f'ALTER TABLE {table} RENAME COLUMN {_quote(old)} TO {_quote(new)}'
             for old, new in operation["columns"].items()]
@@ -517,22 +528,32 @@ def _forward_explicit_operation(args, document, db_file, root, *, simple_confirm
     from .init_validation import validate_init_models
     from .migration_titles import migration_title
     from .sqlite_forward_history import (read_history, matches_models,
-                                         apply_explicit_rename)
+                                         apply_explicit_rename, apply_explicit_index,
+                                         matches_models_with_indexes)
 
     operation = document["operation"]
-    if operation["kind"] not in ("rename_table", "rename_columns"):
-        raise ValueError("Forward-history explicit changes currently support table or column renames only")
+    if operation["kind"] not in ("rename_table", "rename_columns", "create_index", "drop_index"):
+        raise ValueError("Unsupported forward-history explicit operation")
     if args.apply or args.approve or args.backup:
         raise ValueError("Forward-only SQLite operations use ordinary confirmation; advanced approval is unsupported")
     refs, models = _select_models(args, root)
     if not refs:
         raise ValueError("Registered models are required to verify a schema rename")
-    models = validate_init_models(models, dialect="sqlite")
+    source_edits = {}
+    if operation['kind'] in ('rename_table', 'rename_columns'):
+        from .explicit_model_rename import source_changes, staged_model_source
+        source_edits = source_changes(root, refs, models, operation)
+        with staged_model_source(source_edits):
+            _, models = _select_models(args, root)
+    models = validate_init_models(models, dialect="sqlite", allow_extended=True)
     statements = _sql_statements(operation)
     # Rehearse the operation and check its full model correspondence before
     # asking for authorization. The rehearsal is read-only on the real DB.
     with closing(sqlite3.connect(db_file.as_uri() + "?mode=ro", uri=True)) as observed:
         read_history(observed, root, db_file)
+        if operation["kind"] in ("create_index", "drop_index"):
+            from .sqlite_forward_history import validate_index_operation
+            validate_index_operation(observed, models, operation)
     expected = _rehearse_sqlite(db_file, statements)
     with closing(sqlite3.connect(db_file.as_uri() + "?mode=ro", uri=True)) as source:
         clone = sqlite3.connect(":memory:")
@@ -542,7 +563,12 @@ def _forward_explicit_operation(args, document, db_file, root, *, simple_confirm
             clone.execute("PRAGMA legacy_alter_table=OFF")
             for sql in statements:
                 clone.execute(sql)
-            matches_models(clone, models)
+            if operation["kind"] in ("create_index", "drop_index"):
+                matches_models_with_indexes(clone, models)
+            else:
+                matches_models_with_indexes(clone, models)
+                if clone.execute('PRAGMA foreign_key_check').fetchall():
+                    raise ValueError("Rename would leave invalid foreign-key references")
             if _catalog(clone) != expected:
                 raise RuntimeError("Rehearsed schema differs from expected result")
         finally:
@@ -565,6 +591,9 @@ def _forward_explicit_operation(args, document, db_file, root, *, simple_confirm
         raise PermissionError("Confirmation required; use --confirm yes")
     print(f"AuroraSQL migration — {args.database} (SQLite)")
     print(f"  {operation['kind']}: {operation['table']}")
+    if source_edits:
+        for source in source_edits:
+            print(f"  Update Python model: {source.relative_to(Path(root).resolve())}")
     if interactive and input("Apply these changes? [y/N]: ").strip().lower() != "y":
         print("Migration cancelled; no database changes made.")
         return 0
@@ -573,7 +602,10 @@ def _forward_explicit_operation(args, document, db_file, root, *, simple_confirm
                                  isolation_level=None, timeout=5)) as raw:
         # Repeat the complete witness check under the write lock in the
         # executor, before any real application DDL.
-        path = apply_explicit_rename(raw, root, db_file, models, title, operation)
+        path = (apply_explicit_index(raw, root, db_file, models, title, operation)
+                if operation["kind"] in ("create_index", "drop_index") else
+                apply_explicit_rename(raw, root, db_file, models, title, operation,
+                                      source_edits=source_edits))
     print(f"Applied SQLite {operation['kind']} on {args.database}.")
     print(f"Schema snapshot: {path}")
     return 0
@@ -622,6 +654,12 @@ def run_explicit_operations(args):
 
     if dialect not in ("sqlite", "mysql", "postgresql"):
         raise ValueError("Unsupported schema-operation backend")
+
+    if dialect in ("mysql", "postgresql") and document["operation"]["kind"] in ("create_index", "drop_index"):
+        from .server_forward_index import run_server_index_operation
+        return run_server_index_operation(args, document, config, project_root,
+                                          simple_confirm=simple_confirm,
+                                          interactive=interactive)
 
     if dialect == "sqlite":
         db_file = _sqlite_source(url, project_root)

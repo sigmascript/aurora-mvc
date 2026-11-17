@@ -111,7 +111,7 @@ def _declared_type(field, dialect):
     return _SQL_TYPES[dialect][field.python_type]
 
 
-def plan_schema(connection, model, *, models=None):
+def plan_schema(connection, model, *, models=None, trusted_indexes=()):
     """Compare model columns with an existing table; NEVER execute DDL.
 
     A missing table receives a CREATE TABLE preview. For existing tables,
@@ -129,7 +129,7 @@ def plan_schema(connection, model, *, models=None):
     if not table.exists:
         return SchemaPlan(table.name, False,
                           (SchemaChange("create_table", None, "Table is missing"),),
-                          ("Preview only: creating a table requires explicit approval and execution.",),
+                          (),
                           preview)
 
     changes = []
@@ -152,7 +152,7 @@ def plan_schema(connection, model, *, models=None):
         "postgresql": f"{table.name}_pkey",
     }.get(connection.dialect)
 
-    if any(index != primary_index and not (
+    if any(index != primary_index and index not in trusted_indexes and not (
         connection.dialect == "sqlite" and index.startswith("sqlite_autoindex_")
     ) for index in table.indexes):
         warnings.append("Existing indexes require manual review; model index declarations are not supported.")
@@ -266,7 +266,15 @@ def plan_schema(connection, model, *, models=None):
                 ]
             else:
                 actual_actions = None
-            if actual_actions is not None and actual_actions != [(field.on_update, field.on_delete)]:
+            expected_actions = [(field.on_update, field.on_delete)]
+            if connection.dialect == "mysql" and actual_actions is not None:
+                # MySQL implements NO ACTION as immediate RESTRICT.
+                normalized = lambda actions: [("RESTRICT" if up == "NO ACTION" else up,
+                                               "RESTRICT" if down == "NO ACTION" else down)
+                                              for up, down in actions]
+                actual_actions = normalized(actual_actions)
+                expected_actions = normalized(expected_actions)
+            if actual_actions is not None and actual_actions != expected_actions:
                 changes.append(SchemaChange(
                     "foreign_key_action_mismatch", name,
                     "Existing foreign-key ON UPDATE/ON DELETE actions differ from the model declaration",
@@ -281,13 +289,12 @@ def plan_schema(connection, model, *, models=None):
                     "Database-side default differs from the validated model literal",
                 ))
         elif connection.dialect in ("mysql", "postgresql") and field.server_default is None:
-            expected_default = _default_literal(field, connection.dialect)
-
-            if (expected_default is None) != (observed.default_sql is None):
-                changes.append(SchemaChange("default_mismatch", name,
-                                            "Database-side default presence differs"))
-            elif expected_default is not None:
-                warnings.append(f"Database-side default on {name} requires backend-specific equivalence review.")
+            from .server_initial_verification import server_default_matches
+            if not server_default_matches(field, observed.default_sql, connection.dialect):
+                changes.append(SchemaChange(
+                    "default_mismatch", name,
+                    "Database-side literal default differs from the model declaration",
+                ))
         elif observed.default_sql is not None:
             if connection.dialect == "sqlite":
                 changes.append(SchemaChange("default_mismatch", name,

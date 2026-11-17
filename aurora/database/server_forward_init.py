@@ -25,7 +25,7 @@ def _write_snapshot(connection, root, alias, models, title):
         "database": alias,
         "engine": connection.dialect,
         "title": title,
-        "models": schema_snapshot(*models, dialect=connection.dialect)["tables"],
+        "models": schema_snapshot(*models, dialect=connection.dialect, allow_v2=True)["tables"],
         "physical_schema": _physical(connection),
     }
     observed_tables = {item["table"] for item in contents["physical_schema"]}
@@ -70,9 +70,9 @@ def _initialize_locked(connection, models, root, alias, title):
         connection.execute_write(_HISTORY_DDL[connection.dialect])
 
         for model in models:
-            connection.execute_write(create_table_sql(model, connection.dialect))
+            connection.execute_write(create_table_sql(model, connection.dialect, models=models))
 
-        verify_server_declared_schema(connection, models, history_tables={TABLE})
+        verify_server_declared_schema(connection, models, history_tables={TABLE}, allow_extended=True)
         path = _write_snapshot(connection, root, alias, models, title)
         record = {
             "title": title,
@@ -127,7 +127,7 @@ def execute_server_forward_init(connection, models, root, alias, *, approval,
         raise PermissionError("Exact reviewed schema approval is required")
     if expected_identity is None or parsed is None:
         raise ValueError("Verified server database identity is required")
-    ordered = validate_init_models(models, dialect=dialect)
+    ordered = validate_init_models(models, dialect=dialect, allow_extended=True)
     if list(ordered) != list(models):
         raise ValueError("Models must follow validated dependency order")
     if dialect == "mysql":

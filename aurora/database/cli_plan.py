@@ -251,19 +251,23 @@ def run_plan(args, *, public_check=False):
                 try:
                     records, recorded = read_history(connection._raw, base_dir, db_file)
                     history_verified = True
+                    trusted_indexes = {item["name"] for item in recorded["physical_schema"]
+                                       if item["type"] == "index" and item["sql"] is not None}
+                    plans = [plan_schema(connection, model, models=models,
+                                         trusted_indexes=trusted_indexes) for model in models]
                     recorded_tables = {item["name"] for item in recorded["models"]}
                     selected_tables = {model.__table_name__ for model in models}
                     missing_model_identities = sorted(recorded_tables - selected_tables)
                     if (public_check and not missing_model_identities and
-                            sum(len(plan.changes) for plan in plans) == 1 and
-                            any(change.kind == "extra_column" for plan in plans
+                            any(plan.changes for plan in plans) and
+                            all(change.kind == "extra_column" for plan in plans
                                 for change in plan.changes)):
                         from .sqlite_forward_history import review_column_removal
                         try:
-                            table, column, count, _ = review_column_removal(
+                            reviewed = review_column_removal(
                                 connection._raw, base_dir, db_file, models)
-                            column_removal_review = {"table": table, "column": column,
-                                                     "values": count}
+                            column_removal_review = [{"table": table, "column": column,
+                                                      "values": count} for table, column, count, _ in reviewed]
                         except (ValueError, RuntimeError) as error:
                             server_review_warning = f"Column removal refused: {error}"
                     if public_check and missing_model_identities and not any(plan.changes for plan in plans):
@@ -445,10 +449,10 @@ def run_plan(args, *, public_check=False):
                   "migration requires confirmation and dependency checks")
 
         if column_removal_review is not None:
-            print(f"  [COLUMN REMOVAL] {column_removal_review['table']}."
-                  f"{column_removal_review['column']}: "
-                  f"{column_removal_review['values']} non-NULL value(s); "
-                  "migration requires confirmation and dependency checks")
+            for target in column_removal_review:
+                print(f"  [COLUMN REMOVAL] {target['table']}.{target['column']}: "
+                      f"{target['values']} non-NULL value(s); "
+                      "migration requires confirmation and dependency checks")
 
         for candidate in rename_candidates:
             print(f"  [RENAME CANDIDATE] {candidate['from']} -> {candidate['to']} "
@@ -503,11 +507,11 @@ def run_check(args):
     parsed = urlsplit(url)
     dialect = _dialect_for_init_scheme(parsed.scheme)
 
-    # A fresh SQLite init can resolve extended FKs from this selected model set.
+    # Fresh initialization can resolve extended FKs from this selected model set.
     from .init_validation import validate_init_models
 
     try:
-        validate_init_models(models, dialect=dialect, allow_extended=(dialect == "sqlite"))
+        validate_init_models(models, dialect=dialect, allow_extended=True)
     except ValueError as error:
         # Only Aurora's known static validation messages are safe to surface.
         safe_reasons = {
@@ -586,7 +590,7 @@ def run_check(args):
             from .init_validation import validate_init_models
 
             try:
-                validate_init_models(models, dialect=dialect, allow_extended=(dialect == "sqlite"))
+                validate_init_models(models, dialect=dialect, allow_extended=True)
                 if dialect == "sqlite":
                     from .sqlite_forward_history import TABLE, LEGACY_TABLE, _OLD
                     reserved = _OLD | {TABLE, LEGACY_TABLE}

@@ -90,7 +90,7 @@ def create_project(name: str, *, directory: Path | None = None, mvc: bool = Fals
         # scaffolds provide inert configuration without opening a database.
         if mvc:
             (root / "aurora_databases.json").write_text(
-                json.dumps({"databases": {"default": {"url": "sqlite:///data.sqlite3"}}}, indent=2) + "\n",
+                json.dumps({"databases": {"default": {"engine": "sqlite", "database": "data.sqlite3"}}}, indent=2) + "\n",
                 encoding="utf-8",
             )
         (root / "aurora_config.json").write_text(

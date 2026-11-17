@@ -1,21 +1,64 @@
 """Bounded post-DDL evidence for MySQL/PostgreSQL initial schemas.
 
-This intentionally refuses richer models. It does not authorize marking a
-native timeline applied until journal and backup requirements are integrated.
+Supports only verified single-column create-time foreign keys when an explicit
+selected model set is supplied. Existing-table constraint changes remain refused.
 """
 
 from hashlib import sha256
 import json
 from decimal import Decimal, InvalidOperation
+import re
 from datetime import date, datetime
 
 from .inspection import inspect_table
 from .init_validation import validate_init_models
 from .planning import _declared_type, _normalized_declaration
-from .schema import _default_literal
+from .schema import _default_literal, _resolved_foreign_keys
 
 
 _JOURNALS = frozenset({"aurorasql_schema_history", "aurorasql_migration_timeline"})
+
+
+# PostgreSQL pg_get_expr may spell a constant with a known type cast. Reject
+# expressions, arithmetic, nested casts, and casts to unrelated types.
+_PG_QUOTED = re.compile(r"'((?:[^']|'')*)'(?:\:\:([a-z ]+))?\Z", re.IGNORECASE)
+_PG_NUMBER = re.compile(r"([+-]?(?:\d+(?:\.\d*)?|\.\d+))(?:\:\:([a-z ]+))?\Z", re.IGNORECASE)
+_PG_BOOLEAN = re.compile(r"(true|false)(?:\:\:([a-z ]+))?\Z", re.IGNORECASE)
+
+
+def postgres_literal_value(field, observed):
+    """Return a validated PostgreSQL constant's literal text or None.
+
+    The result is not a SQL fragment and is never used to generate DDL.
+    This parser only establishes catalog evidence for a known model type.
+    """
+    if not isinstance(observed, str):
+        return None
+    kind = field.python_type
+    if kind in (str, date, datetime):
+        match = _PG_QUOTED.fullmatch(observed)
+        casts = {str: ('text', 'character varying'),
+                 date: ('date',),
+                 datetime: ('timestamp', 'timestamp without time zone')}
+        if match is None or (match[2] is not None and match[2].lower() not in casts[kind]):
+            return None
+        return match[1].replace("''", "'")
+    if kind is bool:
+        match = _PG_BOOLEAN.fullmatch(observed)
+        if match is None or (match[2] is not None and match[2].lower() != 'boolean'):
+            return None
+        return match[1].lower()
+    if kind in (int, float) or kind is Decimal:
+        match = _PG_NUMBER.fullmatch(observed)
+        casts = {int: ('bigint', 'integer', 'smallint'),
+                 float: ('double precision', 'real'),
+                 Decimal: ('numeric', 'decimal')}
+        if match is None or (match[2] is not None and match[2].lower() not in casts[kind]):
+            return None
+        if kind is int and ('.' in match[1] or Decimal(match[1]) != int(Decimal(match[1]))):
+            return None
+        return match[1]
+    return None
 
 
 def server_default_matches(field, observed, dialect):
@@ -34,6 +77,10 @@ def server_default_matches(field, observed, dialect):
         return False
 
     value = field.default
+    if dialect == "postgresql":
+        observed = postgres_literal_value(field, observed)
+        if observed is None:
+            return False
 
     if type(value) is bool:
         candidates = {"1", "true"} if value else {"0", "false"}
@@ -61,18 +108,10 @@ def server_default_matches(field, observed, dialect):
     if dialect == "mysql":
         return observed == literal
 
-    # pg_get_expr returns a quoted constant (possibly with a type cast).
-    quoted = "'" + literal.replace("'", "''") + "'"
-    casts = {
-        str: ("::text", "::character varying"),
-        date: ("::date",),
-        datetime: ("::timestamp without time zone", "::timestamp"),
-    }
-    allowed = casts.get(field.python_type, ())
-    return observed == quoted or any(observed == quoted + cast for cast in allowed)
+    return observed == literal
 
 
-def _verify_declared_table(connection, model):
+def _verify_declared_table(connection, model, models=None):
     """Require ordinary native table metadata equivalent to a model declaration."""
     dialect = connection.dialect
     name = model.__table_name__
@@ -81,13 +120,55 @@ def _verify_declared_table(connection, model):
     declared = model.__columns__
     unique = {key for key, field in declared.items() if field.unique and not field.primary_key}
     keys = [key for key, field in declared.items() if field.primary_key]
+    expected_fks = _resolved_foreign_keys(model, models) if models is not None else {}
+    expected_targets = sorted((source, target, col)
+                              for source, (target, col, _, _) in expected_fks.items())
+    expected_actions = sorted((source, update, delete)
+                              for source, (_, _, update, delete) in expected_fks.items())
+    if models is not None:
+        if (not table.constraints_verified or table.foreign_key_actions is None
+                or list(table.foreign_keys) != expected_targets):
+            raise RuntimeError("Initial table foreign-key target differs from its model")
+        actual_actions = list(table.foreign_key_actions)
+        if dialect == "mysql":
+            # MySQL treats NO ACTION as RESTRICT for non-deferrable constraints.
+            normalize = lambda action: "RESTRICT" if action == "NO ACTION" else action
+            actual_actions = [(source, normalize(up), normalize(down))
+                              for source, up, down in actual_actions]
+            expected_actions = [(source, normalize(up), normalize(down))
+                                for source, up, down in expected_actions]
+        if actual_actions != expected_actions:
+            raise RuntimeError("Initial table foreign-key actions differ from its model")
+
+    expected_index_count = 1 + len(unique)
+    if dialect == "mysql" and expected_fks:
+        # MySQL may create a supporting non-unique index for each FK. Verify
+        # its exact single source column, never ignore arbitrary extra indexes.
+        rows = connection.fetch_all(
+            "SELECT INDEX_NAME AS name, COLUMN_NAME AS col, NON_UNIQUE AS non_unique, "
+            "SEQ_IN_INDEX AS position FROM information_schema.STATISTICS "
+            "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=:table "
+            "ORDER BY INDEX_NAME, SEQ_IN_INDEX", {"table": name})
+        groups = {}
+        for row in rows:
+            groups.setdefault(row["name"], []).append(row)
+        extras = [members for index, members in groups.items()
+                  if index != "PRIMARY" and members[0]["col"] not in unique]
+        if any(len(members) != 1 or members[0]["position"] != 1
+               or not members[0]["non_unique"]
+               or members[0]["col"] not in expected_fks for members in extras):
+            raise RuntimeError("MySQL initial table has unexpected supporting indexes")
+        expected_index_count += len(extras)
+        if set(table.indexes) != set(groups):
+            raise RuntimeError("MySQL initial table index evidence differs")
 
     if (not table.exists or not table.uniqueness_verified or set(actual) != set(declared)
             or len(keys) != 1 or declared[keys[0]].python_type is not int
             or set(table.unique_columns) != unique
-            or len(table.indexes) != 1 + len(unique)
-            or any(field.references is not None or field.server_default is not None
-                   for field in declared.values())):
+            or len(table.indexes) != expected_index_count
+            or any(field.server_default is not None for field in declared.values())
+            or (models is None and any(field.references is not None
+                                      for field in declared.values()))):
         raise RuntimeError("Initial table has unsupported structure or constraint drift")
 
     if dialect == "mysql":
@@ -96,7 +177,8 @@ def _verify_declared_table(connection, model):
             "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=:table", {"table": name})
         kinds = sorted(item["kind"] for item in constraints)
 
-        if kinds != sorted(["PRIMARY KEY"] + ["UNIQUE"] * len(unique)):
+        if kinds != sorted(["PRIMARY KEY"] + ["UNIQUE"] * len(unique)
+                           + ["FOREIGN KEY"] * len(expected_fks)):
             raise RuntimeError("MySQL table has unsupported constraints")
 
         if connection.fetch_first(
@@ -141,7 +223,8 @@ def _verify_declared_table(connection, model):
             "SELECT contype AS kind FROM pg_catalog.pg_constraint "
             "WHERE conrelid=to_regclass(:table)", {"table": name})
 
-        if sorted(item["kind"] for item in constraints) != sorted(["p"] + ["u"] * len(unique)):
+        if sorted(item["kind"] for item in constraints) != sorted(["p"] + ["u"] * len(unique)
+                                                                   + ["f"] * len(expected_fks)):
             raise RuntimeError("PostgreSQL table has unsupported constraints")
 
         identities = connection.fetch_all(
@@ -177,7 +260,8 @@ def verify_server_declared_schema(connection, models, *, evidence_models=None,
                                   historical_exclusion=None, historical_type_override=None,
                                   historical_nullability_override=None,
                                   historical_default_exclusion=None,
-                                  include_observations=False, history_tables=None):
+                                  include_observations=False, history_tables=None,
+                                  allow_extended=False):
     """Verify all declared server tables, optionally fingerprinting a subset.
 
     Require no unexpected tables or views, no extra indexes/constraints, and
@@ -191,9 +275,9 @@ def verify_server_declared_schema(connection, models, *, evidence_models=None,
     if dialect not in ("mysql", "postgresql"):
         raise ValueError("Initial server verification requires MySQL or PostgreSQL")
 
-    ordered = validate_init_models(models, dialect=dialect)
+    ordered = validate_init_models(models, dialect=dialect, allow_extended=allow_extended)
     evidence = ordered if evidence_models is None else validate_init_models(
-        evidence_models, dialect=dialect)
+        evidence_models, dialect=dialect, allow_extended=allow_extended)
 
     if not evidence or any(model not in ordered for model in evidence):
         raise ValueError("Schema evidence models must be a nonempty subset of verified models")
@@ -265,7 +349,7 @@ def verify_server_declared_schema(connection, models, *, evidence_models=None,
     evidence_tables = {model.__table_name__ for model in evidence}
 
     for model in ordered:
-        table = _verify_declared_table(connection, model)
+        table = _verify_declared_table(connection, model, ordered if allow_extended else None)
 
         if table.name in evidence_tables:
             observed = {
@@ -276,6 +360,9 @@ def verify_server_declared_schema(connection, models, *, evidence_models=None,
                 "indexes": list(table.indexes),
                 "unique_columns": list(table.unique_columns),
             }
+            if allow_extended:
+                observed["foreign_keys"] = list(table.foreign_keys)
+                observed["foreign_key_actions"] = list(table.foreign_key_actions)
             observations.append(observed)
 
             if overrides:

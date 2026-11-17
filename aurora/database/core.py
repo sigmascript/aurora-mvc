@@ -384,6 +384,8 @@ def connect(url):
 
         return Connection(raw, "sqlite")
 
+    if scheme == "postgres+psycopg":
+        scheme = "postgresql+psycopg"
     if scheme not in ("mysql+pymysql", "postgresql+psycopg"):
         raise ValueError("Unsupported AuroraSQL driver")
 

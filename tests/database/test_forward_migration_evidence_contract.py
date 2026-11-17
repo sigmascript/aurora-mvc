@@ -37,11 +37,11 @@ def test_reviewing_v2_does_not_authorize_cross_version_migration(dialect):
 
 
 @pytest.mark.parametrize("dialect", ("mysql", "postgresql"))
-def test_server_snapshot_writer_refuses_extended_fk_before_file_creation(tmp_path, monkeypatch, dialect):
+def test_server_snapshot_writer_refuses_unverified_physical_fk_before_file_creation(tmp_path, monkeypatch, dialect):
     from aurora.database import server_forward_init
     monkeypatch.setattr(server_forward_init, "_physical", lambda connection: [])
     connection = SimpleNamespace(dialect=dialect)
-    with pytest.raises(ValueError, match="v2 snapshot review"):
+    with pytest.raises(RuntimeError, match="Observed server tables differ"):
         _write_snapshot(connection, tmp_path, "test_alias", (Parent, Child), "Initial")
     assert not (tmp_path / "migrations").exists()
 

@@ -117,6 +117,97 @@ def read_history(raw, project_root, db_file):
     return records, last_snapshot
 
 
+def _ordinary_index_sql(raw):
+    """Only nonunique, column-based, application indexes are model-neutral."""
+    indexes = raw.execute(
+        "SELECT name,tbl_name,sql FROM sqlite_master "
+        "WHERE type='index' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+    ).fetchall()
+    names = {m[1] for m in raw.execute(
+        "SELECT type,name,tbl_name FROM sqlite_master WHERE type='table'").fetchall()}
+    for name, table, sql in indexes:
+        if table not in names or not isinstance(sql, str):
+            raise ValueError("Index catalog is not independently verifiable")
+        info = raw.execute(f'PRAGMA index_list({_quote(table, "sqlite")})').fetchall()
+        entry = next((row for row in info if row[1] == name), None)
+        if (entry is None or entry[2] or entry[3] != 'c' or entry[4] or
+                not re.fullmatch(r'CREATE\s+INDEX\s+"?[A-Za-z_][A-Za-z_0-9]*"?\s+ON\s+"?[A-Za-z_][A-Za-z_0-9]*"?\s*\(\s*"?[A-Za-z_][A-Za-z_0-9]*"?(?:\s*,\s*"?[A-Za-z_][A-Za-z_0-9]*"?)*\s*\)', sql, re.I)):
+            raise ValueError("Advanced or unique indexes require dedicated schema review")
+        columns = raw.execute(f'PRAGMA index_xinfo({_quote(name, "sqlite")})').fetchall()
+        if any(row[1] < 0 or row[5] != 1 or row[3] for row in columns if row[5]):
+            raise ValueError("Expression or collated indexes require dedicated review")
+    return indexes
+
+
+def matches_models_with_indexes(raw, models):
+    """Check model columns/constraints while excluding independently validated ordinary indexes."""
+    _ordinary_index_sql(raw)
+    with sqlite3.connect(':memory:') as clone:
+        clone.execute('PRAGMA foreign_keys=ON')
+        for kind, name, _, sql in raw.execute(
+                "SELECT type,name,tbl_name,sql FROM sqlite_master "
+                "WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name"):
+            if kind == 'table' and sql and name not in (TABLE, LEGACY_TABLE):
+                clone.execute(sql)
+        return matches_models(clone, models)
+
+
+def validate_index_operation(raw, models, operation):
+    """Validate an index-only change against exact model and history evidence."""
+    if operation["kind"] not in ("create_index", "drop_index"):
+        raise ValueError("Expected an index operation")
+    table, name = operation['table'], operation['name']
+    if table not in {m.__table_name__ for m in models} or table in (TABLE, LEGACY_TABLE):
+        raise ValueError("Index target is not a registered application table")
+    indexes = _ordinary_index_sql(raw)
+    existing = {index_name.casefold(): (index_name, target) for index_name, target, _ in indexes}
+    if operation['kind'] == 'create_index':
+        if operation['unique']:
+            raise ValueError("Unique indexes require the dedicated UNIQUE migration path")
+        if any(row[1].casefold() == name.casefold() for row in raw.execute(
+                "SELECT type,name FROM sqlite_master")):
+            raise ValueError("Index name is already in use")
+        fields = {field.casefold(): field for field in next(
+            m for m in models if m.__table_name__ == table).__columns__}
+        if any(column.casefold() not in fields for column in operation['columns']):
+            raise ValueError("Index column is not declared by the selected model")
+    elif name.casefold() not in existing or existing[name.casefold()][1] != table:
+        raise ValueError("Only a recorded ordinary index on the selected table may be dropped")
+    matches_models_with_indexes(raw, models)
+
+
+def apply_explicit_index(raw, root, db_file, models, title, operation):
+    """Rehearse and apply one guarded ordinary index change with forward history."""
+    from .cli_explicit_operations import _rehearse_sqlite, _sql_statements, _catalog
+    from .init_validation import validate_init_models
+    validate_init_models(models, dialect='sqlite', allow_extended=True)
+    expected = _rehearse_sqlite(Path(db_file), _sql_statements(operation))
+    raw.execute('PRAGMA foreign_keys=ON')
+    if raw.in_transaction or raw.execute('PRAGMA foreign_keys').fetchone() != (1,):
+        raise RuntimeError("Index migration requires an unlocked FK-enforced SQLite connection")
+    path = None
+    try:
+        raw.execute('BEGIN IMMEDIATE')
+        read_history(raw, root, db_file)
+        validate_index_operation(raw, models, operation)
+        before = raw.execute(f'SELECT count(*) FROM {_quote(operation["table"], "sqlite")}').fetchone()[0]
+        for sql in _sql_statements(operation):
+            raw.execute(sql)
+        if _catalog(raw) != expected:
+            raise RuntimeError("Index schema differs from reviewed rehearsal")
+        matches_models_with_indexes(raw, models)
+        after = raw.execute(f'SELECT count(*) FROM {_quote(operation["table"], "sqlite")}').fetchone()[0]
+        if before != after:
+            raise RuntimeError("Index migration changed application row count")
+        path = _new_record(raw, root, db_file, models, title)
+        raw.commit()
+    except BaseException:
+        raw.rollback()
+        if path is not None:
+            path.unlink(missing_ok=True)
+        raise
+    return path
+
 def adopt_history(raw, root, db_file):
     """Explicitly adopt verified five-column SQLite history without rewriting records.
 
@@ -227,7 +318,9 @@ def initialize(raw, root, db_file, models, title):
         raw.execute(DDL)
         for model in models:
             raw.execute(create_table_sql(model, "sqlite", models=models))
-        matches_models(raw, models)
+        matches_models_with_indexes(raw, models)
+        if raw.execute('PRAGMA foreign_key_check').fetchall():
+            raise ValueError("Rename would leave invalid foreign-key references")
         path = _new_record(raw, root, db_file, models, title)
         raw.commit()
     except BaseException:
@@ -244,7 +337,7 @@ def migrate_additions(raw, root, db_file, models, title):
     from .planning import plan_schema
     from .core import Connection
     from .sqlite_additive_migration import _column_sql
-    validate_init_models(models, dialect="sqlite", allow_extended=True)
+    ordered_models = validate_init_models(models, dialect="sqlite", allow_extended=True)
     if any(m.__table_name__ in (TABLE, LEGACY_TABLE) or m.__table_name__ in _OLD for m in models):
         raise ValueError("A model table name is reserved for Aurora migration history")
     path = None
@@ -257,13 +350,15 @@ def migrate_additions(raw, root, db_file, models, title):
     if old_tables - {model.__table_name__ for model in models}:
         raise ValueError("Removing tables requires a separately reviewed operation")
     operations = []
-    for model in models:
-        plan = plan_schema(conn, model)
+    for model in ordered_models:
+        trusted = {item["name"] for item in old["physical_schema"]
+                   if item["type"] == "index" and item["sql"] is not None}
+        plan = plan_schema(conn, model, models=models, trusted_indexes=trusted)
         if plan.warnings and plan.exists:
             raise ValueError("Unsupported model drift; migration refused")
         for change in plan.changes:
             if change.kind == "create_table":
-                operations.append(create_table_sql(model, "sqlite"))
+                operations.append(create_table_sql(model, "sqlite", models=models))
             elif change.kind == "missing_column" and model.__table_name__ in old_tables:
                 # Restrict additions to AuroraSQL's own validated SQL renderer.
                 from .sqlite_additive_migration import _column_sql
@@ -278,7 +373,7 @@ def migrate_additions(raw, root, db_file, models, title):
         read_history(raw, root, db_file)
         for sql in operations:
             raw.execute(sql)
-        matches_models(raw, models)
+        matches_models_with_indexes(raw, models)
         path = _new_record(raw, root, db_file, models, title)
         raw.commit()
     except BaseException:
@@ -320,28 +415,30 @@ def review_table_removal(raw, root, db_file, models):
     current = {model.__table_name__ for model in models}
     removed = prior - current
     if len(removed) != 1 or current - prior:
-        raise ValueError("Only one table removal at a time is supported")
+        raise UnsafeTableTransition("Table removal requires exactly one undeclared table and no added tables")
     target = removed.pop()
     catalog = _physical(raw)
-    # A dependent object or foreign key may be silently destroyed or invalidated.
-    # Refuse instead of trying to approximate dependency semantics.
-    if any(item["type"] in ("view", "trigger") or
-           (item["type"] == "index" and item["table"] == target)
-           for item in catalog):
-        raise ValueError("Table removal has dependencies requiring separate review")
+    # Ordinary indexes owned by the removed table go with that table.
+    # Keep the validated index catalog for unrelated application tables.
+    try:
+        _ordinary_index_sql(raw)
+    except ValueError as exc:
+        raise UnsafeTableTransition("Table removal has unverified ordinary-index dependencies") from exc
+    if any(item["type"] in ("view", "trigger") for item in catalog):
+        raise UnsafeTableTransition(f"Cannot remove {target}: views or triggers require separate review")
     for item in catalog:
         if item["type"] != "table":
             continue
         for key in raw.execute(f'PRAGMA foreign_key_list({_quote(item["name"], "sqlite")})'):
             if item["name"] == target or key[2].casefold() == target.casefold():
-                raise ValueError("Table removal has foreign-key dependencies")
+                raise UnsafeTableTransition(f"Cannot remove {target}: foreign-key dependencies require separate review")
     # Count inside the writer's IMMEDIATE transaction again before execution.
     count = raw.execute(f'SELECT COUNT(*) FROM {_quote(target, "sqlite")}').fetchone()[0]
     return target, count, _data_witness(raw, target)
 
 
 def migrate_table_removal(raw, root, db_file, models, title, target, expected_count, expected_witness,
-                          *, acknowledged=False):
+                          *, acknowledged=False, verified_backup=None):
     """Drop one reviewed table under a SQLite write lock and record its risk.
 
     Authorization for populated tables must be collected separately by the CLI.
@@ -356,12 +453,14 @@ def migrate_table_removal(raw, root, db_file, models, title, target, expected_co
         actual_target, count, witness = review_table_removal(raw, root, db_file, models)
         if (actual_target, count, witness) != (target, expected_count, expected_witness):
             raise RuntimeError("Table removal review is stale; run db check again")
-        if count and not acknowledged:
-            raise PermissionError("Populated table removal requires explicit double confirmation")
+        if count and (not acknowledged or verified_backup is None):
+            raise PermissionError("Populated table removal requires typed authorization and verified backup")
+        if count and (not Path(verified_backup).is_file() or Path(verified_backup).is_symlink()):
+            raise PermissionError("Verified pre-migration backup is unavailable")
         raw.execute(f'DROP TABLE {_quote(target, "sqlite")}')
-        matches_models(raw, models)
-        warnings = ([f'Approved permanent deletion of table {target}: {count} existing row(s)']
-                    if count else [])
+        matches_models_with_indexes(raw, models)
+        warnings = ([f'Approved permanent deletion of table {target}: {count} existing row(s); '
+                     f'verified backup: {verified_backup}'] if count else [])
         snapshot_path = _new_record(raw, root, db_file, models, title, warnings)
         raw.commit()
     except BaseException:
@@ -374,12 +473,12 @@ def migrate_table_removal(raw, root, db_file, models, title, target, expected_co
 
 
 
-def review_column_removal(raw, root, db_file, models):
-    """Inspect exactly one unmodeled column without authorizing its deletion."""
+def review_column_removal(raw, root, db_file, models, *, allow_mixed=False):
+    """Review an entire set of removed columns against real dependencies and data."""
     from .core import Connection
     from .planning import plan_schema
 
-    if sqlite3.sqlite_version_info < (3, 35, 0):
+    if not allow_mixed and sqlite3.sqlite_version_info < (3, 35, 0):
         raise ValueError("SQLite column deletion requires SQLite 3.35 or newer")
     _, previous = read_history(raw, root, db_file)
     prior = {entry["name"] for entry in previous["models"]}
@@ -388,36 +487,65 @@ def review_column_removal(raw, root, db_file, models):
         raise ValueError("Column removal cannot be combined with table changes")
     changes = []
     connection = Connection(raw, "sqlite")
+    trusted = {item["name"] for item in previous["physical_schema"]
+               if item["type"] == "index" and item["sql"] is not None}
     for model in models:
-        plan = plan_schema(connection, model)
+        plan = plan_schema(connection, model, models=models,
+                           trusted_indexes=trusted)
         if plan.warnings:
             raise ValueError("Column removal has unsupported schema warnings")
         changes.extend((model.__table_name__, change) for change in plan.changes)
-    if len(changes) != 1 or changes[0][1].kind != "extra_column":
-        raise ValueError("Only one removed column is supported per migration")
-    table, change = changes[0]
-    column = change.column
-    # Explicitly reject schema dependencies, including constraints and indexes.
-    # SQLite's own DROP COLUMN validation is an additional fail-closed guard.
+    if not changes or not any(change.kind == "extra_column" for _, change in changes):
+        raise ValueError("Column removal needs a removed column")
+    if allow_mixed:
+        allowed = {"extra_column", "type_mismatch", "default_mismatch",
+                   "nullability_mismatch", "unique_mismatch", "foreign_key_mismatch",
+                   "foreign_key_action_mismatch", "missing_column"}
+        if (any(change.kind not in allowed for _, change in changes)
+                or len({table for table, _ in changes}) != 1):
+            raise ValueError("Mixed column removal requires one supported table transition")
+    elif any(change.kind != "extra_column" for _, change in changes):
+        raise ValueError("Column removal must contain only removed columns")
+    try:
+        indexes = _ordinary_index_sql(raw)
+    except ValueError as exc:
+        raise UnsafeTableTransition("Column removal has unverified index dependencies") from exc
     if any(item["type"] in ("view", "trigger") for item in _physical(raw)):
-        raise ValueError("Column removal requires separate dependency review")
-    if raw.execute(f'PRAGMA index_list({_quote(table, "sqlite")})').fetchall():
-        raise ValueError("Column removal has index or unique-constraint dependencies")
-    for item in _physical(raw):
-        if item["type"] != "table":
+        raise UnsafeTableTransition("Column removal has view or trigger dependencies")
+    # Recheck every target before changing a single column. Reject any
+    # dependency that refers to a removed column, not unrelated FK/indexes.
+    reviewed = []
+    for table, change in changes:
+        if change.kind != "extra_column":
             continue
-        if raw.execute(f'PRAGMA foreign_key_list({_quote(item["name"], "sqlite")})').fetchall():
-            raise ValueError("Column removal has foreign-key dependencies")
-    count = raw.execute(
-        f'SELECT COUNT(*) FROM {_quote(table, "sqlite")} '
-        f'WHERE {_quote(column, "sqlite")} IS NOT NULL'
-    ).fetchone()[0]
-    return table, column, count, _data_witness(raw, table)
+        column = change.column
+        for index_name, index_table, _ in indexes:
+            if index_table != table:
+                continue
+            keys = [entry[2] for entry in raw.execute(
+                f'PRAGMA index_xinfo({_quote(index_name, "sqlite")})') if entry[5]]
+            if column in keys:
+                raise UnsafeTableTransition(
+                    f"Cannot remove {table}.{column}: ordinary index {index_name} uses this column")
+        for item in _physical(raw):
+            if item["type"] != "table":
+                continue
+            for fk in raw.execute(f'PRAGMA foreign_key_list({_quote(item["name"], "sqlite")})'):
+                if ((item["name"] == table and fk[3] == column) or
+                        (fk[2].casefold() == table.casefold() and fk[4] == column)):
+                    raise UnsafeTableTransition(
+                        f"Cannot remove {table}.{column}: foreign-key dependency in {item['name']}")
+        count = raw.execute(
+            f'SELECT COUNT(*) FROM {_quote(table, "sqlite")} '
+            f'WHERE {_quote(column, "sqlite")} IS NOT NULL'
+        ).fetchone()[0]
+        reviewed.append((table, column, count, _data_witness(raw, table)))
+    return tuple(reviewed)
 
 
-def migrate_column_removal(raw, root, db_file, models, title, table, column,
-                           expected_count, expected_witness, *, acknowledged=False):
-    """Drop one independently reviewed SQLite column and record approved risk."""
+def migrate_column_removal(raw, root, db_file, models, title, reviewed,
+                           *, acknowledged=(), verified_backup=None):
+    """Drop all reviewed columns in one transaction with one history record."""
     raw.execute("PRAGMA foreign_keys=ON")
     if raw.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
         raise RuntimeError("SQLite foreign keys must be enabled")
@@ -425,15 +553,20 @@ def migrate_column_removal(raw, root, db_file, models, title, table, column,
     try:
         raw.execute("BEGIN IMMEDIATE")
         actual = review_column_removal(raw, root, db_file, models)
-        if actual != (table, column, expected_count, expected_witness):
+        if actual != reviewed:
             raise RuntimeError("Column removal review is stale; run db check again")
-        if expected_count and not acknowledged:
-            raise PermissionError("Populated column removal requires explicit double confirmation")
-        raw.execute(f'ALTER TABLE {_quote(table, "sqlite")} '
-                    f'DROP COLUMN {_quote(column, "sqlite")}')
-        matches_models(raw, models)
-        warnings = ([f'Approved permanent deletion of {table}.{column}: '
-                     f'{expected_count} existing non-NULL value(s)'] if expected_count else [])
+        dangerous = {(table, column) for table, column, count, _ in reviewed if count}
+        if dangerous and (not dangerous.issubset(set(acknowledged)) or verified_backup is None):
+            raise PermissionError("Populated column removal requires typed authorization and verified backup")
+        if dangerous and (not Path(verified_backup).is_file() or Path(verified_backup).is_symlink()):
+            raise PermissionError("Verified pre-migration backup is unavailable")
+        for table, column, _, _ in reviewed:
+            raw.execute(f'ALTER TABLE {_quote(table, "sqlite")} '
+                        f'DROP COLUMN {_quote(column, "sqlite")}')
+        matches_models_with_indexes(raw, models)
+        warnings = [f'Approved permanent deletion of {table}.{column}: '
+                    f'{count} existing non-NULL value(s); verified backup: {verified_backup}'
+                    for table, column, count, _ in reviewed if count]
         path = _new_record(raw, root, db_file, models, title, warnings)
         raw.commit()
     except BaseException:
@@ -444,7 +577,7 @@ def migrate_column_removal(raw, root, db_file, models, title, table, column,
     return path
 
 
-def apply_explicit_rename(raw, root, db_file, models, title, operation):
+def apply_explicit_rename(raw, root, db_file, models, title, operation, *, source_edits=None):
     """Apply a model-reconciled rename and record one forward migration.
 
     Only renames with a complete matching resulting model schema are eligible.
@@ -455,7 +588,7 @@ def apply_explicit_rename(raw, root, db_file, models, title, operation):
 
     if operation["kind"] not in ("rename_table", "rename_columns"):
         raise ValueError("Only table and column renames are supported with forward history")
-    validate_init_models(models, dialect="sqlite")
+    validate_init_models(models, dialect="sqlite", allow_extended=True)
     statements = _sql_statements(operation)
     expected_catalog = _rehearse_sqlite(Path(db_file), statements)
     path = None
@@ -478,12 +611,19 @@ def apply_explicit_rename(raw, root, db_file, models, title, operation):
         if before_count != after_count:
             raise RuntimeError("Migration unexpectedly changed the application row count")
         matches_models(raw, models)
+        applied = []
+        if source_edits:
+            from .explicit_model_rename import apply_source_changes
+            applied = apply_source_changes(source_edits)
         path = _new_record(raw, root, db_file, models, title)
         raw.commit()
     except BaseException:
         raw.rollback()
         if path is not None:
             path.unlink(missing_ok=True)
+        if locals().get('applied'):
+            from .explicit_model_rename import restore_source_changes
+            restore_source_changes(applied)
         raise
     return path
 
@@ -600,6 +740,269 @@ def convert_legacy_initial(raw, root, db_file, models, alias):
     return proposal[-1][1]
 
 
+
+class UnsafeTableTransition(ValueError):
+    """An internally verified, developer-safe table-transition refusal."""
+
+
+def _review_ordinary_rebuild(raw, root, db_file, models, kind):
+    """Review an ordinary SQLite table transition and its real data risks.
+
+    One table may have several type/default changes. The same review runs
+    read-only before confirmation and again inside the write transaction.
+    """
+    from .core import Connection
+    from .planning import plan_schema, _sqlite_declared_type
+    from .schema import _default_literal
+
+    _, prior = read_history(raw, root, db_file)
+    trusted = {item["name"] for item in prior["physical_schema"]
+               if item["type"] == "index" and item["sql"] is not None}
+    changes = []
+    for model in models:
+        plan = plan_schema(Connection(raw, "sqlite"), model, models=models,
+                           trusted_indexes=trusted)
+        if plan.warnings or not plan.exists:
+            return None
+        changes.extend((model, change) for change in plan.changes)
+    allowed = ({"type_mismatch", "default_mismatch", "nullability_mismatch", "unique_mismatch", "foreign_key_mismatch", "foreign_key_action_mismatch", "missing_column", "extra_column"} if kind == "table_transition"
+               else {kind})
+    if not changes or any(change.kind not in allowed for _, change in changes):
+        return None
+    tables = {model.__table_name__ for model, _ in changes}
+    if len(tables) != 1:
+        return None
+    table = next(iter(tables))
+    model = next(model for model in models if model.__table_name__ == table)
+    names = tuple(sorted({change.column for _, change in changes}))
+    actual_columns = {row[1]: row[2] for row in raw.execute(
+        f'PRAGMA table_info({_quote(table, "sqlite")})')}
+    if any(change.kind == "extra_column" for _, change in changes):
+        # Reuse the destructive reviewer for actual dependencies and row risks.
+        review_column_removal(raw, root, db_file, models, allow_mixed=True)
+    for _, change in changes:
+        name = change.column
+        if change.kind == "extra_column":
+            continue
+        field = model.__columns__[name]
+        if change.kind == "missing_column":
+            from .sqlite_additive_migration import _column_sql
+            # Follow the same eligibility as ordinary ADD COLUMN. In the
+            # reconstructed table, omitted columns receive a declared default
+            # or NULL; previously stored columns remain unchanged.
+            _column_sql(model, name)
+            continue
+        if (field.primary_key or field.server_default is not None or
+                (field.references is not None and change.kind not in (
+                    "foreign_key_mismatch", "foreign_key_action_mismatch"))):
+            raise UnsafeTableTransition(
+                f"Cannot change {table}.{name}: key or constrained columns require separate review")
+        if change.kind in ("foreign_key_mismatch", "foreign_key_action_mismatch"):
+            # SQLite permits a nullable FK and its removal; existing rows must
+            # satisfy the target before a new or redirected FK is installed.
+            # The model resolver independently establishes unique/PK target and
+            # matching source/target types; the catalog/history are verified.
+            if field.references is not None:
+                from .schema import _resolved_foreign_keys
+                target_table, target_column, _, _ = _resolved_foreign_keys(model, models)[name]
+                missing = raw.execute(
+                    f'SELECT COUNT(*) FROM {_quote(table, "sqlite")} AS source '
+                    f'WHERE source.{_quote(name, "sqlite")} IS NOT NULL '
+                    f'AND NOT EXISTS (SELECT 1 FROM {_quote(target_table, "sqlite")} AS target '
+                    f'WHERE target.{_quote(target_column, "sqlite")} = '
+                    f'source.{_quote(name, "sqlite")})'
+                ).fetchone()[0]
+                if missing:
+                    raise UnsafeTableTransition(
+                        f"Cannot reference {target_table}.{target_column} from {table}.{name}: "
+                        f"{missing} existing value(s) have no referenced row. "
+                        "No database changes were made")
+            continue
+        if change.kind == "unique_mismatch":
+            if field.unique:
+                # A single-column UNIQUE is safe only when existing non-NULL
+                # values are actually unique. SQLite permits multiple NULLs.
+                duplicated = raw.execute(
+                    f'SELECT 1 FROM {_quote(table, "sqlite")} '
+                    f'WHERE {_quote(name, "sqlite")} IS NOT NULL '
+                    f'GROUP BY {_quote(name, "sqlite")} HAVING COUNT(*) > 1 LIMIT 1'
+                ).fetchone()
+                if duplicated is not None:
+                    raise UnsafeTableTransition(
+                        f"Cannot make {table}.{name} UNIQUE: existing non-NULL values "
+                        "contain duplicates. No database changes were made")
+            continue
+        if change.kind == "default_mismatch":
+            _default_literal(field, "sqlite")
+            continue
+        if change.kind == "nullability_mismatch":
+            if not field.nullable:
+                missing = raw.execute(
+                    f'SELECT COUNT(*) FROM {_quote(table, "sqlite")} '
+                    f'WHERE {_quote(name, "sqlite")} IS NULL').fetchone()[0]
+                if missing:
+                    raise UnsafeTableTransition(
+                        f"Cannot require {table}.{name}: {missing} stored NULL value(s) "
+                        "need a value before NOT NULL can be applied. "
+                        "No database changes were made")
+            continue
+        existing = actual_columns.get(name, "").upper().replace(" ", "")
+        desired = _sqlite_declared_type(field).upper().replace(" ", "")
+        old_varchar = re.fullmatch(r"VARCHAR\((\d+)\)", existing)
+        new_varchar = re.fullmatch(r"VARCHAR\((\d+)\)", desired)
+        if old_varchar and new_varchar:
+            if int(new_varchar[1]) < int(old_varchar[1]):
+                # SQLite length() stops at NUL, so inspect decoded values.
+                for (value,) in raw.execute(
+                        f'SELECT {_quote(name, "sqlite")} FROM {_quote(table, "sqlite")} '
+                        f'WHERE {_quote(name, "sqlite")} IS NOT NULL'):
+                    if not isinstance(value, str):
+                        raise UnsafeTableTransition(
+                            f"Cannot narrow {table}.{name}: stored value is not text")
+                    if len(value) > int(new_varchar[1]):
+                        raise UnsafeTableTransition(
+                            f"Cannot narrow {table}.{name} to VARCHAR({new_varchar[1]}): "
+                            f"an existing value has {len(value)} characters; "
+                            "truncation would occur. No database changes were made")
+        elif existing == "INTEGER" and new_varchar:
+            limit = int(new_varchar[1])
+            for (value,) in raw.execute(
+                    f'SELECT {_quote(name, "sqlite")} FROM {_quote(table, "sqlite")} '
+                    f'WHERE {_quote(name, "sqlite")} IS NOT NULL'):
+                if type(value) is not int or len(str(value)) > limit:
+                    raise UnsafeTableTransition(
+                        f"Cannot convert {table}.{name} from INTEGER to VARCHAR({limit}): "
+                        "at least one stored value is incompatible or too long. "
+                        "No database changes were made")
+        elif old_varchar and desired == "INTEGER":
+            for (value,) in raw.execute(
+                    f'SELECT {_quote(name, "sqlite")} FROM {_quote(table, "sqlite")} '
+                    f'WHERE {_quote(name, "sqlite")} IS NOT NULL'):
+                if (not isinstance(value, str) or not re.fullmatch(r"-?(?:0|[1-9][0-9]*)", value)
+                        or len(value) > 20):
+                    raise UnsafeTableTransition(
+                        f"Cannot convert {table}.{name} from VARCHAR to INTEGER: "
+                        "stored text is not a canonical integer. No database changes were made")
+                number = int(value)
+                if not -(2**63) <= number < 2**63:
+                    raise UnsafeTableTransition(
+                        f"Cannot convert {table}.{name} to INTEGER: stored value "
+                        "exceeds the SQLite integer range. No database changes were made")
+        else:
+            raise UnsafeTableTransition(
+                f"Cannot change {table}.{name} from {existing} to {desired}: "
+                "this conversion has not been verified for lossless execution")
+    indexes = [(idx_name, sql) for idx_name, idx_table, sql in _ordinary_index_sql(raw)
+               if idx_table == table]
+    if any(item["type"] in ("trigger", "view") for item in _physical(raw)):
+        raise UnsafeTableTransition("Table transition has view or trigger dependencies")
+    for item in _physical(raw):
+        if item["type"] != "table" or item["name"] == table:
+            continue
+        if any(key[2].casefold() == table.casefold() for key in raw.execute(
+                f'PRAGMA foreign_key_list({_quote(item["name"], "sqlite")})')):
+            raise UnsafeTableTransition("Table transition has inbound foreign-key dependencies")
+    if any(key[2].casefold() == table.casefold() for key in raw.execute(
+            f'PRAGMA foreign_key_list({_quote(table, "sqlite")})')):
+        raise UnsafeTableTransition("Self-referencing foreign keys need separate review")
+    target = names if kind == "table_transition" else names[0]
+    return table, target, tuple(indexes), tuple(
+        (item["type"], item["name"], item["sql"]) for item in prior["physical_schema"])
+
+
+def review_default_change(raw, root, db_file, models):
+    return _review_ordinary_rebuild(raw, root, db_file, models, "default_mismatch")
+
+
+def review_nullability_change(raw, root, db_file, models):
+    return _review_ordinary_rebuild(raw, root, db_file, models, "nullability_mismatch")
+
+
+def review_unique_change(raw, root, db_file, models):
+    return _review_ordinary_rebuild(raw, root, db_file, models, "unique_mismatch")
+
+
+def review_length_change(raw, root, db_file, models):
+    return _review_ordinary_rebuild(raw, root, db_file, models, "type_mismatch")
+
+
+def migrate_default_change(raw, root, db_file, models, title, proposal, *, kind="default_mismatch",
+                           reviewed_removals=(), acknowledged=(), verified_backup=None):
+    """Rebuild one reviewed ordinary column change and retain existing rows."""
+    from .schema import create_table_sql
+    from .core import Connection
+
+    table, name, indexes, _ = proposal
+    raw.execute("PRAGMA foreign_keys=ON")
+    if raw.in_transaction or raw.execute("PRAGMA foreign_keys").fetchone() != (1,):
+        raise RuntimeError("Default migration requires an unlocked FK-enforced SQLite connection")
+    path = None
+    try:
+        raw.execute("BEGIN IMMEDIATE")
+        if _review_ordinary_rebuild(raw, root, db_file, models, kind) != proposal:
+            raise RuntimeError("Default-change review is stale; rerun db check")
+        if reviewed_removals:
+            actual = review_column_removal(raw, root, db_file, models, allow_mixed=True)
+            if actual != reviewed_removals:
+                raise RuntimeError("Column-removal review is stale; rerun db check")
+            dangerous = {(table_name, col) for table_name, col, count, _ in actual if count}
+            if dangerous and (not dangerous.issubset(set(acknowledged)) or verified_backup is None):
+                raise PermissionError("Populated column removal requires typed authorization and verified backup")
+            if dangerous and (not Path(verified_backup).is_file() or Path(verified_backup).is_symlink()):
+                raise PermissionError("Verified pre-migration backup is unavailable")
+        target = next(m for m in models if m.__table_name__ == table)
+        temporary = "aurora_rebuild_" + hashlib.sha256(repr(proposal).encode()).hexdigest()[:24]
+        target_sql = create_table_sql(target, "sqlite", models=models)
+        temporary_sql = target_sql.replace(_quote(table, "sqlite"),
+                                            _quote(temporary, "sqlite"), 1)
+        if temporary_sql == target_sql:
+            raise RuntimeError("Cannot construct reviewed SQLite rebuild")
+        # Copy only columns that already exist. The target SQLite schema
+        # populates eligible new fields from its DEFAULT or with NULL.
+        old_columns = {row[1] for row in raw.execute(
+            f'PRAGMA table_info({_quote(table, "sqlite")})')}
+        copied = [name for name in target.__columns__ if name in old_columns]
+        names = ", ".join(_quote(name, "sqlite") for name in copied)
+        # Explicit conversion for changed storage types. Unchanged columns
+        # retain their original values. SQLite enforces target affinity.
+        current_types = {row[1]: row[2].upper().replace(" ", "") for row in raw.execute(
+            f'PRAGMA table_info({_quote(table, "sqlite")})')}
+        from .planning import _sqlite_declared_type
+        expressions = []
+        for field_name in copied:
+            field = target.__columns__[field_name]
+            source = _quote(field_name, "sqlite")
+            old = current_types[field_name]
+            desired = _sqlite_declared_type(field).upper().replace(" ", "")
+            if old == "INTEGER" and re.fullmatch(r"VARCHAR\(\d+\)", desired):
+                source = f"CAST({source} AS TEXT)"
+            elif re.fullmatch(r"VARCHAR\(\d+\)", old) and desired == "INTEGER":
+                source = f"CAST({source} AS INTEGER)"
+            expressions.append(source)
+        before = raw.execute(f'SELECT COUNT(*) FROM {_quote(table, "sqlite")}').fetchone()[0]
+        raw.execute(temporary_sql)
+        raw.execute(f'INSERT INTO {_quote(temporary, "sqlite")} ({names}) '
+                    f'SELECT {", ".join(expressions)} FROM {_quote(table, "sqlite")}')
+        raw.execute(f'DROP TABLE {_quote(table, "sqlite")}')
+        raw.execute(f'ALTER TABLE {_quote(temporary, "sqlite")} RENAME TO {_quote(table, "sqlite")}')
+        for _, sql in indexes:
+            raw.execute(sql)
+        after = raw.execute(f'SELECT COUNT(*) FROM {_quote(table, "sqlite")}').fetchone()[0]
+        if before != after:
+            raise RuntimeError("Default change altered the number of application rows")
+        matches_models_with_indexes(raw, models)
+        warnings = [f'Approved permanent deletion of {t}.{col}: {count} existing non-NULL '
+                    f'value(s); verified backup: {verified_backup}'
+                    for t, col, count, _ in reviewed_removals if count]
+        path = _new_record(raw, root, db_file, models, title, warnings)
+        raw.commit()
+    except BaseException:
+        raw.rollback()
+        if path is not None:
+            path.unlink(missing_ok=True)
+        raise
+    return path
+
 def migrate_column_edit(raw, root, db_file, models, title, proposal):
     """Rebuild one ordinary table under the same forward-history transaction.
 
@@ -642,3 +1045,22 @@ def migrate_column_edit(raw, root, db_file, models, title, proposal):
             snapshot.unlink(missing_ok=True)
         raise
     return snapshot
+
+
+def migrate_length_change(raw, root, db_file, models, title, proposal):
+    """Change VARCHAR length; recheck stored values under lock when narrowing."""
+    return migrate_default_change(raw, root, db_file, models, title, proposal,
+                                  kind="type_mismatch")
+
+
+def review_table_transition(raw, root, db_file, models):
+    """Inspect a single coherent SQLite table transition before approval."""
+    return _review_ordinary_rebuild(raw, root, db_file, models, "table_transition")
+
+
+def migrate_table_transition(raw, root, db_file, models, title, proposal, *,
+                             reviewed_removals=(), acknowledged=(), verified_backup=None):
+    """Execute one reviewed table transition and record one forward snapshot."""
+    return migrate_default_change(raw, root, db_file, models, title, proposal,
+                                  kind="table_transition", reviewed_removals=reviewed_removals,
+                                  acknowledged=acknowledged, verified_backup=verified_backup)

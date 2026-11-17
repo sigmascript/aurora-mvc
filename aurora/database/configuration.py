@@ -7,7 +7,7 @@ import os
 import re
 from pathlib import Path
 from types import MappingProxyType
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 from .core import connect
 
@@ -15,6 +15,13 @@ from .core import connect
 _ALIAS = re.compile(r"^[a-z][a-z0-9_]*$")
 _ENV = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _DRIVERS = frozenset(("sqlite", "sqlite+pysqlite", "mysql+pymysql", "postgresql+psycopg"))
+
+
+def _canonical_url(url):
+    parsed = urlsplit(url)
+    if parsed.scheme == "postgres+psycopg":
+        return urlunsplit(("postgresql+psycopg", parsed.netloc, parsed.path, parsed.query, parsed.fragment))
+    return url
 
 
 def _destination_identity(parsed):
@@ -46,6 +53,65 @@ def _destination_identity(parsed):
     return (backend, parsed.hostname.rstrip("."), port, unquote(parsed.path.lstrip("/")))
 
 
+
+def _readable_url(alias, entry):
+    """Convert explicit key/value settings to the existing AuroraSQL URL contract."""
+    engine = entry.get("engine")
+    if engine not in ("sqlite", "mysql", "postgresql", "postgres"):
+        raise ValueError(f"Database '{alias}' requires engine sqlite, mysql, postgres, or postgresql")
+
+    if engine == "postgres":
+        engine = "postgresql"
+
+    if engine == "sqlite":
+        if set(entry) != {"engine", "database"}:
+            raise ValueError(f"Database '{alias}' SQLite settings require only engine and database")
+        database = entry["database"]
+        if not isinstance(database, str) or not database or "?" in database or "#" in database:
+            raise ValueError(f"Database '{alias}' has an invalid SQLite database path")
+        # Keep the existing project-relative/absolute SQLite URL interpretation.
+        if database == ":memory:":
+            return "sqlite:///:memory:"
+        path = database.replace("\\", "/")
+        if path.startswith("/"):
+            return "sqlite:////" + quote(path.lstrip("/"), safe="/")
+        return "sqlite:///" + quote(path, safe="/")
+
+    allowed = {"engine", "host", "port", "database", "username", "password", "password_env"}
+    if set(entry) - allowed or not {"engine", "database"}.issubset(entry) or "username" not in entry:
+        raise ValueError(f"Database '{alias}' requires engine, database and username")
+    if "password" in entry and "password_env" in entry:
+        raise ValueError(f"Database '{alias}' must choose password or password_env")
+
+    host = entry.get("host", "localhost")
+    port = entry.get("port", 3306 if engine == "mysql" else 5432)
+    name = entry["database"]
+    user = entry["username"]
+    if not isinstance(host, str) or not host or any(ch in host for ch in "/@?#"):
+        raise ValueError(f"Database '{alias}' has an invalid host")
+    if type(port) is not int or not 1 <= port <= 65535:
+        raise ValueError(f"Database '{alias}' requires a TCP port from 1 to 65535")
+    if (not isinstance(name, str) or not name or "/" in name or "?" in name or "#" in name
+            or not isinstance(user, str) or not user):
+        raise ValueError(f"Database '{alias}' has an invalid database name or username")
+    password = entry.get("password")
+    if "password_env" in entry:
+        variable = entry["password_env"]
+        if not isinstance(variable, str) or not _ENV.fullmatch(variable):
+            raise ValueError(f"Database '{alias}' has an invalid password environment variable name")
+        password = os.environ.get(variable)
+        if password is None or not password:
+            raise ValueError(f"Database '{alias}' requires nonempty environment variable '{variable}'")
+    if password is not None and not isinstance(password, str):
+        raise ValueError(f"Database '{alias}' has an invalid password")
+    address = f"[{host}]" if ":" in host and not host.startswith("[") else host
+    credentials = quote(user, safe="")
+    if password is not None:
+        credentials += ":" + quote(password, safe="")
+    driver = "mysql+pymysql" if engine == "mysql" else "postgresql+psycopg"
+    return f"{driver}://{credentials}@{address}:{port}/{quote(name, safe='')}"
+
+
 class DatabaseConfiguration:
     """Resolve named AuroraSQL URLs once, without opening connections."""
 
@@ -65,16 +131,20 @@ class DatabaseConfiguration:
             if not isinstance(alias, str) or not _ALIAS.fullmatch(alias):
                 raise ValueError("Database aliases must be lowercase identifiers")
 
-            if (
-                not isinstance(entry, Mapping)
-                or len(entry) != 1
-                or set(entry) not in ({"url"}, {"url_env"})
-            ):
-                raise ValueError(f"Database '{alias}' requires exactly one of 'url' or 'url_env'")
+            if not isinstance(entry, Mapping):
+                raise ValueError(f"Database '{alias}' must be a mapping")
 
-            # Each alias chooses either a literal URL or an environment variable.
-            if "url_env" in entry:
-                name = entry["url_env"]
+            settings = entry
+            # URL and environment-backed URL remain supported optional forms.
+            if set(settings) in ({"url"}, {"url_env"}):
+                url = None
+            elif "url" in settings or "url_env" in settings:
+                raise ValueError(f"Database '{alias}' cannot mix URL and readable connection settings")
+            else:
+                url = _readable_url(alias, settings)
+
+            if "url_env" in settings:
+                name = settings["url_env"]
 
                 if not isinstance(name, str) or not _ENV.fullmatch(name):
                     raise ValueError(f"Database '{alias}' has an invalid environment variable name")
@@ -83,12 +153,14 @@ class DatabaseConfiguration:
 
                 if not url or not url.strip():
                     raise ValueError(f"Database '{alias}' requires a nonempty environment variable '{name}'")
-            else:
-                url = entry["url"]
+            elif "url" in settings:
+                url = settings["url"]
 
             if not isinstance(url, str) or not url.strip():
                 raise ValueError(f"Database '{alias}' requires a nonempty string URL")
 
+            # Normalize the short PostgreSQL driver synonym before routing.
+            url = _canonical_url(url)
             # Validate URL structure without opening a database connection.
             try:
                 parsed = urlsplit(url)

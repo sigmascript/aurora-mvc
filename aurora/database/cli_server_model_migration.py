@@ -96,7 +96,7 @@ def run_server_model_migration(args):
             if requires_terminal:
                 from .snapshots import schema_snapshot
 
-                declared = schema_snapshot(*models, dialect=connection.dialect)["tables"]
+                declared = schema_snapshot(*models, dialect=connection.dialect, allow_v2=True)["tables"]
                 if isinstance(latest.get("models"), list) and declared == latest["models"]:
                     print(f"Database {args.database} is up to date; no migration needed.")
                     return 0
@@ -266,7 +266,7 @@ def _run_forward_migration(args, config, root, connection, models, parsed, login
     from .snapshots import schema_snapshot
 
     if isinstance(latest.get("models"), list):
-        declared = schema_snapshot(*models, dialect=connection.dialect)["tables"]
+        declared = schema_snapshot(*models, dialect=connection.dialect, allow_v2=True)["tables"]
         if declared == latest["models"]:
             print(f"Database {args.database} is up to date; no migration needed.")
             return 0
@@ -290,7 +290,7 @@ def _run_forward_migration(args, config, root, connection, models, parsed, login
             }
             explanation = reasons.get(
                 str(error),
-                "Only one new table, nullable column, or compatible column widening is supported.",
+                "Only one table's verified compatible additions, widening, defaults, or nullability changes are supported.",
             )
             raise UnsupportedServerChange(explanation) from error
 
@@ -298,7 +298,7 @@ def _run_forward_migration(args, config, root, connection, models, parsed, login
         raise ValueError("Server migration requires one reviewed operation")
 
     kind = proposal.operations[0]["kind"]
-    if kind not in ("create_table", "add_column", "widen_column"):
+    if kind not in ("create_table", "add_column", "add_columns", "widen_column", "alter_columns"):
         raise ValueError("Server forward migration operation is not supported")
 
     automated = bool(getattr(args, "apply", False))
@@ -312,6 +312,12 @@ def _run_forward_migration(args, config, root, connection, models, parsed, login
         target = operation["table"]
         if operation.get("column"):
             target += "." + operation["column"]
+        elif operation.get("columns"):
+            target += "." + ", ".join(operation["columns"])
+        elif operation.get("edits"):
+            target += "." + ", ".join(edit["column"] for edit in operation["edits"])
+            if operation.get("additions"):
+                target += " + " + ", ".join(operation["additions"])
         print(f"AuroraSQL migration — {args.database} ({connection.dialect})")
         print(f"  {kind}: {target}")
         print(f"  Reviewed SHA-256: {proposal.review_sha256}")
