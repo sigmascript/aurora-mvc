@@ -182,3 +182,33 @@ def test_changed_review_refuses_ddl(monkeypatch, dialect):
     with pytest.raises(RuntimeError, match='proposal changed'):
         removal.run_table_removal(args, connection, models, '.', 'data', 'identity', None)
     assert not any('DROP TABLE' in sql for sql, _ in connection.statements)
+
+
+def test_mysql_final_preflight_failure_is_not_called_uncertain(monkeypatch):
+    connection, models, args = execution(monkeypatch, 'mysql')
+    answers = iter(['y', 'DELETE TABLE data.child'])
+    monkeypatch.setattr('builtins.input', lambda *_: next(answers))
+    calls = [0]
+    def review(*_):
+        calls[0] += 1
+        if calls[0] == 3:
+            raise ValueError('Physical evidence changed before DDL')
+        return {'kind': 'drop_table', 'table': 'child', 'rows': 2}, 'a' * 64, 2
+    monkeypatch.setattr(removal, 'review_table_removal', review)
+    with pytest.raises(ValueError, match='Physical evidence changed before DDL'):
+        removal.run_table_removal(args, connection, models, '.', 'data', 'identity', None)
+    assert not any('DROP TABLE' in sql for sql, _ in connection.statements)
+
+
+def test_mysql_drop_execution_error_is_uncertain(monkeypatch):
+    connection, models, args = execution(monkeypatch, 'mysql')
+    answers = iter(['y', 'DELETE TABLE data.child'])
+    monkeypatch.setattr('builtins.input', lambda *_: next(answers))
+    original = connection.execute_write
+    def fail_drop(sql, params=None):
+        if sql.startswith('DROP TABLE'):
+            raise OSError('Lost connection while executing DDL')
+        return original(sql, params)
+    connection.execute_write = fail_drop
+    with pytest.raises(RuntimeError, match='outcome uncertain after DDL began'):
+        removal.run_table_removal(args, connection, models, '.', 'data', 'identity', None)

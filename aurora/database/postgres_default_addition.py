@@ -15,7 +15,7 @@ from .server_migration_timeline import (complete_server_successor,
 def execute_postgres_default_addition(connection, models, *, alias, identity, parsed,
                                       config_path, backup_path, review, approval,
                                       name, title="Untitled"):
-    """Back up and apply one approved literal DEFAULT inside the transaction."""
+    """Review and apply one approved literal DEFAULT inside the transaction."""
     from .cli_init import _postgres_database_identity
     from .cli_postgres_backup import backup_postgres_database
 
@@ -28,13 +28,14 @@ def execute_postgres_default_addition(connection, models, *, alias, identity, pa
     if connection._transaction_active:
         raise RuntimeError("PostgreSQL default migration cannot nest transactions")
 
-    if not alias or not identity or parsed is None or not backup_path:
-        raise ValueError("Verified PostgreSQL database identity and backup are required")
+    if not alias or not identity or parsed is None:
+        raise ValueError("Verified PostgreSQL database identity is required")
 
-    archive = backup_postgres_database(config_path, alias, backup_path)
-
-    if not isinstance(archive, Path) or not archive.is_file():
-        raise RuntimeError("PostgreSQL SQL default backup has not been verified")
+    archive = None
+    if backup_path is not None:
+        archive = backup_postgres_database(config_path, alias, backup_path)
+        if not isinstance(archive, Path) or not archive.is_file():
+            raise RuntimeError("PostgreSQL SQL default backup has not been verified")
 
     with connection.transaction():
         lock = connection.fetch_first(

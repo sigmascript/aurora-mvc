@@ -6,8 +6,6 @@ A supported review is never itself permission to execute DDL.
 import hmac
 import os
 import re
-from pathlib import Path
-import secrets
 import sys
 from urllib.parse import urlsplit
 
@@ -22,9 +20,9 @@ class UnsupportedServerChange(ValueError):
 def run_server_model_migration(args):
     """Review and apply one narrowly supported successor to a server alias.
 
-    Ordinary terminal operation requests explicit human confirmation. Existing
-    advanced automation requires the exact digest, APPLY, a new backup path,
-    and a migration name. The backend executor repeats preflight under lock.
+    Ordinary terminal operation requests explicit human confirmation. Advanced
+    automation requires the exact digest, APPLY, and a migration name. Backups
+    are separate, optional commands. The executor rechecks under lock.
     """
     from .cli_init import _mysql_database_identity, _postgres_database_identity
     from .history import review_history
@@ -53,6 +51,8 @@ def run_server_model_migration(args):
         raise ValueError("Server migration requires its ordinary reviewed model workflow")
 
     automated = bool(getattr(args, "apply", False))
+    if getattr(args, "backup", None):
+        raise ValueError("Migration backup destinations are retired; use aurora db backup separately")
     simple_confirm = getattr(args, "confirm", None) in ("yes", "y")
 
     if simple_confirm and any(getattr(args, option, None)
@@ -62,9 +62,8 @@ def run_server_model_migration(args):
     if automated:
         if (getattr(args, "confirm", None) != "APPLY"
                 or not getattr(args, "approve", None)
-                or not getattr(args, "backup", None)
                 or not getattr(args, "name", None)):
-            raise PermissionError("Automated server migration needs exact review, backup and confirmation")
+            raise PermissionError("Automated server migration needs exact review and confirmation")
     elif not simple_confirm and any(
             getattr(args, option, None)
             for option in ("approve", "backup", "confirm", "name")):
@@ -224,17 +223,8 @@ def run_server_model_migration(args):
                 print("Migration cancelled; no database changes made.")
                 return 0
 
-        if automated:
-            backup_path = args.backup
-        else:
-            folder = Path(root) / "backups"
-
-            if folder.is_symlink():
-                raise PermissionError("Automatic backup folder cannot be a symbolic link")
-
-            folder.mkdir(exist_ok=True)
-            suffix = ".sql" if connection.dialect == "mysql" else ".dump"
-            backup_path = str(folder / f"{args.database}-before-{secrets.token_hex(8)}{suffix}")
+        # Backups belong to the standalone backup command, not migrations.
+        backup_path = None
 
         kwargs = {"alias": args.database, "identity": identity, "parsed": parsed,
                   "config_path": args.config, "backup_path": backup_path,
@@ -364,6 +354,8 @@ def _run_forward_migration(args, config, root, connection, models, parsed, login
         raise ValueError("Server forward migration operation is not supported")
 
     automated = bool(getattr(args, "apply", False))
+    if getattr(args, "backup", None):
+        raise ValueError("Migration backup destinations are retired; use aurora db backup separately")
     approval = args.approve if automated else proposal.review_sha256
     if not hmac.compare_digest(str(approval), proposal.review_sha256):
         raise PermissionError("Server migration approval differs from the exact proposal")

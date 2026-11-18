@@ -233,17 +233,6 @@ def review_unique_change(connection, models, root, alias, identity):
 
 
 
-def _require_verified_backup(connection, root, alias, configured_url):
-    from .server_interrupted_reconciliation import _verify_backups
-    from .server_backup_catalog import _catalog_exists
-    if not _catalog_exists(connection):
-        raise ValueError('UNIQUE removal requires a verified backup catalog')
-    row = connection.fetch_first('SELECT COUNT(*) AS total FROM __backups__')
-    if row is None or int(row['total']) < 1:
-        raise ValueError('UNIQUE removal requires a previously verified backup')
-    _verify_backups(connection, root, alias, configured_url)
-
-
 def execute_unique_change(connection, models, root, alias, identity, parsed, operation,
                           expected_digest, title, configured_url):
     """Recheck under lock; execute one DDL, snapshot and append five-column history."""
@@ -255,8 +244,6 @@ def execute_unique_change(connection, models, root, alias, identity, parsed, ope
         if identify(connection, parsed) != identity:
             raise RuntimeError('UNIQUE database identity changed after review')
         fresh, digest, count = review_unique_change(connection, models, root, alias, identity)
-        if fresh['kind'] == 'drop_unique':
-            _require_verified_backup(connection, root, alias, configured_url)
         if fresh != operation or not hmac.compare_digest(digest, expected_digest):
             raise RuntimeError('UNIQUE proposal changed after review')
         try:
@@ -305,10 +292,12 @@ def run_unique_change(args, connection, models, root, alias, identity, parsed, c
     if operation['kind'] == 'drop_unique':
         if getattr(args, 'confirm', None) in ('yes', 'y'):
             raise PermissionError('UNIQUE removal requires interactive target-specific acknowledgment')
-        _require_verified_backup(connection, root, alias, configured_url)
     print(f'AuroraSQL migration — {alias} ({connection.dialect})')
     print(f"  {operation['kind']}: {operation['table']}.{operation['column']}")
     print('  Reviewed SHA-256: ' + digest)
+    if operation['kind'] == 'drop_unique':
+        print('  RECOMMENDATION: Create a backup separately before removing UNIQUE; backup is optional.')
+        print('  Aurora will not automatically create or restore backups.')
     if getattr(args, 'confirm', None) not in ('yes', 'y'):
         import sys
         if not sys.stdin.isatty() or input('Apply this UNIQUE change? [y/N]: ').strip().lower() != 'y':

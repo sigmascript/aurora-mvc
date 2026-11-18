@@ -22,7 +22,7 @@ from .server_migration_timeline import (complete_server_successor,
 def execute_postgres_new_table_successor(connection, models, *, alias, identity,
                                          parsed, config_path, backup_path, review,
                                          approval, name, title="Untitled"):
-    """Back up, then apply one exact approved table and its journals atomically.
+    """Review, then apply one exact approved table and its journals atomically.
 
     PostgreSQL rollback protects the application DDL and journal on ordinary
     errors. A commit failure is never retried; the operator must reconcile.
@@ -42,12 +42,12 @@ def execute_postgres_new_table_successor(connection, models, *, alias, identity,
     if not isinstance(alias, str) or not alias or not identity or parsed is None:
         raise ValueError("A verified database alias and identity are required")
 
-    # Backup is attempted before any transaction or schema write. Its client
-    # validates the configured database and user and publishes a new archive.
-    archived = backup_postgres_database(config_path, alias, backup_path)
-
-    if not isinstance(archived, Path) or not archived.is_file():
-        raise RuntimeError("PostgreSQL successor backup has not been verified")
+    # Only an explicitly supplied backup destination triggers separate artifact creation.
+    archived = None
+    if backup_path is not None:
+        archived = backup_postgres_database(config_path, alias, backup_path)
+        if not isinstance(archived, Path) or not archived.is_file():
+            raise RuntimeError("PostgreSQL successor backup has not been verified")
 
     with connection.transaction():
         locked = connection.fetch_first(

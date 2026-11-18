@@ -16,7 +16,7 @@ import sqlite3
 import sys
 from urllib.parse import urlsplit
 
-from .cli_backup import _sqlite_source, run_backup
+from .cli_backup import _sqlite_source
 from .cli_plan import _load_config
 from .migration_journal_v2 import _TABLE, _require_journal, _validate_intent
 from .migration_timeline import (complete_successor, inspect_native_history,
@@ -222,7 +222,16 @@ def _inspect_sqlite(connection, operation, alias="default", *, trusted_rename=Fa
 
             if columns[column.casefold()][6]:
                 warnings.append("Hidden or generated columns need dedicated index review")
-    else:
+    elif operation["kind"] == "drop_index":
+        # An index name alone is not proof of ownership: SQLite index names
+        # are global, and autoindexes belong to table constraints.
+        matches = [(parent, sql) for kind, name, parent, sql in catalog
+                   if kind == "index" and name.casefold() == operation["name"].casefold()]
+        if len(matches) != 1 or matches[0][0].casefold() != requested:
+            raise ValueError("Index does not exist on the selected table")
+        if not isinstance(matches[0][1], str):
+            raise ValueError("Implicit or constraint-owned indexes cannot be dropped")
+    elif operation["kind"] == "rename_columns":
         for old, new in operation["columns"].items():
             if old.casefold() not in columns:
                 raise ValueError("Source column does not exist")
@@ -247,8 +256,8 @@ def _inspect_sqlite(connection, operation, alias="default", *, trusted_rename=Fa
             break
 
     for kind, _, parent, _ in catalog:
-        if (operation["kind"] != "create_index" and kind == "index" and
-                parent.casefold() == requested):
+        if (operation["kind"] not in ("create_index", "drop_index") and
+                kind == "index" and parent.casefold() == requested):
             warnings.append("Indexes on the target require separate verification")
             break
 
@@ -379,14 +388,16 @@ def _rehearse_sqlite(db_file, statements):
 
 
 def _apply_sqlite_operations(args, document, db_file, preview_digest, *, model_mapping=None):
-    """Apply one reviewed, backed-up rename after a bounded SQLite rehearsal."""
+    """Apply one reviewed SQLite operation after a bounded rehearsal."""
     if os.environ.get("AURORA_ENV", "development").lower() == "production":
         raise PermissionError("Explicit schema migration is disabled in production")
 
+    if args.backup:
+        raise ValueError("Migration backup destinations are retired; run aurora db backup separately")
+
     if (args.confirm != "APPLY" or not isinstance(args.approve, str) or
-            (not args.backup and not getattr(args, "_simple_confirm", False)) or
             not hmac.compare_digest(args.approve, preview_digest)):
-        raise PermissionError("Require --confirm APPLY, exact --approve and --backup")
+        raise PermissionError("Require --confirm APPLY and exact reviewed approval")
 
     with closing(sqlite3.connect(db_file.as_uri() + "?mode=ro", uri=True)) as probe:
         native = probe.execute(
@@ -410,14 +421,6 @@ def _apply_sqlite_operations(args, document, db_file, preview_digest, *, model_m
 
     statements = _sql_statements(document["operation"])
     expected_catalog = _rehearse_sqlite(db_file, statements)
-
-    # Back up with the existing verified, exclusive-create SQLite implementation.
-    # Retain the artifact even if DDL subsequently fails, for manual recovery.
-    if args.backup:
-        from types import SimpleNamespace
-        backup_args = SimpleNamespace(config=args.config, database=args.database,
-                                      to=args.backup)
-        run_backup(backup_args)
 
     connection = sqlite3.connect(db_file.as_uri() + "?mode=rw", uri=True,
                                  isolation_level=None, timeout=5)
@@ -736,7 +739,8 @@ def run_explicit_operations(args):
     else:
         print(f"Database: {args.database} ({dialect}; explicit operation preview)")
         print(f"Operation: {document['operation']['kind']} on {document['operation']['table']}")
-        print(f"Status: {report['status']}; review and backup required before execution")
+        print(f"Status: {report['status']}; review required before execution")
+        print("RECOMMENDATION: Run aurora db backup separately if desired; it is optional.")
         print(f"Review fingerprint: {digest}")
 
         for warning in warnings:

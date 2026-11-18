@@ -23,7 +23,7 @@ from .server_migration_timeline import (complete_server_successor,
 def execute_mysql_new_table_successor(connection, models, *, alias, identity,
                                       parsed, config_path, backup_path, login_path,
                                       review, approval, name, title="Untitled"):
-    """Back up and execute one guarded MySQL new-table migration without retry."""
+    """Review and execute one guarded MySQL new-table migration without retry."""
     from .cli_init import _mysql_database_identity
     from .cli_mysql_backup import backup_mysql_database
 
@@ -37,13 +37,14 @@ def execute_mysql_new_table_successor(connection, models, *, alias, identity,
         raise RuntimeError("MySQL successor cannot nest locks or transactions")
 
     if (not isinstance(alias, str) or not alias or not identity or parsed is None
-            or not isinstance(backup_path, str) or not backup_path):
-        raise ValueError("Reviewed database identity and new backup destination are required")
+            or (backup_path is not None and (not isinstance(backup_path, str) or not backup_path))):
+        raise ValueError("Verified database identity and valid optional backup destination are required")
 
-    archive = backup_mysql_database(config_path, alias, backup_path, login_path)
-
-    if not isinstance(archive, Path) or not archive.is_file():
-        raise RuntimeError("MySQL successor backup has not been verified")
+    archive = None
+    if backup_path is not None:
+        archive = backup_mysql_database(config_path, alias, backup_path, login_path)
+        if not isinstance(archive, Path) or not archive.is_file():
+            raise RuntimeError("MySQL successor backup has not been verified")
 
     operation_id = None
     prepared = False

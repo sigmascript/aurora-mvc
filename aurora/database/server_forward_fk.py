@@ -189,7 +189,6 @@ def review_fk(connection, models, root, alias, identity):
 def execute_fk(connection, models, root, alias, identity, parsed, operation, digest,
                title, configured_url):
     from .cli_init import _postgres_database_identity
-    from .server_forward_unique import _require_verified_backup
     with connection.transaction():
         lock = connection.fetch_first('SELECT pg_try_advisory_xact_lock(:key) AS acquired',
                                       {'key': _PG_LOCK_KEY})
@@ -200,8 +199,6 @@ def execute_fk(connection, models, root, alias, identity, parsed, operation, dig
         current, current_digest, count = review_fk(connection, models, root, alias, identity)
         if current != operation or not hmac.compare_digest(current_digest, digest):
             raise RuntimeError('Foreign-key proposal changed after review')
-        if current['kind'] == 'drop_foreign_key':
-            _require_verified_backup(connection, root, alias, configured_url)
         connection.execute_write(current['sql'])
         present = _fk_catalog(connection, current['table'], current['name'])
         expected = (current['column'], current['target_table'], current['target_column'])
@@ -229,7 +226,6 @@ def run_fk(args, connection, models, root, alias, identity, parsed, configured_u
         from .server_forward_fk_mysql import run_mysql_fk
         return run_mysql_fk(args, connection, models, root, alias, identity, parsed, configured_url)
     from .migration_titles import migration_title
-    from .server_forward_unique import _require_verified_backup
     if os.environ.get('AURORA_ENV', 'development').lower() == 'production':
         raise PermissionError('Server foreign-key changes are disabled in production')
     if any(getattr(args, option, None) for option in ('apply', 'approve', 'backup', 'name')):
@@ -238,10 +234,12 @@ def run_fk(args, connection, models, root, alias, identity, parsed, configured_u
     if operation['kind'] == 'drop_foreign_key':
         if getattr(args, 'confirm', None):
             raise PermissionError('Foreign-key removal requires interactive target acknowledgment')
-        _require_verified_backup(connection, root, alias, configured_url)
     print(f'AuroraSQL migration — {alias} (postgresql)')
     print(f"  {operation['kind']}: {operation['table']}.{operation['column']}")
     print('  Reviewed SHA-256: ' + digest)
+    if operation['kind'] == 'drop_foreign_key':
+        print('  RECOMMENDATION: Create a backup separately before removing this FK; backup is optional.')
+        print('  Aurora will not automatically create or restore backups.')
     if getattr(args, 'confirm', None) not in ('yes', 'y'):
         if not sys.stdin.isatty() or input('Apply this foreign-key change? [y/N]: ').strip().lower() != 'y':
             print('Migration cancelled; no database changes made.')

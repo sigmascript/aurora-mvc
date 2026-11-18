@@ -104,6 +104,7 @@ def run_table_removal(args, connection, models, root, alias, identity, parsed):
             print('Table removal cancelled; no database changes made.')
             return 0
     title = migration_title(getattr(args, 'title', None), 'Untitled')
+    ddl_started = [False]
     identify = _mysql_database_identity if dialect == 'mysql' else _postgres_database_identity
 
     def execute_reviewed():
@@ -113,6 +114,7 @@ def run_table_removal(args, connection, models, root, alias, identity, parsed):
         if (fresh != operation or new_count != count
                 or not hmac.compare_digest(witness, digest)):
             raise RuntimeError('Table-removal proposal changed after approval; no DDL executed')
+        ddl_started[0] = True
         connection.execute_write(f'DROP TABLE {_quote(name, dialect)}')
         if inspect_table(connection, name).exists:
             raise RuntimeError('Dropped table still exists')
@@ -154,7 +156,9 @@ def run_table_removal(args, connection, models, root, alias, identity, parsed):
             try:
                 path = execute_reviewed()
             except Exception as exc:
-                raise RuntimeError('MySQL table removal outcome uncertain after DDL may have begun; '
+                if not ddl_started[0]:
+                    raise
+                raise RuntimeError('MySQL table removal outcome uncertain after DDL began; '
                                    'inspect physical schema and forward history before retry') from exc
     print(f'Applied Migration{count + 1} to {alias}; snapshot: {path.name}')
     return 0

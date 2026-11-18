@@ -176,15 +176,12 @@ def review_mysql_fk(connection, models, root, alias, identity):
 def execute_mysql_fk(connection, models, root, alias, identity, parsed, operation,
                      digest, title, configured_url):
     from .cli_init import _mysql_database_identity
-    from .server_forward_unique import _require_verified_backup
     with migration_lock(connection):
         if _mysql_database_identity(connection, parsed) != identity:
             raise RuntimeError('MySQL database identity changed')
         fresh, fresh_digest, count = review_mysql_fk(connection, models, root, alias, identity)
         if fresh != operation or not hmac.compare_digest(digest, fresh_digest):
             raise RuntimeError('FK proposal changed after review')
-        if fresh['kind'] == 'drop_foreign_key':
-            _require_verified_backup(connection, root, alias, configured_url)
         try:
             connection.execute_write(fresh['sql'])
             expected = (fresh['column'], fresh['target_table'], fresh['target_column'])
@@ -216,7 +213,6 @@ def execute_mysql_fk(connection, models, root, alias, identity, parsed, operatio
 
 def run_mysql_fk(args, connection, models, root, alias, identity, parsed, configured_url):
     from .migration_titles import migration_title
-    from .server_forward_unique import _require_verified_backup
     if os.environ.get('AURORA_ENV', 'development').lower() == 'production':
         raise PermissionError('Server foreign-key changes disabled in production')
     if any(getattr(args, option, None) for option in ('apply', 'approve', 'backup', 'name')):
@@ -225,10 +221,12 @@ def run_mysql_fk(args, connection, models, root, alias, identity, parsed, config
     if operation['kind'] == 'drop_foreign_key':
         if getattr(args, 'confirm', None):
             raise PermissionError('FK removal requires interactive target acknowledgment')
-        _require_verified_backup(connection, root, alias, configured_url)
     print(f'AuroraSQL migration — {alias} (mysql)')
     print(f"  {operation['kind']}: {operation['table']}.{operation['column']}")
     print('  Reviewed SHA-256: ' + digest)
+    if operation['kind'] == 'drop_foreign_key':
+        print('  RECOMMENDATION: Create a backup separately before removing this FK; backup is optional.')
+        print('  Aurora will not automatically create or restore backups.')
     if getattr(args, 'confirm', None) not in ('yes', 'y'):
         if not sys.stdin.isatty() or input('Apply this foreign-key change? [y/N]: ').strip().lower() != 'y':
             print('Migration cancelled; no database changes made.')

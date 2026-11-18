@@ -56,9 +56,9 @@ def run_model_migration(args):
         if args.apply or args.approve or args.confirm or args.backup or args.title is not None:
             raise ValueError("Read-only review cannot contain execution options")
     elif args.apply:
-        if (args.confirm != "APPLY" or not args.approve or not args.backup or
+        if (args.confirm != "APPLY" or not args.approve or args.backup or
                 args.check or args.explain or args.format != "text"):
-            raise PermissionError("Advanced execution requires exact approval and backup")
+            raise PermissionError("Advanced execution requires exact approval; backup destinations are retired")
     elif not simple_confirm and (args.approve or args.confirm or args.backup or args.check or
                                  args.explain or args.format != "text"):
         raise PermissionError("Interactive migration cannot contain advanced execution options")

@@ -287,6 +287,8 @@ def main(argv: list[str] | None = None) -> int:
 
             if resource == "controller" and verb == "add":
                 command.add_argument("--methods", metavar="VERBS", help="Generate selected HTTP method stubs (comma-separated)")
+            if resource == "model" and verb == "add":
+                command.add_argument("--database", metavar="NAME", help="Register the model with this configured database")
 
     # Database commands use explicit safety gates; check is read-only.
     db_group = sub.add_parser("db", help="Check and manage your project databases")
@@ -706,6 +708,18 @@ def main(argv: list[str] | None = None) -> int:
                 methods = parse_controller_methods(args.methods) if resource == "controller" else None
 
                 if resource == "model":
+                    from aurora.database.cli_plan import _load_config, resolve_project_database
+                    from aurora.database.cli_registration import _load_manifest
+
+                    # Validate identity and manifest before creating a source file.
+                    configured, project_root = _load_config(Path.cwd() / "aurora_databases.json")
+                    selected = resolve_project_database(configured, project_root, args.database)
+                    manifest = _load_manifest(project_root / "aurora_models.json")
+                    reference = (f"models.{name}:{name}" if app_name is None else
+                                 f"apps.{app_name}.models.{name}:{name}")
+                    if any(reference in refs for refs in manifest["databases"].values()):
+                        raise ValueError("Model reference already registered; no source file created")
+
                     backend = args.backend
                     destination = (create_shared_component("model", name, backend=backend)
                                    if app_name is None else create_model(app_name, name, backend=backend))
@@ -721,7 +735,7 @@ def main(argv: list[str] | None = None) -> int:
 
                 if resource == "model" and backend == "aurorasql":
                     from aurora.database.cli_registration import register_generated_model
-                    reference, _ = register_generated_model(destination, name)
+                    reference, _ = register_generated_model(destination, name, alias=selected)
                     note = f" (registered {reference}; database unchanged)"
 
                 print(f"Created {destination}" + note)

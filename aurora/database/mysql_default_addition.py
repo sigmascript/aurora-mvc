@@ -16,7 +16,7 @@ from .server_migration_timeline import (complete_server_successor,
 def execute_mysql_default_addition(connection, models, *, alias, identity, parsed,
                                    config_path, backup_path, login_path, review,
                                    approval, name, title="Untitled"):
-    """Back up, lock, re-review a literal default, ALTER, then verify evidence."""
+    """Review, lock, re-review a literal default, ALTER, then verify evidence."""
     from .cli_init import _mysql_database_identity
     from .cli_mysql_backup import backup_mysql_database
 
@@ -29,13 +29,14 @@ def execute_mysql_default_addition(connection, models, *, alias, identity, parse
     if connection._transaction_active or getattr(connection, "_migration_lock_active", False):
         raise RuntimeError("MySQL default migration cannot nest transactions or locks")
 
-    if not alias or not identity or parsed is None or not backup_path:
-        raise ValueError("Verified MySQL database identity and backup are required")
+    if not alias or not identity or parsed is None:
+        raise ValueError("Verified MySQL database identity is required")
 
-    archive = backup_mysql_database(config_path, alias, backup_path, login_path)
-
-    if not isinstance(archive, Path) or not archive.is_file():
-        raise RuntimeError("MySQL SQL default backup has not been verified")
+    archive = None
+    if backup_path is not None:
+        archive = backup_mysql_database(config_path, alias, backup_path, login_path)
+        if not isinstance(archive, Path) or not archive.is_file():
+            raise RuntimeError("MySQL SQL default backup has not been verified")
 
     operation_id = None
     prepared = False

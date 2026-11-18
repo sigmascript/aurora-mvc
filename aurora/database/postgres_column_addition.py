@@ -18,7 +18,7 @@ from .server_migration_timeline import (complete_server_successor,
 def execute_postgres_column_addition(connection, models, *, alias, identity, parsed,
                                      config_path, backup_path, review, approval,
                                      name, title="Untitled"):
-    """Back up, revalidate, apply one reviewed ADD COLUMN, then verify.
+    """Review, revalidate, apply one reviewed ADD COLUMN, then verify.
 
     The caller cannot turn an arbitrary statement into execution permission:
     preparation reconstructs its reviewed SQL under the transaction lock.
@@ -38,10 +38,11 @@ def execute_postgres_column_addition(connection, models, *, alias, identity, par
     if not alias or not identity or parsed is None:
         raise ValueError("Verified PostgreSQL database identity is required")
 
-    archive = backup_postgres_database(config_path, alias, backup_path)
-
-    if not isinstance(archive, Path) or not archive.is_file():
-        raise RuntimeError("PostgreSQL column backup has not been verified")
+    archive = None
+    if backup_path is not None:
+        archive = backup_postgres_database(config_path, alias, backup_path)
+        if not isinstance(archive, Path) or not archive.is_file():
+            raise RuntimeError("PostgreSQL column backup has not been verified")
 
     with connection.transaction():
         lock = connection.fetch_first(
