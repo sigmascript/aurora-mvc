@@ -32,7 +32,7 @@ def _run_client(arguments, *, label):
     return result.stdout
 
 
-def backup_postgres_database(config_path, alias, destination):
+def backup_postgres_database(config_path, alias, destination, expected_url=None):
     """Create and validate one new pg_dump archive for an explicit alias.
 
     Verify the external CLI's database/user identity before launching pg_dump.
@@ -42,7 +42,10 @@ def backup_postgres_database(config_path, alias, destination):
         raise ValueError("PostgreSQL backup requires --to NEW_FILE.dump")
 
     config, _ = _load_config(config_path)
-    url = urlsplit(config.resolve(alias))
+    selected = config.resolve(alias)
+    if expected_url is not None and selected != expected_url:
+        raise ValueError("Configured PostgreSQL backup destination changed during selection")
+    url = urlsplit(selected)
 
     if url.scheme != "postgresql+psycopg" or not url.hostname or not url.username:
         raise ValueError("PostgreSQL backup requires a named PostgreSQL connection")

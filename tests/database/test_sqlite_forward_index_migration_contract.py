@@ -18,14 +18,14 @@ def _project(tmp_path):
         '    title = column(str, length=100)\n'
         '    amount = column(int)\n')
     (tmp_path / 'aurora_databases.json').write_text(json.dumps({
-        'databases': {'default': {'engine': 'sqlite', 'database': 'data.sqlite3'}}}))
+        'databases': {'data': {'engine': 'sqlite', 'extension': 'sqlite3'}}}))
     (tmp_path / 'aurora_models.json').write_text(json.dumps({
-        'databases': {'default': ['models.Notes:Notes']}}))
+        'databases': {'data': ['models.Notes:Notes']}}))
 
 
 def _change(tmp_path, name, operation):
     file = tmp_path / name
-    file.write_text(json.dumps({'database': 'default', **operation}))
+    file.write_text(json.dumps({'database': 'data', **operation}))
     return file.name
 
 
@@ -107,9 +107,9 @@ def test_foreign_key_column_index_preserves_relationship(tmp_path, monkeypatch, 
         '    id = column(int, primary_key=True)\n'
         '    user_id = column(int, reference="Users.id")\n')
     (tmp_path / 'aurora_databases.json').write_text(json.dumps({
-        'databases': {'default': {'engine': 'sqlite', 'database': 'data.sqlite3'}}}))
+        'databases': {'data': {'engine': 'sqlite', 'extension': 'sqlite3'}}}))
     (tmp_path / 'aurora_models.json').write_text(json.dumps({
-        'databases': {'default': ['models.Users:Users','models.Messages:Messages']}}))
+        'databases': {'data': ['models.Users:Users','models.Messages:Messages']}}))
     monkeypatch.chdir(tmp_path)
     assert main(['db','init','--confirm','yes']) == 0
     spec = _change(tmp_path, 'create.json', {'create_index': {

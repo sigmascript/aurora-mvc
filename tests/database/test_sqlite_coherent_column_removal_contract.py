@@ -53,17 +53,14 @@ def test_two_empty_columns_one_migration_without_backup(tmp_path, monkeypatch):
         read_history(db, tmp_path, tmp_path / 'data.sqlite3')
 
 
-def test_two_populated_columns_one_backup_and_two_target_acks(tmp_path, monkeypatch):
+def test_two_populated_columns_two_target_acks_without_backup(tmp_path, monkeypatch):
     arrange(tmp_path, monkeypatch)
     monkeypatch.setattr(sys, 'stdin', Terminal())
-    answers = iter(['y', 'DELETE default.messages.comment', 'DELETE default.messages.title'])
+    answers = iter(['y', 'DELETE data.messages.comment', 'DELETE data.messages.title'])
     monkeypatch.setattr('builtins.input', lambda prompt='': next(answers))
     assert main(['db', 'migrate', '--title', 'Remove title and comment']) == 0
     assert state(tmp_path) == (['id', 'user_id', 'visits'], 3)
-    backups = list((tmp_path / 'backups' / 'data').glob('*.sqlite3'))
-    assert len(backups) == 1
-    with sqlite3.connect(backups[0]) as db:
-        assert db.execute('SELECT title,comment FROM messages').fetchone() == ('hello', 'important')
+    assert not list((tmp_path / '__backups__' / 'data').glob('*.sqlite3'))
     with sqlite3.connect(tmp_path / 'data.sqlite3') as db:
         assert db.execute('PRAGMA foreign_key_check').fetchall() == []
         warnings = db.execute('SELECT warnings FROM __migrations__ ORDER BY id DESC LIMIT 1').fetchone()[0]
@@ -76,11 +73,11 @@ def test_two_populated_columns_one_backup_and_two_target_acks(tmp_path, monkeypa
 def test_incorrect_second_ack_preserves_both_columns_and_history(tmp_path, monkeypatch):
     arrange(tmp_path, monkeypatch)
     monkeypatch.setattr(sys, 'stdin', Terminal())
-    answers = iter(['y', 'DELETE default.messages.comment', 'DELETE default.messages.other'])
+    answers = iter(['y', 'DELETE data.messages.comment', 'DELETE data.messages.other'])
     monkeypatch.setattr('builtins.input', lambda prompt='': next(answers))
     assert main(['db', 'migrate']) == 0
     assert state(tmp_path) == (['id', 'user_id', 'visits', 'title', 'comment'], 2)
-    assert len(list((tmp_path / 'backups' / 'data').glob('*.sqlite3'))) == 1
+    assert not list((tmp_path / '__backups__' / 'data').glob('*.sqlite3'))
 
 
 def test_noninteractive_multi_drop_refuses_without_backup(tmp_path, monkeypatch, capsys):
@@ -88,7 +85,7 @@ def test_noninteractive_multi_drop_refuses_without_backup(tmp_path, monkeypatch,
     with pytest.raises(SystemExit) as exc:
         main(['db', 'migrate', '--confirm', 'yes'])
     assert exc.value.code == 1
-    assert 'verified backup' in capsys.readouterr().err
+    assert 'target-specific' in capsys.readouterr().err
     assert state(tmp_path) == (['id', 'user_id', 'visits', 'title', 'comment'], 2)
     assert not (tmp_path / 'backups').exists()
 

@@ -11,16 +11,22 @@ _REFERENCE = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*:[A-Za-z_]\w*$")
 _ALIAS = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
-def register_generated_model(destination, name, *, project=None, alias="default", manifest="aurora_models.json"):
+def register_generated_model(destination, name, *, project=None, alias=None, manifest="aurora_models.json"):
     """Atomically register a generated model; never touch the database.
 
     Reject unsafe paths, malformed manifests and symlinks. No Python imports.
     """
 
-    if not _ALIAS.fullmatch(alias):
-        raise ValueError("Invalid database alias")
-
     root = Path(project or Path.cwd()).resolve()
+
+    if alias is None:
+        from .cli_plan import _load_config, resolve_project_database
+
+        config, _ = _load_config(root / "aurora_databases.json")
+        alias = resolve_project_database(config, root)
+
+    if not isinstance(alias, str) or not _ALIAS.fullmatch(alias):
+        raise ValueError("Invalid database name")
     file_path = Path(destination).resolve()
 
     try:

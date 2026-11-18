@@ -1,6 +1,6 @@
 """Fail-closed AuroraSQL SQLite backup; never overwrites a destination.
 
-Restore and non-SQLite backup remain disabled until separate acceptance.
+Restore execution remains disabled; other backends have separate guarded clients.
 """
 
 from contextlib import closing
@@ -50,18 +50,31 @@ def _integrity(connection):
         raise ValueError("SQLite integrity check failed")
 
 
-def run_backup(args):
-    """Back up an existing SQLite database to an exclusively created file."""
+def create_managed_sqlite_backup(args):
+    """Create one verified managed artifact; return its immutable path."""
 
     if os.environ.get("AURORA_ENV", "development").lower() == "production":
         raise ValueError("AuroraSQL backup in production requires separate approval")
 
-    if not args.to:
-        raise ValueError("--to is required for AuroraSQL backup")
+    from .backup_artifacts import (prepare_artifact, record_artifact,
+                                   destination_fingerprint, validate_title)
 
+    validate_title(getattr(args, "title", None))
     config, config_dir = _load_config(args.config)
-    source = _sqlite_source(config.resolve(args.database), config_dir)
-    destination = Path(args.to).expanduser().absolute()
+    url = config.resolve(args.database)
+    source = _sqlite_source(url, config_dir)
+    # A new backup must not conceal conflicting or damaged older evidence.
+    from .backup_artifacts import list_artifacts
+    from .sqlite_backup_catalog import inspect_sqlite_catalog, _catalog_format
+    identity = destination_fingerprint(url, config_dir)
+    with closing(sqlite3.connect(source.as_uri() + "?mode=ro", uri=True)) as db:
+        if _catalog_format(db) == "legacy":
+            raise ValueError("Legacy __backups__ catalog requires an explicitly reviewed transition")
+    existing = list_artifacts(config_dir, args.database, identity)
+    existing = inspect_sqlite_catalog(source, config_dir, args.database, identity, existing)
+    if any(item["status"] != "ARTIFACT_VERIFIED" for item in existing):
+        raise ValueError("Existing backup evidence requires manual reconciliation")
+    backup_id, destination = prepare_artifact(config_dir, args.database, "sqlite")
 
     if destination.suffix != ".sqlite3":
         raise ValueError("Backup destination must end in .sqlite3")
@@ -94,6 +107,19 @@ def run_backup(args):
         if not completed:
             destination.unlink(missing_ok=True)
 
+    identity = destination_fingerprint(url, config_dir)
+    record_artifact(config_dir, args.database, "sqlite", backup_id, destination,
+                    getattr(args, "title", None), identity)
+    from .sqlite_backup_catalog import reconcile_sqlite_catalog
+    reconcile_sqlite_catalog(source, config_dir, args.database, identity)
+    return destination
+
+
+def run_backup(args):
+    """Public backup reports immutable artifact identity, without user paths."""
+    destination = create_managed_sqlite_backup(args)
+    backup_id = destination.stem
     print(json.dumps({"status": "BACKED_UP", "database_alias": args.database,
-                      "destination": str(destination), "verified": True}, sort_keys=True))
+                      "backup_id": backup_id, "destination": str(destination),
+                      "verified": True}, sort_keys=True))
     return 0

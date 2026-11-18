@@ -13,10 +13,12 @@ from pathlib import Path
 
 from .schema import create_table_sql, _quote
 from .schema_records import prepare_schema_record
+from .snapshot_paths import sqlite_history_name
 from .snapshots import schema_snapshot
 
 
 TABLE = "__migrations__"
+BACKUP_TABLE = "__backups__"
 LEGACY_TABLE = "migrations"
 DDL = ('CREATE TABLE "__migrations__" ('
        '"id" INTEGER PRIMARY KEY, "title" TEXT NOT NULL, '
@@ -48,7 +50,7 @@ def _physical(raw):
             for kind, name, table, sql in raw.execute(
                 "SELECT type,name,tbl_name,sql FROM sqlite_master "
                 "WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name")
-            if name not in _OLD and name not in (TABLE, LEGACY_TABLE)]
+            if name not in _OLD and name not in (TABLE, LEGACY_TABLE, BACKUP_TABLE)]
 
 
 def read_history(raw, project_root, db_file):
@@ -97,7 +99,7 @@ def read_history(raw, project_root, db_file):
         physical_names = ([item.get("name") for item in physical
                            if isinstance(item, dict) and item.get("type") == "table"]
                           if isinstance(physical, list) else [])
-        if (snapshot.get("database") != Path(db_file).stem or
+        if (snapshot.get("database") != sqlite_history_name(project_root, db_file) or
                 snapshot.get("engine") != "sqlite" or snapshot.get("title") != title or
                 not isinstance(models, list) or not isinstance(physical, list) or
                 any(not isinstance(table, dict) or not isinstance(table.get("name"), str)
@@ -147,7 +149,7 @@ def matches_models_with_indexes(raw, models):
         for kind, name, _, sql in raw.execute(
                 "SELECT type,name,tbl_name,sql FROM sqlite_master "
                 "WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name"):
-            if kind == 'table' and sql and name not in (TABLE, LEGACY_TABLE):
+            if kind == 'table' and sql and name not in (TABLE, LEGACY_TABLE, BACKUP_TABLE):
                 clone.execute(sql)
         return matches_models(clone, models)
 
@@ -157,7 +159,7 @@ def validate_index_operation(raw, models, operation):
     if operation["kind"] not in ("create_index", "drop_index"):
         raise ValueError("Expected an index operation")
     table, name = operation['table'], operation['name']
-    if table not in {m.__table_name__ for m in models} or table in (TABLE, LEGACY_TABLE):
+    if table not in {m.__table_name__ for m in models} or table in (TABLE, LEGACY_TABLE, BACKUP_TABLE):
         raise ValueError("Index target is not a registered application table")
     indexes = _ordinary_index_sql(raw)
     existing = {index_name.casefold(): (index_name, target) for index_name, target, _ in indexes}
@@ -269,7 +271,7 @@ def _new_record(raw, root, db_file, models, title, warnings=()):
         raise RuntimeError("Foreign-key verification failed")
     if raw.execute("PRAGMA integrity_check").fetchone() != ("ok",):
         raise RuntimeError("SQLite integrity verification failed")
-    content = {"database": Path(db_file).stem, "engine": "sqlite", "title": title,
+    content = {"database": sqlite_history_name(root, db_file), "engine": "sqlite", "title": title,
                "models": model_snapshot["tables"], "physical_schema": _physical(raw)}
     actual_tables = {x["name"] for x in content["physical_schema"] if x["type"] == "table"}
     if actual_tables != {model.__table_name__ for model in models}:
@@ -303,7 +305,7 @@ def _new_record(raw, root, db_file, models, title, warnings=()):
 
 def initialize(raw, root, db_file, models, title):
     """Create a complete fresh schema and its first history record atomically."""
-    if any(m.__table_name__ in (TABLE, LEGACY_TABLE) or m.__table_name__ in _OLD for m in models):
+    if any(m.__table_name__ in (TABLE, LEGACY_TABLE, BACKUP_TABLE) or m.__table_name__ in _OLD for m in models):
         raise ValueError("A model table name is reserved for Aurora migration history")
     if raw.in_transaction or _tables(raw):
         raise RuntimeError("Initialization requires an empty database")
@@ -338,7 +340,7 @@ def migrate_additions(raw, root, db_file, models, title):
     from .core import Connection
     from .sqlite_additive_migration import _column_sql
     ordered_models = validate_init_models(models, dialect="sqlite", allow_extended=True)
-    if any(m.__table_name__ in (TABLE, LEGACY_TABLE) or m.__table_name__ in _OLD for m in models):
+    if any(m.__table_name__ in (TABLE, LEGACY_TABLE, BACKUP_TABLE) or m.__table_name__ in _OLD for m in models):
         raise ValueError("A model table name is reserved for Aurora migration history")
     path = None
     raw.execute("PRAGMA foreign_keys=ON")
@@ -438,7 +440,7 @@ def review_table_removal(raw, root, db_file, models):
 
 
 def migrate_table_removal(raw, root, db_file, models, title, target, expected_count, expected_witness,
-                          *, acknowledged=False, verified_backup=None):
+                          *, acknowledged=False):
     """Drop one reviewed table under a SQLite write lock and record its risk.
 
     Authorization for populated tables must be collected separately by the CLI.
@@ -453,14 +455,12 @@ def migrate_table_removal(raw, root, db_file, models, title, target, expected_co
         actual_target, count, witness = review_table_removal(raw, root, db_file, models)
         if (actual_target, count, witness) != (target, expected_count, expected_witness):
             raise RuntimeError("Table removal review is stale; run db check again")
-        if count and (not acknowledged or verified_backup is None):
-            raise PermissionError("Populated table removal requires typed authorization and verified backup")
-        if count and (not Path(verified_backup).is_file() or Path(verified_backup).is_symlink()):
-            raise PermissionError("Verified pre-migration backup is unavailable")
+        if count and not acknowledged:
+            raise PermissionError("Populated table removal requires typed authorization")
         raw.execute(f'DROP TABLE {_quote(target, "sqlite")}')
         matches_models_with_indexes(raw, models)
         warnings = ([f'Approved permanent deletion of table {target}: {count} existing row(s); '
-                     f'verified backup: {verified_backup}'] if count else [])
+                     'backup recommended; not automatically created'] if count else [])
         snapshot_path = _new_record(raw, root, db_file, models, title, warnings)
         raw.commit()
     except BaseException:
@@ -544,7 +544,7 @@ def review_column_removal(raw, root, db_file, models, *, allow_mixed=False):
 
 
 def migrate_column_removal(raw, root, db_file, models, title, reviewed,
-                           *, acknowledged=(), verified_backup=None):
+                           *, acknowledged=()):
     """Drop all reviewed columns in one transaction with one history record."""
     raw.execute("PRAGMA foreign_keys=ON")
     if raw.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
@@ -556,16 +556,14 @@ def migrate_column_removal(raw, root, db_file, models, title, reviewed,
         if actual != reviewed:
             raise RuntimeError("Column removal review is stale; run db check again")
         dangerous = {(table, column) for table, column, count, _ in reviewed if count}
-        if dangerous and (not dangerous.issubset(set(acknowledged)) or verified_backup is None):
-            raise PermissionError("Populated column removal requires typed authorization and verified backup")
-        if dangerous and (not Path(verified_backup).is_file() or Path(verified_backup).is_symlink()):
-            raise PermissionError("Verified pre-migration backup is unavailable")
+        if dangerous and not dangerous.issubset(set(acknowledged)):
+            raise PermissionError("Populated column removal requires typed authorization")
         for table, column, _, _ in reviewed:
             raw.execute(f'ALTER TABLE {_quote(table, "sqlite")} '
                         f'DROP COLUMN {_quote(column, "sqlite")}')
         matches_models_with_indexes(raw, models)
         warnings = [f'Approved permanent deletion of {table}.{column}: '
-                    f'{count} existing non-NULL value(s); verified backup: {verified_backup}'
+                    f'{count} existing non-NULL value(s); backup recommended, not automatically created'
                     for table, column, count, _ in reviewed if count]
         path = _new_record(raw, root, db_file, models, title, warnings)
         raw.commit()
@@ -927,7 +925,7 @@ def review_length_change(raw, root, db_file, models):
 
 
 def migrate_default_change(raw, root, db_file, models, title, proposal, *, kind="default_mismatch",
-                           reviewed_removals=(), acknowledged=(), verified_backup=None):
+                           reviewed_removals=(), acknowledged=()):
     """Rebuild one reviewed ordinary column change and retain existing rows."""
     from .schema import create_table_sql
     from .core import Connection
@@ -946,10 +944,8 @@ def migrate_default_change(raw, root, db_file, models, title, proposal, *, kind=
             if actual != reviewed_removals:
                 raise RuntimeError("Column-removal review is stale; rerun db check")
             dangerous = {(table_name, col) for table_name, col, count, _ in actual if count}
-            if dangerous and (not dangerous.issubset(set(acknowledged)) or verified_backup is None):
-                raise PermissionError("Populated column removal requires typed authorization and verified backup")
-            if dangerous and (not Path(verified_backup).is_file() or Path(verified_backup).is_symlink()):
-                raise PermissionError("Verified pre-migration backup is unavailable")
+            if dangerous and not dangerous.issubset(set(acknowledged)):
+                raise PermissionError("Populated column removal requires typed authorization")
         target = next(m for m in models if m.__table_name__ == table)
         temporary = "aurora_rebuild_" + hashlib.sha256(repr(proposal).encode()).hexdigest()[:24]
         target_sql = create_table_sql(target, "sqlite", models=models)
@@ -992,7 +988,7 @@ def migrate_default_change(raw, root, db_file, models, title, proposal, *, kind=
             raise RuntimeError("Default change altered the number of application rows")
         matches_models_with_indexes(raw, models)
         warnings = [f'Approved permanent deletion of {t}.{col}: {count} existing non-NULL '
-                    f'value(s); verified backup: {verified_backup}'
+                    f'value(s); backup recommended, not automatically created'
                     for t, col, count, _ in reviewed_removals if count]
         path = _new_record(raw, root, db_file, models, title, warnings)
         raw.commit()
@@ -1059,8 +1055,8 @@ def review_table_transition(raw, root, db_file, models):
 
 
 def migrate_table_transition(raw, root, db_file, models, title, proposal, *,
-                             reviewed_removals=(), acknowledged=(), verified_backup=None):
+                             reviewed_removals=(), acknowledged=()):
     """Execute one reviewed table transition and record one forward snapshot."""
     return migrate_default_change(raw, root, db_file, models, title, proposal,
                                   kind="table_transition", reviewed_removals=reviewed_removals,
-                                  acknowledged=acknowledged, verified_backup=verified_backup)
+                                  acknowledged=acknowledged)

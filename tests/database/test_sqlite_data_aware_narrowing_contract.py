@@ -25,10 +25,10 @@ def _project(root):
         "    title = column(str, length=50)\n"
     )
     (root / "aurora_databases.json").write_text(json.dumps({
-        "databases": {"default": {"engine": "sqlite", "database": "data.sqlite3"}}
+        "databases": {"data": {"engine": "sqlite", "extension": "sqlite3"}}
     }))
     (root / "aurora_models.json").write_text(json.dumps({
-        "databases": {"default": ["models.Users:Users", "models.Messages:Messages"]}
+        "databases": {"data": ["models.Users:Users", "models.Messages:Messages"]}
     }))
     return messages
 
@@ -39,7 +39,7 @@ def test_narrowing_accepts_empty_or_fitting_data(tmp_path, monkeypatch, capsys, 
     monkeypatch.chdir(tmp_path)
     assert main(["db", "init", "--confirm", "yes"]) == 0
     spec = tmp_path / "create_index.json"
-    spec.write_text(json.dumps({"database": "default", "create_index": {
+    spec.write_text(json.dumps({"database": "data", "create_index": {
         "table": "messages", "name": "messages_user_idx", "columns": ["user_id"]}}))
     assert main(["db", "migrate", "-c", spec.name, "--confirm", "yes"]) == 0
     with sqlite3.connect(tmp_path / "data.sqlite3") as db:
@@ -90,7 +90,7 @@ def test_narrow_then_widen_preserves_fk_index_rows_and_history(tmp_path, monkeyp
     monkeypatch.chdir(tmp_path)
     assert main(["db", "init", "--confirm", "yes"]) == 0
     spec = tmp_path / "create_index.json"
-    spec.write_text(json.dumps({"database": "default", "create_index": {
+    spec.write_text(json.dumps({"database": "data", "create_index": {
         "table": "messages", "name": "messages_user_idx", "columns": ["user_id"]}}))
     assert main(["db", "migrate", "-c", spec.name, "--confirm", "yes"]) == 0
     with sqlite3.connect(tmp_path / "data.sqlite3") as db:

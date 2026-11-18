@@ -73,7 +73,7 @@ def _read_document(source):
     if not isinstance(document, dict) or document.get("format", _FORMAT) != _FORMAT:
         raise ValueError("Unsupported application configuration format")
 
-    if set(document) - {"format", "application", "limits", "constants", "statics", "strict", "server", "sessions"}:
+    if set(document) - {"format", "application", "limits", "constants", "statics", "strict", "server", "sessions", "default_database"}:
         raise ValueError("Unknown application configuration section")
 
     return document
@@ -135,6 +135,7 @@ class ApplicationSettings:
     statics: str | None
     strict: bool
     server: object
+    default_database: str | None
 
 
 def load_application_settings(source):
@@ -146,6 +147,12 @@ def load_application_settings(source):
     statics = document.get("statics")
     strict = document.get("strict", True)
     server = document.get("server", {})
+    default_database = document.get("default_database")
+
+    if "default_database" in document:
+        if (not isinstance(default_database, str) or
+                not re.fullmatch(r"[a-z][a-z0-9_]*", default_database)):
+            raise ValueError("default_database must be a configured lowercase database name")
 
     if not isinstance(strict, bool):
         raise ValueError("strict must be a JSON boolean")
@@ -258,5 +265,6 @@ def load_application_settings(source):
         constructor_options=MappingProxyType(constructor_options),
         statics=statics,
         strict=strict,
+        default_database=default_database,
         server=MappingProxyType({"host": host, "port": port, "reload": reload}),
     )

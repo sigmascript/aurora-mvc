@@ -341,6 +341,15 @@ def verify_server_declared_schema(connection, models, *, evidence_models=None,
         names = {row["name"] for row in objects}
         valid_kinds = all(row["kind"] == "r" for row in objects)
 
+    # Backup catalogs are internal evidence, not application model tables.
+    # Recognize them only after validating their exact known definition; never
+    # exempt an arbitrary table merely because it uses the reserved name.
+    if "__backups__" in names:
+        from .server_backup_catalog import _catalog_format
+        if _catalog_format(connection) is None:
+            raise RuntimeError("Server backup catalog disappeared during verification")
+        expected.add("__backups__")
+
     if not valid_kinds or names != expected or len(objects) != len(expected):
         raise RuntimeError("Server Initial contains unexpected or missing schema objects")
 

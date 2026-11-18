@@ -24,9 +24,9 @@ def project(root):
         '    visits = column(int, default=10)\n'
         '    title = column(str, length=50)\n')
     (root / 'aurora_models.json').write_text(json.dumps({
-        'databases': {'default': ['models.Users:Users', 'models.Messages:Messages']}}))
+        'databases': {'data': ['models.Users:Users', 'models.Messages:Messages']}}))
     (root / 'aurora_databases.json').write_text(json.dumps({
-        'databases': {'default': {'engine': 'sqlite', 'database': 'data.sqlite3'}}}))
+        'databases': {'data': {'engine': 'sqlite', 'extension': 'sqlite3'}}}))
     return messages
 
 
@@ -37,7 +37,7 @@ def seed(root, *, indexed=True):
         db.execute('INSERT INTO messages(id,user_id,visits,title) VALUES(1,1,5,?)', ('hello',))
     if indexed:
         change = root / 'index.json'
-        change.write_text(json.dumps({'database': 'default', 'create_index': {
+        change.write_text(json.dumps({'database': 'data', 'create_index': {
             'table': 'messages', 'name': 'message_user_idx', 'columns': ['user_id']}}))
         assert main(['db', 'migrate', '-c', str(change), '--confirm', 'yes']) == 0
 

@@ -50,14 +50,16 @@ def test_read_only_init_check_absolute_url_does_not_create_project_relative_file
     project = tmp_path / "project"
     project.mkdir()
     config = project / "aurora_databases.json"
-    config.write_text(json.dumps({"databases": {"default": {"url": "sqlite:///" + target.as_posix()}}}))
-    # Validation and model selection are still exercised by the public check.
+    config.write_text(json.dumps({"databases": {"target": {"url": "sqlite:///" + target.as_posix()}}}))
+    # The single-name contract must reject an absolute URL before any database write.
     module = project / "models.py"
     module.write_text("from aurora.database import Model, column\nclass Item(Model):\n    id = column(int, primary_key=True)\n")
-    args = Namespace(config=str(config), database="default", model=["models:Item"],
+    args = Namespace(config=str(config), database="target", model=["models:Item"],
                      models_config=str(project / "aurora_models.json"))
-    assert run_init_check(args) == 0
+    with pytest.raises(ValueError, match="project-relative|does not match its configured name"):
+        run_init_check(args)
     assert not (project / "target.sqlite3").exists()
+    assert target.is_file()
 
 
 def test_read_only_check_refuses_unmanaged_existing_schema_without_mutation(tmp_path, capsys):
@@ -65,13 +67,13 @@ def test_read_only_check_refuses_unmanaged_existing_schema_without_mutation(tmp_
     with sqlite3.connect(target) as con:
         con.execute("CREATE TABLE unrelated (id INTEGER)")
     (tmp_path / "aurora_databases.json").write_text(json.dumps({
-        "databases": {"default": {"url": "sqlite:///unmanaged.sqlite3"}}
+        "databases": {"unmanaged": {"url": "sqlite:///unmanaged.sqlite3"}}
     }))
     (tmp_path / "models.py").write_text(
         "from aurora.database import Model, column\n"
         "class Item(Model):\n    id = column(int, primary_key=True)\n"
     )
-    args = Namespace(config=str(tmp_path / "aurora_databases.json"), database="default",
+    args = Namespace(config=str(tmp_path / "aurora_databases.json"), database="unmanaged",
                      model=["models:Item"], models_config=str(tmp_path / "aurora_models.json"))
     assert run_init_check(args) == 3
     assert json.loads(capsys.readouterr().out)["status"] == "REFUSED"

@@ -117,6 +117,29 @@ def _read_history(connection, alias, *, models=None, parsed=None):
 def run_history(args):
     """Inspect migration history without changing database state."""
     config, base_dir = _load_config(args.config)
+    if getattr(args, "backups", False):
+        from .backup_artifacts import list_artifacts, destination_fingerprint
+        url = config.resolve(args.database)
+        identity = destination_fingerprint(url, base_dir)
+        reports = list_artifacts(base_dir, args.database, identity)
+        if urlsplit(url).scheme in ("sqlite", "sqlite+pysqlite"):
+            from .sqlite_backup_catalog import inspect_sqlite_catalog
+            try:
+                db_file = _existing_sqlite_path(url, base_dir)
+            except ValueError:
+                db_file = None
+            if db_file is not None:
+                reports = inspect_sqlite_catalog(db_file, base_dir, args.database, identity, reports)
+        elif urlsplit(url).scheme in ("mysql+pymysql", "postgresql+psycopg"):
+            from .server_backup_catalog import inspect_server_catalog
+            with config.connect(args.database) as connection:
+                reports = inspect_server_catalog(connection, base_dir, args.database, identity, reports)
+        print(f"Database: {args.database}")
+        print(f"Recorded backups: {len(reports)}")
+        for item in reports:
+            print(f"  {item['id']}: {item['status']}" +
+                  (f" — {item['title']}" if item.get("title") else ""))
+        return 3 if any(item["status"] != "ARTIFACT_VERIFIED" for item in reports) else 0
     url = config.resolve(args.database)
     parsed = urlsplit(url)
     verify_models = getattr(args, "verify_models", False)

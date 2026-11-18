@@ -65,22 +65,15 @@ def _database_failure(exc, args, action):
                         "password or URL in an untracked local configuration. "
                         "No database changes were made.\n")
             known = {
-                "requires engine sqlite, mysql, or postgresql":
+                "requires engine sqlite, mysql, postgres, or postgresql":
                     "Set 'engine' to sqlite, mysql, or postgresql",
-                "SQLite settings require only engine and database":
-                    "SQLite accepts only 'engine' and 'database'",
-                "has an invalid SQLite database path":
-                    "Specify a valid SQLite 'database' file path",
-                "requires engine, database and username":
-                    "MySQL/PostgreSQL readable settings require 'engine', 'database', "
-                    "and 'username'; remove any unknown fields",
                 "must choose password or password_env":
                     "Use either 'password' (literal) or 'password_env' (environment variable name), not both",
                 "has an invalid host": "Specify a valid 'host' (default: localhost)",
                 "requires a TCP port from 1 to 65535":
                     "Set 'port' to an integer from 1 to 65535",
                 "has an invalid database name or username":
-                    "Provide nonempty 'database' and 'username' values without URL delimiters",
+                    "Provide a nonempty 'username' without URL delimiters",
                 "has an invalid password environment variable name":
                     "Set 'password_env' to a valid environment variable name",
                 "has an invalid password": "Set 'password' to a string",
@@ -94,22 +87,50 @@ def _database_failure(exc, args, action):
                 "has an invalid or unsupported URL":
                     "Use a supported SQLite, MySQL or PostgreSQL connection URL; see docs/database.md",
             }
+            if reason == "SQLite accepts only engine and optional extension":
+                return (f"aurora: Database {action} refused: database '{alias}': "
+                        "SQLite accepts only 'engine' and optional 'extension'. "
+                        "No database changes were made.\n")
+            if reason == "has unknown connection settings":
+                return (f"aurora: Database {action} refused: database '{alias}': "
+                        "Remove any unknown fields; server settings require 'username'. "
+                        "No database changes were made.\n")
+            if reason == "requires username":
+                return (f"aurora: Database {action} refused: database '{alias}': "
+                        "Set 'username'; remove any unknown fields. "
+                        "No database changes were made.\n")
+            if reason == "SQLite accepts only engine and optional extension; remove database":
+                return (f"aurora: Database {action} refused: database '{alias}': "
+                        "Remove the obsolete database field; SQLite uses the configuration name "
+                        "and optional extension. No database changes were made.\n")
+            if reason == "requires engine and username; remove database":
+                return (f"aurora: Database {action} refused: database '{alias}': "
+                        "Use the configuration name as the physical database name; "
+                        "remove database and provide engine and username. "
+                        "No database changes were made.\n")
+            if reason in ("URL does not match its configured name", "URL must identify a project-relative SQLite file"):
+                return (f"aurora: Database {action} refused: database '{alias}': "
+                        "The URL destination must match the configured database name. "
+                        "No database changes were made.\n")
+            if reason == "has an invalid SQLite extension":
+                return (f"aurora: Database {action} refused: database '{alias}': "
+                        "SQLite extension must be sqlite3, sqlite, db or empty. "
+                        "No database changes were made.\n")
             if reason in known:
                 return (f"aurora: Database {action} refused: database '{alias}': "
                         f"{known[reason]}. No database changes were made.\n")
             collision = re.fullmatch(
-                r"resolves to the same destination as database '([a-z][a-z0-9_]*)'; configure one canonical name",
+                r"resolves to the same destination as database '([a-z][a-z0-9_]*)'; use one configured name",
                 reason,
             )
             if collision:
                 return (f"aurora: Database {action} refused: '{alias}' and "
                         f"'{collision.group(1)}' select the same database. "
-                        "Use one canonical alias. No database changes were made.\n")
+                        "Use one configured database name. No database changes were made.\n")
         top_level = {
             "DATABASES must be a mapping": "'databases' must contain a JSON object of named databases",
-            "DATABASES must define a 'default' database": "Add a 'default' entry to 'databases'",
-            "Database aliases must be lowercase identifiers":
-                "Use lowercase database aliases containing letters, digits or underscores",
+            "Database names must be lowercase identifiers":
+                "Use lowercase database names containing letters, digits or underscores",
             "Cannot read database configuration":
                 "Check that aurora_databases.json exists and contains valid JSON",
             "Expected only a databases mapping":
@@ -280,13 +301,14 @@ def main(argv: list[str] | None = None) -> int:
     check = db_actions.add_parser(
         "check", help="Check database setup and model changes without making changes",
     )
-    check.add_argument("--database", default="default", help="Database name from your project settings")
+    check.add_argument("--database", default=None, help="Database name from your project settings")
     check.set_defaults(config="aurora_databases.json", models_config="aurora_models.json",
                        model=[], format="text", check=False, explain=False)
 
     history = db_actions.add_parser("history", help="Show recorded database changes")
-    history.add_argument("--database", default="default",
+    history.add_argument("--database", default=None,
                          help="Database name from your project settings")
+    history.add_argument("--backups", action="store_true", help="List verified backup artifacts without modifying storage")
     history.set_defaults(config="aurora_databases.json", models_config="aurora_models.json",
                          history_file=None, intents=False, verify_models=False, format="text")
 
@@ -295,8 +317,8 @@ def main(argv: list[str] | None = None) -> int:
         description=("Back up the selected database to a new file. Existing backups "
                      "are never overwritten. MySQL on Windows uses a configured login-path."),
     )
-    backup.add_argument("--database", default="default", help="Database name from project settings")
-    backup.add_argument("--to", required=True, help="New backup file path")
+    backup.add_argument("--database", default=None, help="Database name from project settings")
+    backup.add_argument("--title", help="Optional description for the generated backup")
     backup.add_argument("--login-path", help="MySQL authentication profile (Windows)")
     backup.set_defaults(config="aurora_databases.json")
 
@@ -304,8 +326,8 @@ def main(argv: list[str] | None = None) -> int:
         "restore", help="Restore execution is disabled (always refused)",
         description="Restore execution is disabled for all database backends. No database files are created or modified.",
     )
-    restore.add_argument("--database", default="default", help="Database name from project settings")
-    restore.add_argument("--from", dest="source", required=True, help="Backup file path")
+    restore.add_argument("--database", default=None, help="Database name from project settings")
+    restore.add_argument("--backup", required=True, metavar="BACKUP_ID", help="Exact managed backup identifier (restore disabled)")
     restore.set_defaults(config="aurora_databases.json")
 
     init = db_actions.add_parser(
@@ -330,13 +352,13 @@ def main(argv: list[str] | None = None) -> int:
     init.add_argument("--title", help="Name for this initialization")
     init.add_argument("--check", action="store_true", help=argparse.SUPPRESS)
     init.set_defaults(config="aurora_databases.json")
-    init.add_argument("--database", default="default", help="Database name from your project settings")
+    init.add_argument("--database", default=None, help="Database name from your project settings")
     init.add_argument("--model", action="append", default=[], metavar="MODULE:CLASS", help=argparse.SUPPRESS)
     init.set_defaults(models_config="aurora_models.json")
     sync = db_actions.add_parser('migrate', help='Apply supported model and schema changes')
     sync.add_argument('-c', '--change', dest='changes',
                       help='JSON file describing specific schema changes')
-    sync.add_argument('--database', default='default', help='Database name from your project settings')
+    sync.add_argument('--database', default=None, help='Database name from your project settings')
     sync.set_defaults(
         model=None, config='aurora_databases.json',
         models_config='aurora_models.json', explain=False, format='text',
@@ -352,6 +374,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     sync.add_argument('--confirm', help='Confirm migration with yes or y')
     sync.add_argument('--title', help='Name for this migration (optional)')
+    sync.add_argument('--reconcile-interrupted', metavar='TABLE.COLUMN',
+                      help='Explicit history-only recovery of one verified interrupted MySQL column addition')
 
     # Keep backend-specific limitations visible without implying universal support.
     sync.description = (
@@ -372,6 +396,18 @@ def main(argv: list[str] | None = None) -> int:
     reload_flags.add_argument("--no-reload", dest="reload", action="store_false",
                               help="Disable automatic reload")
     args = parser.parse_args(argv)
+
+    if args.command == "db" and args.action != "restore" and args.database is None:
+        from aurora.database.cli_plan import _load_config, resolve_project_database
+
+        try:
+            configured, project_root = _load_config(args.config)
+            args.database = resolve_project_database(configured, project_root)
+        except (ValueError, TypeError, OSError) as error:
+            # Use the established allowlisted, credential-safe diagnostics.
+            if str(error) == "Multiple databases configured; set default_database or select --database":
+                parser.exit(1, "aurora: Configure default_database or specify --database. No changes made.\n")
+            parser.exit(1, _database_failure(error, args, "selection"))
 
     # AuroraSQL is the only public CLI database engine. Legacy internals remain
     # installed until the retirement acceptance gate, but cannot be selected
@@ -407,7 +443,29 @@ def main(argv: list[str] | None = None) -> int:
                     raise ValueError("Production backup requires separate approval")
 
                 from aurora.database.cli_mysql_backup import backup_mysql_database
-                backup_mysql_database(args.config, args.database, args.to, args.login_path)
+                from aurora.database.backup_artifacts import (prepare_artifact, record_artifact,
+                    destination_fingerprint, validate_title)
+                validate_title(args.title)
+                _, project_root = _load_config(args.config)
+                from aurora.database.server_backup_catalog import (inspect_server_catalog,
+                                                                     reconcile_server_catalog, _catalog_format)
+                from aurora.database.backup_artifacts import list_artifacts
+                identity = destination_fingerprint(config.resolve(args.database))
+                with config.connect(args.database) as connection:
+                    if _catalog_format(connection) == "legacy":
+                        raise ValueError("Legacy __backups__ catalog requires an explicitly reviewed transition")
+                    reports = inspect_server_catalog(connection, project_root, args.database,
+                                                     identity, list_artifacts(project_root, args.database, identity))
+                    if any(item["status"] != "ARTIFACT_VERIFIED" for item in reports):
+                        raise ValueError("Existing backup evidence requires manual reconciliation")
+                backup_id, destination = prepare_artifact(project_root, args.database, "mysql")
+                backup_mysql_database(args.config, args.database, str(destination), args.login_path,
+                                      expected_url=config.resolve(args.database))
+                record_artifact(project_root, args.database, "mysql", backup_id, destination, args.title,
+                                destination_fingerprint(config.resolve(args.database)))
+                with config.connect(args.database) as connection:
+                    reconcile_server_catalog(connection, project_root, args.database, identity)
+                print(f"Backup completed: {backup_id}")
                 return 0
 
             if scheme == "postgresql+psycopg":
@@ -418,7 +476,29 @@ def main(argv: list[str] | None = None) -> int:
                     raise ValueError("--login-path is specific to MySQL")
 
                 from aurora.database.cli_postgres_backup import backup_postgres_database
-                backup_postgres_database(args.config, args.database, args.to)
+                from aurora.database.backup_artifacts import (prepare_artifact, record_artifact,
+                    destination_fingerprint, validate_title)
+                validate_title(args.title)
+                _, project_root = _load_config(args.config)
+                from aurora.database.server_backup_catalog import (inspect_server_catalog,
+                                                                     reconcile_server_catalog, _catalog_format)
+                from aurora.database.backup_artifacts import list_artifacts
+                identity = destination_fingerprint(config.resolve(args.database))
+                with config.connect(args.database) as connection:
+                    if _catalog_format(connection) == "legacy":
+                        raise ValueError("Legacy __backups__ catalog requires an explicitly reviewed transition")
+                    reports = inspect_server_catalog(connection, project_root, args.database,
+                                                     identity, list_artifacts(project_root, args.database, identity))
+                    if any(item["status"] != "ARTIFACT_VERIFIED" for item in reports):
+                        raise ValueError("Existing backup evidence requires manual reconciliation")
+                backup_id, destination = prepare_artifact(project_root, args.database, "postgresql")
+                backup_postgres_database(args.config, args.database, str(destination),
+                                         expected_url=config.resolve(args.database))
+                record_artifact(project_root, args.database, "postgresql", backup_id, destination, args.title,
+                                destination_fingerprint(config.resolve(args.database)))
+                with config.connect(args.database) as connection:
+                    reconcile_server_catalog(connection, project_root, args.database, identity)
+                print(f"Backup completed: {backup_id}")
                 return 0
 
             if args.login_path:
@@ -463,6 +543,16 @@ def main(argv: list[str] | None = None) -> int:
         # remain internal and cannot be selected using obsolete CLI flags.
         if args.confirm not in (None, "yes", "y"):
             parser.exit(2, "aurora: --confirm accepts only yes or y.\n")
+
+        if getattr(args, 'reconcile_interrupted', None):
+            if args.changes or args.title is None or not args.title.strip():
+                parser.exit(2, 'aurora: Recovery requires --title and cannot use -c.\n')
+            from aurora.database.cli_server_model_migration import run_interrupted_reconciliation
+            try:
+                return run_interrupted_reconciliation(args)
+            except (ValueError, RuntimeError, PermissionError):
+                parser.exit(1, 'aurora: History-only reconciliation refused or incomplete. '
+                            'Inspect database schema, snapshots and history before retry.\n')
 
         if args.changes is not None:
             from aurora.database.cli_explicit_operations import run_explicit_operations

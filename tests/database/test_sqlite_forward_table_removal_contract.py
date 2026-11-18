@@ -14,7 +14,7 @@ from test_sqlite_forward_new_table_contract import add_model
 def unregister(root, name):
     path = root / 'aurora_models.json'
     content = json.loads(path.read_text())
-    content['databases']['default'].remove(f'models.{name}:{name}')
+    content['databases']['data'].remove(f'models.{name}:{name}')
     path.write_text(json.dumps(content))
     (root / 'models' / f'{name}.py').unlink()
 
@@ -67,25 +67,21 @@ class FakeTTY:
         return True
 
 
-def test_populated_table_backup_and_typed_ack(tmp_path, monkeypatch):
+def test_populated_table_without_forced_backup_and_typed_ack(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     registered_dummy(tmp_path, rows=2)
     monkeypatch.setattr(sys, 'stdin', FakeTTY())
-    replies = iter(['y', 'DELETE default.dummy'])
+    replies = iter(['y', 'DELETE data.dummy'])
     monkeypatch.setattr('builtins.input', lambda prompt='': next(replies))
     assert main(['db', 'migrate', '--title', 'Remove populated Dummy']) == 0
     assert state(tmp_path) == (None, 4)
-    backup_files = list((tmp_path / 'backups' / 'data').glob('*.sqlite3'))
-    assert len(backup_files) == 1
-    with sqlite3.connect(backup_files[0]) as old:
-        assert old.execute('SELECT COUNT(*) FROM dummy').fetchone() == (2,)
-        assert old.execute('PRAGMA integrity_check').fetchone() == ('ok',)
+    assert not list((tmp_path / '__backups__' / 'data').glob('*.sqlite3'))
     with sqlite3.connect(tmp_path / 'data.sqlite3') as db:
         assert db.execute('SELECT warnings FROM __migrations__ ORDER BY id DESC LIMIT 1').fetchone()[0]
         read_history(db, tmp_path, tmp_path / 'data.sqlite3')
 
 
-def test_wrong_typed_ack_keeps_table_history_and_verified_backup(tmp_path, monkeypatch):
+def test_wrong_typed_ack_keeps_table_history_without_backup(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     registered_dummy(tmp_path, rows=1)
     monkeypatch.setattr(sys, 'stdin', FakeTTY())
@@ -93,7 +89,7 @@ def test_wrong_typed_ack_keeps_table_history_and_verified_backup(tmp_path, monke
     monkeypatch.setattr('builtins.input', lambda prompt='': next(replies))
     assert main(['db', 'migrate']) == 0
     assert state(tmp_path) == (('dummy',), 3)
-    assert len(list((tmp_path / 'backups' / 'data').glob('*.sqlite3'))) == 1
+    assert not list((tmp_path / '__backups__' / 'data').glob('*.sqlite3'))
 
 
 def test_referenced_table_refuses_drop(tmp_path, monkeypatch):
@@ -120,7 +116,7 @@ def test_empty_table_with_its_own_ordinary_index_is_removed(tmp_path, monkeypatc
     assert main(['db', 'migrate', '--confirm', 'yes']) == 0
     index_change = tmp_path / 'dummy_index.json'
     index_change.write_text(json.dumps({
-        'database': 'default', 'create_index': {
+        'database': 'data', 'create_index': {
             'table': 'dummy', 'name': 'dummy_label_idx', 'columns': ['label']}}))
     assert main(['db', 'migrate', '-c', str(index_change), '--confirm', 'yes']) == 0
     unregister(tmp_path, 'Dummy')

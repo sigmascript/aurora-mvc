@@ -90,12 +90,13 @@ def create_project(name: str, *, directory: Path | None = None, mvc: bool = Fals
         # scaffolds provide inert configuration without opening a database.
         if mvc:
             (root / "aurora_databases.json").write_text(
-                json.dumps({"databases": {"default": {"engine": "sqlite", "database": "data.sqlite3"}}}, indent=2) + "\n",
+                json.dumps({"databases": {"data": {"engine": "sqlite", "extension": "sqlite3"}}}, indent=2) + "\n",
                 encoding="utf-8",
             )
         (root / "aurora_config.json").write_text(
             json.dumps({
                 "application": {"name": name, "timezone": "UTC"},
+                **({"default_database": "data"} if mvc else {}),
                 "limits": {},
                 "constants": {},
             }, indent=2) + "\n", encoding="utf-8",
@@ -526,7 +527,11 @@ def _reject_project_model_name_collision(project: Path, name: str, destination: 
     assignments = {reference: alias for alias, references in mapping.items()
                    for reference in references}
     proposed_ref = ".".join(destination.relative_to(project).with_suffix("").parts) + f":{name}"
-    proposed_alias = assignments.get(proposed_ref, "default")
+    from .database.cli_plan import _load_config, resolve_project_database
+
+    config, _ = _load_config(project / "aurora_databases.json")
+    selected = resolve_project_database(config, project)
+    proposed_alias = assignments.get(proposed_ref, selected)
     folders = [project / "models", project / "app" / "models"]
     apps = project / "apps"
 
@@ -545,7 +550,7 @@ def _reject_project_model_name_collision(project: Path, name: str, destination: 
             raise ValueError(f"Unsafe model path: {existing}")
 
         ref = ".".join(existing.relative_to(project).with_suffix("").parts) + f":{name}"
-        if assignments.get(ref, "default") == proposed_alias:
+        if assignments.get(ref, selected) == proposed_alias:
             raise ValueError(
                 f"Model {name} already exists for database '{proposed_alias}': {existing}. "
                 "No files or database objects were changed."

@@ -100,6 +100,29 @@ def _load_config(path):
     return DatabaseConfiguration(raw["databases"]), location.parent
 
 
+def resolve_project_database(config, project_root, selected=None):
+    """Choose a database without changing its stable history identity."""
+    if selected is not None:
+        config.resolve(selected)
+        return selected
+
+    from aurora.core.app_settings import load_application_settings
+
+    application_file = Path(project_root) / "aurora_config.json"
+    configured = (load_application_settings(application_file).default_database
+                  if application_file.is_file() else None)
+    if configured is not None:
+        config.resolve(configured)
+        return configured
+    names = config.names()
+    if len(names) == 1:
+        return names[0]
+    if "default" in names:
+        # Preserve older multi-database projects' historical default identity.
+        return "default"
+    raise ValueError("Multiple databases configured; set default_database or select --database")
+
+
 @contextmanager
 def _project_import_path(project_root):
     """Temporarily expose the explicitly selected project's model modules."""

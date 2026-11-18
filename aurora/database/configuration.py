@@ -1,4 +1,4 @@
-"""Explicit, immutable AuroraSQL database aliases.
+"""Explicit, immutable AuroraSQL named database connections.
 
 No SQLAlchemy dependency, implicit connections, or schema changes.
 """
@@ -54,56 +54,57 @@ def _destination_identity(parsed):
 
 
 
-def _readable_url(alias, entry):
+def _readable_url(name, entry):
     """Convert explicit key/value settings to the existing AuroraSQL URL contract."""
     engine = entry.get("engine")
     if engine not in ("sqlite", "mysql", "postgresql", "postgres"):
-        raise ValueError(f"Database '{alias}' requires engine sqlite, mysql, postgres, or postgresql")
+        raise ValueError(f"Database '{name}' requires engine sqlite, mysql, postgres, or postgresql")
 
     if engine == "postgres":
         engine = "postgresql"
 
     if engine == "sqlite":
-        if set(entry) != {"engine", "database"}:
-            raise ValueError(f"Database '{alias}' SQLite settings require only engine and database")
-        database = entry["database"]
-        if not isinstance(database, str) or not database or "?" in database or "#" in database:
-            raise ValueError(f"Database '{alias}' has an invalid SQLite database path")
-        # Keep the existing project-relative/absolute SQLite URL interpretation.
-        if database == ":memory:":
-            return "sqlite:///:memory:"
-        path = database.replace("\\", "/")
-        if path.startswith("/"):
-            return "sqlite:////" + quote(path.lstrip("/"), safe="/")
-        return "sqlite:///" + quote(path, safe="/")
+        if "database" in entry:
+            raise ValueError(f"Database '{name}' SQLite accepts only engine and optional extension; remove database")
+        if set(entry) - {"engine", "extension"}:
+            raise ValueError(f"Database '{name}' SQLite accepts only engine and optional extension")
+        extension = entry.get("extension", "sqlite3")
+        if type(extension) is not str or extension not in ("sqlite3", "sqlite", "db", ""):
+            raise ValueError(f"Database '{name}' has an invalid SQLite extension")
+        filename = name + ("." + extension if extension else "")
+        return "sqlite:///" + quote(filename, safe="")
 
-    allowed = {"engine", "host", "port", "database", "username", "password", "password_env"}
-    if set(entry) - allowed or not {"engine", "database"}.issubset(entry) or "username" not in entry:
-        raise ValueError(f"Database '{alias}' requires engine, database and username")
+    allowed = {"engine", "host", "port", "username", "password", "password_env"}
+    if "database" in entry:
+        raise ValueError(f"Database '{name}' requires engine and username; remove database")
+    if set(entry) - allowed:
+        raise ValueError(f"Database '{name}' has unknown connection settings")
+    if "username" not in entry:
+        raise ValueError(f"Database '{name}' requires username")
     if "password" in entry and "password_env" in entry:
-        raise ValueError(f"Database '{alias}' must choose password or password_env")
+        raise ValueError(f"Database '{name}' must choose password or password_env")
 
     host = entry.get("host", "localhost")
     port = entry.get("port", 3306 if engine == "mysql" else 5432)
-    name = entry["database"]
+    name = name
     user = entry["username"]
     if not isinstance(host, str) or not host or any(ch in host for ch in "/@?#"):
-        raise ValueError(f"Database '{alias}' has an invalid host")
+        raise ValueError(f"Database '{name}' has an invalid host")
     if type(port) is not int or not 1 <= port <= 65535:
-        raise ValueError(f"Database '{alias}' requires a TCP port from 1 to 65535")
+        raise ValueError(f"Database '{name}' requires a TCP port from 1 to 65535")
     if (not isinstance(name, str) or not name or "/" in name or "?" in name or "#" in name
             or not isinstance(user, str) or not user):
-        raise ValueError(f"Database '{alias}' has an invalid database name or username")
+        raise ValueError(f"Database '{name}' has an invalid database name or username")
     password = entry.get("password")
     if "password_env" in entry:
         variable = entry["password_env"]
         if not isinstance(variable, str) or not _ENV.fullmatch(variable):
-            raise ValueError(f"Database '{alias}' has an invalid password environment variable name")
+            raise ValueError(f"Database '{name}' has an invalid password environment variable name")
         password = os.environ.get(variable)
         if password is None or not password:
-            raise ValueError(f"Database '{alias}' requires nonempty environment variable '{variable}'")
+            raise ValueError(f"Database '{name}' requires nonempty environment variable '{variable}'")
     if password is not None and not isinstance(password, str):
-        raise ValueError(f"Database '{alias}' has an invalid password")
+        raise ValueError(f"Database '{name}' has an invalid password")
     address = f"[{host}]" if ":" in host and not host.startswith("[") else host
     credentials = quote(user, safe="")
     if password is not None:
@@ -119,45 +120,44 @@ class DatabaseConfiguration:
         # Reject malformed configuration before resolving any connection URLs.
         if not isinstance(databases, Mapping):
             raise TypeError("DATABASES must be a mapping")
+        if not databases:
+            raise ValueError("DATABASES must contain at least one named database")
 
-        if "default" not in databases:
-            raise ValueError("DATABASES must define a 'default' database")
-
-        # Resolve aliases eagerly so later lookups cannot depend on changed environment values.
+        # Resolve names eagerly so later lookups cannot depend on changed environment values.
         resolved = {}
         destinations = {}
 
-        for alias, entry in databases.items():
-            if not isinstance(alias, str) or not _ALIAS.fullmatch(alias):
-                raise ValueError("Database aliases must be lowercase identifiers")
+        for name, entry in databases.items():
+            if not isinstance(name, str) or not _ALIAS.fullmatch(name):
+                raise ValueError("Database names must be lowercase identifiers")
 
             if not isinstance(entry, Mapping):
-                raise ValueError(f"Database '{alias}' must be a mapping")
+                raise ValueError(f"Database '{name}' must be a mapping")
 
             settings = entry
             # URL and environment-backed URL remain supported optional forms.
             if set(settings) in ({"url"}, {"url_env"}):
                 url = None
             elif "url" in settings or "url_env" in settings:
-                raise ValueError(f"Database '{alias}' cannot mix URL and readable connection settings")
+                raise ValueError(f"Database '{name}' cannot mix URL and readable connection settings")
             else:
-                url = _readable_url(alias, settings)
+                url = _readable_url(name, settings)
 
             if "url_env" in settings:
-                name = settings["url_env"]
+                variable = settings["url_env"]
 
-                if not isinstance(name, str) or not _ENV.fullmatch(name):
-                    raise ValueError(f"Database '{alias}' has an invalid environment variable name")
+                if not isinstance(variable, str) or not _ENV.fullmatch(variable):
+                    raise ValueError(f"Database '{name}' has an invalid environment variable name")
 
-                url = os.environ.get(name)
+                url = os.environ.get(variable)
 
                 if not url or not url.strip():
-                    raise ValueError(f"Database '{alias}' requires a nonempty environment variable '{name}'")
+                    raise ValueError(f"Database '{name}' requires a nonempty environment variable '{variable}'")
             elif "url" in settings:
                 url = settings["url"]
 
             if not isinstance(url, str) or not url.strip():
-                raise ValueError(f"Database '{alias}' requires a nonempty string URL")
+                raise ValueError(f"Database '{name}' requires a nonempty string URL")
 
             # Normalize the short PostgreSQL driver synonym before routing.
             url = _canonical_url(url)
@@ -177,39 +177,55 @@ class DatabaseConfiguration:
                 if parsed.port is not None and parsed.port <= 0:
                     raise ValueError
             except ValueError:
-                raise ValueError(f"Database '{alias}' has an invalid or unsupported URL") from None
+                raise ValueError(f"Database '{name}' has an invalid or unsupported URL") from None
+
+            # The configured database name must match its physical destination.
+            # URL-based definitions must obey the same rule as readable settings.
+            physical = unquote(parsed.path.lstrip("/"))
+            if parsed.scheme.startswith("sqlite"):
+                raw_path = unquote(parsed.path)
+                if raw_path in ("/:memory:", "") or raw_path.startswith("//"):
+                    raise ValueError(f"Database '{name}' URL must identify a project-relative SQLite file")
+                filename = Path(physical).name
+                extension = Path(filename).suffix.lstrip(".")
+                stem = filename[:-(len(extension) + 1)] if extension else filename
+                if ("/" in physical or "\\" in physical or stem != name or
+                        extension not in ("sqlite3", "sqlite", "db", "")):
+                    raise ValueError(f"Database '{name}' URL does not match its configured name")
+            elif physical != name:
+                raise ValueError(f"Database '{name}' URL does not match its configured name")
 
             identity = _destination_identity(parsed)
             if identity is not None:
                 previous = destinations.get(identity)
                 if previous is not None:
                     raise ValueError(
-                        f"Database '{alias}' resolves to the same destination as "
-                        f"database '{previous}'; configure one canonical name"
+                        f"Database '{name}' resolves to the same destination as "
+                        f"database '{previous}'; use one configured name"
                     )
-                destinations[identity] = alias
+                destinations[identity] = name
 
-            resolved[alias] = url
+            resolved[name] = url
 
         self._urls = MappingProxyType(resolved)
 
-    def aliases(self):
+    def names(self):
         return tuple(self._urls)
 
-    def resolve(self, alias="default"):
-        if alias not in self._urls:
-            raise ValueError(f"Unknown database alias: {alias!r}")
+    def resolve(self, name="default"):
+        if name not in self._urls:
+            raise ValueError(f"Unknown database name: {name!r}")
 
-        return self._urls[alias]
+        return self._urls[name]
 
-    def connect(self, alias="default"):
+    def connect(self, name="default"):
         """Open an explicitly selected connection; caller owns its lifetime."""
-        return connect(self.resolve(alias))
+        return connect(self.resolve(name))
 
     def __repr__(self):
-        return f"DatabaseConfiguration(aliases={self.aliases()!r})"
+        return f"DatabaseConfiguration(names={self.names()!r})"
 
 
 def configure_databases(databases):
-    """Install the explicit database alias configuration without connecting."""
+    """Install named database connections without opening them."""
     return DatabaseConfiguration(databases)

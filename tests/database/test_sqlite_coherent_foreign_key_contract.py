@@ -105,7 +105,7 @@ def test_redirect_fk_checks_new_target_data_before_writes(tmp_path, monkeypatch,
     manifest = tmp_path / 'aurora_models.json'
     import json
     selected = json.loads(manifest.read_text())
-    selected['databases']['default'].append('models.Accounts:Accounts')
+    selected['databases']['data'].append('models.Accounts:Accounts')
     manifest.write_text(json.dumps(selected))
     monkeypatch.chdir(tmp_path)
     assert main(['db', 'init', '--confirm', 'yes']) == 0

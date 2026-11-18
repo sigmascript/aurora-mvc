@@ -1,62 +1,54 @@
-"""Conservative, read-only destination collision checks for F06."""
-import os
-
+"""F06: project-wide physical identity is the configured database name."""
 import pytest
 
 from aurora.database.configuration import DatabaseConfiguration
 
 
-def _config(a, b):
-    return {"default": {"url": a}, "reports": {"url": b}}
+def test_distinct_names_across_all_engines_resolve_without_connecting(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    config = DatabaseConfiguration({
+        "data": {"engine": "sqlite"},
+        "data_mysql": {"engine": "mysql", "username": "root"},
+        "data_postgres": {"engine": "postgresql", "username": "postgres"},
+    })
+    assert config.names() == ("data", "data_mysql", "data_postgres")
+    assert config.resolve("data") == "sqlite:///data.sqlite3"
+    assert config.resolve("data_mysql").endswith("/data_mysql")
+    assert config.resolve("data_postgres").endswith("/data_postgres")
+    assert not list(tmp_path.iterdir())
 
 
-@pytest.mark.parametrize("a,b", [
-    ("sqlite:///data.sqlite3", "sqlite:///./data.sqlite3"),
-    ("sqlite:///data.sqlite3", "sqlite+pysqlite:///data.sqlite3"),
-    ("sqlite:///my%20data.sqlite3", "sqlite:///my data.sqlite3"),
-    ("mysql+pymysql://reader:one@LOCALHOST/app", "mysql+pymysql://writer:two@localhost:3306/app"),
-    ("postgresql+psycopg://reader@DB.EXAMPLE./app", "postgresql+psycopg://writer@db.example:5432/app"),
+@pytest.mark.parametrize("name,url", [
+    ("data", "sqlite:///other.sqlite3"),
+    ("data", "sqlite:///folder/data.sqlite3"),
+    ("data", "sqlite:////absolute/data.sqlite3"),
+    ("data_mysql", "mysql+pymysql://root@HOST/another"),
+    ("data_postgres", "postgresql+psycopg://postgres@host/another"),
 ])
-def test_proven_duplicate_destinations_are_rejected_without_connections(a, b):
-    with pytest.raises(ValueError, match="same destination.*canonical name"):
-        DatabaseConfiguration(_config(a, b))
+def test_url_based_aliasing_is_refused(name, url):
+    with pytest.raises(ValueError, match="configured name|project-relative"):
+        DatabaseConfiguration({name: {"url": url}})
 
 
-def test_duplicate_after_environment_resolution(monkeypatch):
-    monkeypatch.setenv("AURORA_D1_URL", "sqlite:///./data.sqlite3")
-    with pytest.raises(ValueError, match="same destination"):
-        DatabaseConfiguration({"default": {"url": "sqlite:///data.sqlite3"},
-                               "reports": {"url_env": "AURORA_D1_URL"}})
+def test_env_url_cannot_rebind_database_name(monkeypatch):
+    monkeypatch.setenv("AURORA_TEST_F06_URL", "sqlite:///other.sqlite3")
+    with pytest.raises(ValueError, match="configured name"):
+        DatabaseConfiguration({"data": {"url_env": "AURORA_TEST_F06_URL"}})
 
 
-def test_distinct_sqlite_databases_remain_valid(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    settings = DatabaseConfiguration(_config("sqlite:///one.sqlite3", "sqlite:///two.sqlite3"))
-    assert settings.aliases() == ("default", "reports")
-    assert list(tmp_path.iterdir()) == []  # No files or connections at configuration time.
+def test_names_cannot_be_reused_in_single_mapping():
+    # Python dicts cannot contain repeated keys; valid different names do not collide.
+    with pytest.raises(ValueError, match="lowercase identifiers"):
+        DatabaseConfiguration({"data.sqlite3": {"engine": "sqlite"}})
 
 
-def test_sqlite_absolute_and_relative_equivalence(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    absolute = "sqlite:///" + str(tmp_path / "data.sqlite3").replace("\\", "/")
-    with pytest.raises(ValueError, match="same destination"):
-        DatabaseConfiguration(_config("sqlite:///data.sqlite3", absolute))
+def test_secret_not_in_configuration_representation():
+    config = DatabaseConfiguration({"warehouse": {"engine": "mysql", "username": "root", "password": "private-example"}})
+    assert "private-example" not in repr(config)
 
 
-def test_independent_memory_connections_are_allowed():
-    assert len(DatabaseConfiguration(_config("sqlite:///:memory:", "sqlite+pysqlite:///:memory:")).aliases()) == 2
-
-
-def test_distinct_server_databases_remain_valid():
-    assert len(DatabaseConfiguration(_config("mysql+pymysql://x@host/app", "mysql+pymysql://x@host/other")).aliases()) == 2
-
-
-def test_network_alias_not_guessed():
-    assert len(DatabaseConfiguration(_config("postgresql+psycopg://x@db-one/app", "postgresql+psycopg://x@db-two/app")).aliases()) == 2
-
-
-def test_collision_diagnostic_does_not_leak_credentials():
-    with pytest.raises(ValueError) as exc:
-        DatabaseConfiguration(_config("mysql+pymysql://a:secret-one@host/app", "mysql+pymysql://b:secret-two@host/app"))
-    assert "secret-one" not in str(exc.value)
-    assert "secret-two" not in str(exc.value)
+def test_bad_password_environment_does_not_open_connections(monkeypatch):
+    monkeypatch.delenv("AURORA_NONEXISTENT_TEST", raising=False)
+    with pytest.raises(ValueError, match="AURORA_NONEXISTENT_TEST"):
+        DatabaseConfiguration({"warehouse": {"engine": "mysql", "username": "root",
+                                            "password_env": "AURORA_NONEXISTENT_TEST"}})

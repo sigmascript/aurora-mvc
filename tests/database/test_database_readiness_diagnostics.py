@@ -26,10 +26,10 @@ def _mvc_models(tmp_path, *, relationship):
         f"    user_id = column(int{ref})\n", encoding="utf-8"
     )
     (tmp_path / "aurora_databases.json").write_text(json.dumps({
-        "databases": {"default": {"url": "sqlite:///data.sqlite3"}}
+        "databases": {"data": {"url": "sqlite:///data.sqlite3"}}
     }), encoding="utf-8")
     (tmp_path / "aurora_models.json").write_text(json.dumps({
-        "databases": {"default": ["models.Users:Users", "models.Messages:Messages"]}
+        "databases": {"data": ["models.Users:Users", "models.Messages:Messages"]}
     }), encoding="utf-8")
 
 
@@ -66,7 +66,7 @@ def test_mvc_foreign_key_init_check_history_and_noop(tmp_path, monkeypatch, caps
     assert "Recorded migrations: 1" in capsys.readouterr().out
     assert main(["db", "init", "--confirm", "yes"]) == 0
     assert "already initialized" in capsys.readouterr().out
-    assert len(list((tmp_path / "migrations" / "data").glob("*.json"))) == 1
+    assert len(list((tmp_path / "__migrations__" / "data").glob("*.json"))) == 1
     # A verified older five-column history remains readable and can be adopted
     # explicitly, preserving the original history row and snapshot file.
     with sqlite3.connect(tmp_path / "data.sqlite3", isolation_level=None) as db:
@@ -86,7 +86,7 @@ def test_mvc_foreign_key_init_check_history_and_noop(tmp_path, monkeypatch, caps
         assert db.execute('SELECT * FROM "__migrations__"').fetchall() == original
         assert db.execute('SELECT name FROM sqlite_master WHERE name="migrations"').fetchone() is None
         assert db.execute('SELECT COUNT(*) FROM messages').fetchone()[0] == 1
-    assert len(list((tmp_path / "migrations" / "data").glob("*.json"))) == 1
+    assert len(list((tmp_path / "__migrations__" / "data").glob("*.json"))) == 1
 
 
 def test_missing_fk_target_refused_before_file_creation(tmp_path, monkeypatch, capsys):
@@ -101,7 +101,7 @@ def test_missing_fk_target_refused_before_file_creation(tmp_path, monkeypatch, c
         main(["db", "init", "--confirm", "yes"])
     assert exc.value.code == 1
     assert not (tmp_path / "data.sqlite3").exists()
-    assert not (tmp_path / "migrations").exists()
+    assert not (tmp_path / "__migrations__").exists()
 
 
 def test_simple_missing_database_remains_ready_for_initialization(tmp_path, monkeypatch, capsys):
@@ -124,4 +124,4 @@ def test_history_before_initialization_explains_next_action(tmp_path, monkeypatc
     assert "SQLite database file does not exist" in message
     assert "aurora db init" in message
     assert not (tmp_path / "data.sqlite3").exists()
-    assert not (tmp_path / "migrations").exists()
+    assert not (tmp_path / "__migrations__").exists()

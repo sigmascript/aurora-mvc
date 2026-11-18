@@ -25,10 +25,10 @@ def _project(root):
         "    title = column(str, length=50)\n"
     )
     (root / "aurora_databases.json").write_text(json.dumps({
-        "databases": {"default": {"engine": "sqlite", "database": "data.sqlite3"}}
+        "databases": {"data": {"engine": "sqlite", "extension": "sqlite3"}}
     }))
     (root / "aurora_models.json").write_text(json.dumps({
-        "databases": {"default": ["models.Users:Users", "models.Messages:Messages"]}
+        "databases": {"data": ["models.Users:Users", "models.Messages:Messages"]}
     }))
     return model
 
@@ -108,7 +108,7 @@ def test_fk_column_addition_preserves_existing_verified_index(tmp_path, monkeypa
     monkeypatch.chdir(tmp_path)
     assert main(["db", "init", "--confirm", "yes"]) == 0
     spec = tmp_path / "index.json"
-    spec.write_text(json.dumps({"database": "default", "create_index": {
+    spec.write_text(json.dumps({"database": "data", "create_index": {
         "table": "messages", "name": "messages_user_idx", "columns": ["user_id"]}}))
     assert main(["db", "migrate", "-c", spec.name, "--confirm", "yes"]) == 0
     _add(model, "column(int, default=0)")
@@ -133,7 +133,7 @@ def test_default_change_preserves_rows_fk_index_and_history(tmp_path, monkeypatc
     _add(model, 'column(int, default=0)')
     assert main(['db', 'migrate', '--confirm', 'yes']) == 0
     index_file = tmp_path / 'index.json'
-    index_file.write_text(json.dumps({'database': 'default', 'create_index': {
+    index_file.write_text(json.dumps({'database': 'data', 'create_index': {
         'table': 'messages', 'name': 'messages_user_idx', 'columns': ['user_id']}}))
     assert main(['db', 'migrate', '-c', index_file.name, '--confirm', 'yes']) == 0
     model.write_text(model.read_text().replace('column(int, default=0)',

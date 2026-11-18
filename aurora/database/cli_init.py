@@ -53,6 +53,10 @@ def _preflight(connection, models, alias, *, project_root=None):
             drift = [plan.table for plan in plans
                      if plan.exists and (plan.changes or plan.warnings)]
             unexpected -= {"migrations", "__migrations__"}
+            if "__backups__" in unexpected:
+                from .server_backup_catalog import _catalog_exists
+                if _catalog_exists(connection):
+                    unexpected.remove("__backups__")
             verified_current = (not unexpected and not missing and not drift and
                                 latest["models"] ==
                                 schema_snapshot(*models, dialect=dialect, allow_v2=True)["tables"])
@@ -71,6 +75,10 @@ def _preflight(connection, models, alias, *, project_root=None):
             base_dir = Path(project_root) if project_root is not None else Path.cwd()
             read_history(connection._raw, base_dir, database_path)
             unexpected -= {"migrations", "__migrations__"}
+            if "__backups__" in unexpected:
+                from .sqlite_backup_catalog import _catalog_exists
+                if _catalog_exists(connection._raw):
+                    unexpected.remove("__backups__")
             verified_current = (not unexpected and not missing and not drift and
                                 matches_models(connection._raw, models))
         except (RuntimeError, ValueError, sqlite3.Error) as error:

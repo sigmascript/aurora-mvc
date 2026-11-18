@@ -61,7 +61,7 @@ def _initialize_locked(connection, models, root, alias, title):
     # The schema and folder must be independently verified before the first DDL.
     _directory(root, alias)
     for model in models:
-        if (model.__table_name__ in (TABLE, LEGACY_TABLE)
+        if (model.__table_name__ in (TABLE, LEGACY_TABLE, "__backups__")
                 or model.__table_name__.startswith("aurorasql_")):
             raise ValueError("Model table name is reserved for migration history")
     # MySQL DDL may commit even if a later statement or evidence write fails.

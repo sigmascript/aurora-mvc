@@ -60,22 +60,19 @@ def test_empty_column_mixed_change_one_migration(tmp_path, monkeypatch):
         assert next(row for row in db.execute('PRAGMA table_info(messages)') if row[1] == 'visits')[4] == '20'
 
 
-def test_populated_column_mixed_change_one_backup_one_history(tmp_path, monkeypatch):
+def test_populated_column_mixed_change_without_backup_one_history(tmp_path, monkeypatch):
     arrange(tmp_path, monkeypatch)
     monkeypatch.setattr(sys, 'stdin', Terminal())
-    answers = iter(['y', 'DELETE default.messages.title'])
+    answers = iter(['y', 'DELETE data.messages.title'])
     monkeypatch.setattr('builtins.input', lambda prompt='': next(answers))
     assert main(['db', 'migrate', '--title', 'Mixed destructive']) == 0
     assert details(tmp_path) == (['id', 'user_id', 'visits', 'score'], 3)
-    backups = list((tmp_path / 'backups' / 'data').glob('*.sqlite3'))
-    assert len(backups) == 1
-    with sqlite3.connect(backups[0]) as db:
-        assert db.execute('SELECT title FROM messages').fetchone() == ('hello',)
+    assert not list((tmp_path / '__backups__' / 'data').glob('*.sqlite3'))
     with sqlite3.connect(tmp_path / 'data.sqlite3') as db:
         assert db.execute('SELECT visits,score FROM messages').fetchone() == (5, 7)
         warnings = db.execute('SELECT warnings FROM __migrations__ ORDER BY id DESC LIMIT 1').fetchone()[0]
         warning_entries = json.loads(warnings)
-        assert any('messages.title' in entry and str(backups[0]) in entry
+        assert any('messages.title' in entry and 'backup recommended' in entry
                    for entry in warning_entries)
     assert main(['db', 'check']) == 0
     assert_valid(tmp_path, 3)
@@ -94,11 +91,11 @@ def test_mixed_change_cancellation_preserves_everything(tmp_path, monkeypatch):
 def test_mixed_change_wrong_ack_preserves_everything(tmp_path, monkeypatch):
     arrange(tmp_path, monkeypatch)
     monkeypatch.setattr(sys, 'stdin', Terminal())
-    answers = iter(['y', 'DELETE default.messages.visits'])
+    answers = iter(['y', 'DELETE data.messages.visits'])
     monkeypatch.setattr('builtins.input', lambda prompt='': next(answers))
     assert main(['db', 'migrate']) == 0
     assert details(tmp_path) == (['id', 'user_id', 'visits', 'title'], 2)
-    assert len(list((tmp_path / 'backups' / 'data').glob('*.sqlite3'))) == 1
+    assert not list((tmp_path / '__backups__' / 'data').glob('*.sqlite3'))
     assert_valid(tmp_path, 2)
 
 
@@ -107,7 +104,7 @@ def test_mixed_change_noninteractive_danger_refused(tmp_path, monkeypatch, capsy
     with pytest.raises(SystemExit) as error:
         main(['db', 'migrate', '--confirm', 'yes'])
     assert error.value.code == 1
-    assert 'verified backup' in capsys.readouterr().err
+    assert 'target-specific' in capsys.readouterr().err
     assert details(tmp_path) == (['id', 'user_id', 'visits', 'title'], 2)
     assert not (tmp_path / 'backups').exists()
 
@@ -131,7 +128,7 @@ def test_mixed_type_conversion_and_populated_drop_preserves_values(tmp_path, mon
         '    visits = column(str, length=10)\n').replace(
         '    title = column(str, length=50)\n', ''))
     monkeypatch.setattr(sys, 'stdin', Terminal())
-    answers = iter(['y', 'DELETE default.messages.title'])
+    answers = iter(['y', 'DELETE data.messages.title'])
     monkeypatch.setattr('builtins.input', lambda prompt='': next(answers))
     assert main(['db', 'migrate', '--title', 'Convert and remove']) == 0
     assert details(tmp_path) == (['id', 'user_id', 'visits'], 3)

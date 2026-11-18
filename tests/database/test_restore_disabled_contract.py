@@ -14,7 +14,7 @@ def test_restore_refuses_without_config_or_target(tmp_path, monkeypatch, capsys,
     source = tmp_path / "backup.sqlite3"
     source.write_bytes(b"not a database")
     with pytest.raises(SystemExit) as stopped:
-        main(["db", "restore", "--database", alias, "--from", str(source)])
+        main(["db", "restore", "--database", alias, "--backup", "20261117T120000Z-0123456789abcdef01234567"])
     assert stopped.value.code == 1
     assert "restore execution is disabled" in capsys.readouterr().err.lower()
     assert sorted(p.name for p in tmp_path.iterdir()) == ["backup.sqlite3"]
@@ -30,7 +30,7 @@ def test_restore_refuses_even_with_valid_backup_and_absent_target(tmp_path, monk
     )
     target = tmp_path / "target.sqlite3"
     with pytest.raises(SystemExit) as stopped:
-        main(["db", "restore", "--from", str(backup)])
+        main(["db", "restore", "--backup", "20261117T120000Z-0123456789abcdef01234567"])
     assert stopped.value.code == 1
     assert not target.exists()
     with sqlite3.connect(backup) as conn:

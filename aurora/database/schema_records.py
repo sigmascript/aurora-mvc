@@ -1,32 +1,17 @@
 """Complete, data-only SQLite schema records for successful migrations."""
 
 import json
-import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
 
 from .snapshots import schema_snapshot
-
-
-_SAFE_DATABASE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,79}\Z")
+from .snapshot_paths import sqlite_history_name, sqlite_snapshot_directory
 
 
 def _record_directory(project_root, database_file):
-    """Choose a physical-database directory without trusting configured aliases."""
-    name = Path(database_file).stem
-
-    if not _SAFE_DATABASE.fullmatch(name) or name in (".", ".."):
-        raise ValueError("SQLite database filename cannot safely name a migration directory")
-
-    root = Path(project_root) / "migrations"
-    directory = root / name
-
-    for candidate in (root, directory):
-        if candidate.is_symlink() or (candidate.exists() and not candidate.is_dir()):
-            raise ValueError("Migration snapshot directory must be an ordinary directory")
-
-    return directory
+    """Select a physical-database witness directory without trusting aliases."""
+    return sqlite_snapshot_directory(project_root, database_file)
 
 
 def prepare_schema_record(project_root, database_file, models):
@@ -69,7 +54,7 @@ def write_schema_record(project_root, database_file, models, title):
         raise RuntimeError("Database tables differ from model schema; snapshot refused")
 
     content = {
-        "database": database.stem,
+        "database": sqlite_history_name(project_root, database),
         "engine": "sqlite",
         "title": title,
         "models": snapshot["tables"],

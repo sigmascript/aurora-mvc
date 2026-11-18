@@ -9,8 +9,8 @@ import re
 from pathlib import Path
 
 from .inspection import inspect_table
+from .snapshot_paths import snapshot_directory
 
-_SAFE_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,79}\Z")
 _FILE = re.compile(r"\d{8}-\d{6}(?:-\d{1,3})?\.json\Z")
 _COLUMNS = ("id", "title", "snapshot", "date", "warnings")
 TABLE = "__migrations__"
@@ -40,7 +40,11 @@ def _physical(connection):
     """Independently observe current tables, columns, keys and indexes."""
     result = []
     for name in _objects(connection):
-        if name in (TABLE, LEGACY_TABLE):
+        if name in (TABLE, LEGACY_TABLE, "__backups__"):
+            if name == "__backups__":
+                from .server_backup_catalog import _catalog_exists
+                if not _catalog_exists(connection):
+                    raise RuntimeError("Unverified internal backup catalog")
             continue
         table = inspect_table(connection, name)
         if not table.exists or not table.uniqueness_verified:
@@ -57,16 +61,7 @@ def _physical(connection):
 
 
 def _directory(root, alias):
-    if not isinstance(alias, str) or not _SAFE_NAME.fullmatch(alias) or alias in (".", ".."):
-        raise ValueError("Database name cannot safely identify a snapshot directory")
-    base = Path(root)
-    folder = base / "migrations" / alias
-    if not base.is_dir():
-        raise ValueError("Project directory is missing")
-    for path in (folder.parent, folder):
-        if path.is_symlink() or (path.exists() and not path.is_dir()):
-            raise RuntimeError("Migration snapshot directory is unsafe")
-    return folder
+    return snapshot_directory(root, alias)
 
 
 def history_table(connection):
@@ -174,3 +169,55 @@ def read_history(connection, root, alias):
     if latest["physical_schema"] != _physical(connection):
         raise RuntimeError("Server physical schema differs from last migration snapshot; manual reconciliation required")
     return rows, latest
+
+
+def adopt_history(connection, root, alias, *, identity, parsed):
+    """Adopt fully verified legacy server history; never touch model tables or files.
+
+    Caller must separately confirm the operation. Recheck identity and all
+    historical witnesses while holding the backend migration lock.
+    """
+    from .cli_init import _mysql_database_identity, _postgres_database_identity
+    from .coordination import _PG_LOCK_KEY, migration_lock
+
+    if connection.dialect not in ("mysql", "postgresql") or identity is None or parsed is None:
+        raise ValueError("Verified server database identity is required")
+    if connection._transaction_active or getattr(connection, "_migration_lock_active", False):
+        raise RuntimeError("Cannot adopt history inside another migration")
+    if history_table(connection) != LEGACY_TABLE:
+        raise RuntimeError("There is no single legacy server history table to adopt")
+
+    before = read_history(connection, root, alias)
+    identity_fn = (_mysql_database_identity if connection.dialect == "mysql"
+                   else _postgres_database_identity)
+    if identity_fn(connection, parsed) != identity:
+        raise RuntimeError("Server database identity changed before history adoption")
+
+    def rename_locked():
+        if identity_fn(connection, parsed) != identity or history_table(connection) != LEGACY_TABLE:
+            raise RuntimeError("Server history identity changed during adoption")
+        if read_history(connection, root, alias) != before:
+            raise RuntimeError("Server history changed during adoption")
+        try:
+            connection.execute_write("ALTER TABLE migrations RENAME TO __migrations__")
+            if history_table(connection) != TABLE or read_history(connection, root, alias) != before:
+                raise RuntimeError("Server history adoption verification failed")
+        except Exception as exc:
+            if connection.dialect == "mysql":
+                raise RuntimeError(
+                    "MySQL history adoption outcome uncertain after DDL began; "
+                    "inspect physical history tables, records and snapshots before retry"
+                ) from exc
+            raise
+
+    if connection.dialect == "postgresql":
+        with connection.transaction():
+            row = connection.fetch_first(
+                "SELECT pg_try_advisory_xact_lock(:key) AS acquired", {"key": _PG_LOCK_KEY})
+            if not row or row["acquired"] is not True:
+                raise RuntimeError("PostgreSQL history adoption lock unavailable")
+            rename_locked()
+    else:
+        with migration_lock(connection):
+            rename_locked()
+    return len(before[0])

@@ -41,24 +41,21 @@ def test_empty_column_with_unrelated_fk_and_index(tmp_path, monkeypatch):
         read_history(db, tmp_path, tmp_path / 'data.sqlite3')
 
 
-def test_populated_column_with_fk_and_index_backed_up(tmp_path, monkeypatch):
+def test_populated_column_with_fk_and_index_no_forced_backup(tmp_path, monkeypatch):
     model = project(tmp_path)
     monkeypatch.chdir(tmp_path)
     seed(tmp_path)
     model.write_text(model.read_text().replace('    title = column(str, length=50)\n', ''))
     monkeypatch.setattr(sys, 'stdin', Terminal())
-    replies = iter(['y', 'DELETE default.messages.title'])
+    replies = iter(['y', 'DELETE data.messages.title'])
     monkeypatch.setattr('builtins.input', lambda prompt='': next(replies))
     assert main(['db', 'migrate', '--title', 'Drop populated title']) == 0
     assert state(tmp_path) == (['id', 'user_id', 'visits'], 3)
-    copies = list((tmp_path / 'backups' / 'data').glob('*.sqlite3'))
-    assert len(copies) == 1
-    with sqlite3.connect(copies[0]) as db:
-        assert db.execute('SELECT title FROM messages').fetchone() == ('hello',)
+    assert not list((tmp_path / '__backups__' / 'data').glob('*.sqlite3'))
     with sqlite3.connect(tmp_path / 'data.sqlite3') as db:
         assert db.execute('PRAGMA foreign_key_check').fetchall() == []
         assert any(row[1] == 'message_user_idx' for row in db.execute('PRAGMA index_list(messages)'))
-        assert 'verified backup:' in db.execute(
+        assert 'backup recommended' in db.execute(
             'SELECT warnings FROM __migrations__ ORDER BY id DESC LIMIT 1').fetchone()[0]
         read_history(db, tmp_path, tmp_path / 'data.sqlite3')
 

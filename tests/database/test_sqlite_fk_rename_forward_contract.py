@@ -8,7 +8,7 @@ from test_sqlite_coherent_table_transition_contract import project, index, inser
 
 def _changes(root, operation):
     change = root / 'rename.json'
-    change.write_text(json.dumps({'database': 'default', **operation}))
+    change.write_text(json.dumps({'database': 'data', **operation}))
     return change
 
 
@@ -178,7 +178,7 @@ def test_table_rename_preserves_model_class_docstring(tmp_path, monkeypatch):
     # The loader reimports fresh project source; docstring remains in place.
     from aurora.database.cli_plan import _select_models
     from types import SimpleNamespace
-    refs, models = _select_models(SimpleNamespace(models_config='aurora_models.json', database='default'), tmp_path)
+    refs, models = _select_models(SimpleNamespace(models_config='aurora_models.json', database='data'), tmp_path)
     assert next(model for model in models if model.__name__ == 'Users').__doc__ == 'Project user model.'
 
 

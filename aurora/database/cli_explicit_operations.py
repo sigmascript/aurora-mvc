@@ -655,6 +655,18 @@ def run_explicit_operations(args):
     if dialect not in ("sqlite", "mysql", "postgresql"):
         raise ValueError("Unsupported schema-operation backend")
 
+    if dialect == "mysql" and document["operation"]["kind"] == "rename_columns":
+        from .server_forward_rename_mysql import run_mysql_rename_operation
+        return run_mysql_rename_operation(args, document, config, project_root,
+                                          simple_confirm=simple_confirm,
+                                          interactive=interactive)
+
+    if dialect == "postgresql" and document["operation"]["kind"] == "rename_columns":
+        from .server_forward_rename import run_server_rename_operation
+        return run_server_rename_operation(args, document, config, project_root,
+                                           simple_confirm=simple_confirm,
+                                           interactive=interactive)
+
     if dialect in ("mysql", "postgresql") and document["operation"]["kind"] in ("create_index", "drop_index"):
         from .server_forward_index import run_server_index_operation
         return run_server_index_operation(args, document, config, project_root,

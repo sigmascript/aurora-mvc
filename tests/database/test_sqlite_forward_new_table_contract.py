@@ -15,7 +15,7 @@ def add_model(root, name, body):
     registry = root / 'aurora_models.json'
     import json
     data = json.loads(registry.read_text())
-    data['databases']['default'].append(f'models.{name}:{name}')
+    data['databases']['data'].append(f'models.{name}:{name}')
     registry.write_text(json.dumps(data))
 
 

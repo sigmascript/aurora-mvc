@@ -11,7 +11,7 @@ from aurora.database import cli_mysql_restore_preflight as mysql_preflight
 
 def _config_and_dump(tmp_path):
     config = tmp_path / "databases.json"
-    config.write_text(json.dumps({"databases": {"default": {
+    config.write_text(json.dumps({"databases": {"review_db": {
         "url": "mysql+pymysql://reviewer@localhost:3306/review_db"
     }}}), encoding="utf-8")
     dump = tmp_path / "backup.sql"
@@ -41,7 +41,7 @@ def test_mysql_preflight_only_issues_read_only_sql(tmp_path, monkeypatch, occupi
         return subprocess.CompletedProcess(command, 0, answer, "")
 
     monkeypatch.setattr(mysql_preflight, "_run", fake_run)
-    report = mysql_preflight.check_mysql_restore(str(config), "default", str(dump), "profile")
+    report = mysql_preflight.check_mysql_restore(str(config), "review_db", str(dump), "profile")
     assert report.staging_available is not occupied
     assert report.table_count == 2
     assert len(queries) == 3
@@ -56,7 +56,7 @@ def test_preflight_rejects_target_as_staging_without_connecting(tmp_path, monkey
     config, dump = _config_and_dump(tmp_path)
     monkeypatch.setattr(mysql_preflight, "_run", lambda *_, **__: pytest.fail("connected"))
     with pytest.raises(ValueError, match="staging"):
-        mysql_preflight.check_mysql_restore(str(config), "default", str(dump), "profile", "review_db")
+        mysql_preflight.check_mysql_restore(str(config), "review_db", str(dump), "profile", "review_db")
 
 
 def test_preflight_rejects_unverified_backup_without_connecting(tmp_path, monkeypatch):
@@ -64,7 +64,7 @@ def test_preflight_rejects_unverified_backup_without_connecting(tmp_path, monkey
     dump.write_bytes(b"CREATE DATABASE review_db;")
     monkeypatch.setattr(mysql_preflight, "_run", lambda *_, **__: pytest.fail("connected"))
     with pytest.raises(ValueError, match="completed"):
-        mysql_preflight.check_mysql_restore(str(config), "default", str(dump), "profile")
+        mysql_preflight.check_mysql_restore(str(config), "review_db", str(dump), "profile")
 
 
 def test_removed_staging_import_module_is_not_importable():
@@ -75,7 +75,7 @@ def test_public_restore_refuses_without_database_config(tmp_path, monkeypatch):
     from aurora.cli import main
     monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit) as stopped:
-        main(["db", "restore", "--from", str(tmp_path / "missing.sql")])
+        main(["db", "restore", "--backup", "20261117T120000Z-0123456789abcdef01234567"])
     assert stopped.value.code == 1
     assert list(tmp_path.iterdir()) == []
 
@@ -90,15 +90,16 @@ def test_sqlite_backup_preserves_existing_destination(tmp_path):
         connection.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
         connection.execute("INSERT INTO items (id) VALUES (7)")
     config = tmp_path / "databases.json"
-    config.write_text(json.dumps({"databases": {"default": {
+    config.write_text(json.dumps({"databases": {"source": {
         "url": "sqlite:///source.sqlite3"
     }}}), encoding="utf-8")
     output = tmp_path / "existing.sqlite3"
     output.write_bytes(b"existing-backup-must-not-change")
-    args = SimpleNamespace(to=str(output), config=str(config), database="default")
-    with pytest.raises((FileExistsError, ValueError)):
-        run_backup(args)
+    args = SimpleNamespace(to=str(output), config=str(config), database="source")
+    assert run_backup(args) == 0
     assert output.read_bytes() == b"existing-backup-must-not-change"
+    from aurora.database.backup_artifacts import list_artifacts
+    assert len(list_artifacts(tmp_path, "source")) == 1
     with sqlite3.connect(source) as connection:
         assert connection.execute("SELECT id FROM items").fetchone() == (7,)
 
@@ -110,11 +111,11 @@ def test_sqlite_backup_rejects_invalid_source_without_leaving_output(tmp_path):
     source = tmp_path / "source.sqlite3"
     source.write_bytes(b"not a sqlite database")
     config = tmp_path / "databases.json"
-    config.write_text(json.dumps({"databases": {"default": {
+    config.write_text(json.dumps({"databases": {"source": {
         "url": "sqlite:///source.sqlite3"
     }}}), encoding="utf-8")
     output = tmp_path / "backup.sqlite3"
-    args = SimpleNamespace(to=str(output), config=str(config), database="default")
+    args = SimpleNamespace(to=str(output), config=str(config), database="source")
     with pytest.raises(Exception):
         run_backup(args)
     assert source.read_bytes() == b"not a sqlite database"

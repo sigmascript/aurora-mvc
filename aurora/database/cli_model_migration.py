@@ -4,14 +4,12 @@ import hmac
 from contextlib import closing
 import json
 import os
-from datetime import datetime, timezone
 from pathlib import Path
 import sqlite3
 import sys
 from types import SimpleNamespace
 from urllib.parse import urlsplit
 
-from .cli_backup import run_backup
 from .schema_records import prepare_schema_record, write_schema_record
 from .cli_plan import _existing_sqlite_path, _load_config, _select_models
 from .core import Connection
@@ -226,50 +224,26 @@ def run_model_migration(args):
                 if input("Remove this table? [y/N]: ").strip().lower() not in ("y", "yes"):
                     print("Migration cancelled; no database changes made.")
                     return 0
-            verified_backup = None
             if count:
                 if not sys.stdin.isatty():
                     from .sqlite_forward_history import UnsafeTableTransition
                     raise UnsafeTableTransition(
                         f"Populated table {args.database}.{table} requires interactive "
-                        "target-specific authorization and a verified backup; "
-                        "--confirm yes cannot bypass this gate"
-                    )
-                # The independent SQLite backup command validates source identity,
-                # snapshot history, integrity, and an exclusive destination.
-                backup_root = Path(root) / "backups"
-                if backup_root.is_symlink():
-                    raise PermissionError("Backup directory must not be a symbolic link")
-                backup_root.mkdir(exist_ok=True)
-                backup_dir = backup_root / db_file.stem
-                if backup_dir.is_symlink():
-                    raise PermissionError("Database backup directory must not be a symbolic link")
-                backup_dir.mkdir(exist_ok=True)
-                stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-                for suffix in range(1000):
-                    name = stamp + (f"-{suffix}" if suffix else "") + ".sqlite3"
-                    candidate = backup_dir / name
-                    if not candidate.exists() and not candidate.is_symlink():
-                        break
-                else:
-                    raise RuntimeError("No free backup filename; table removal refused")
-                run_backup(SimpleNamespace(config=args.config, database=args.database,
-                                           to=str(candidate)))
-                verified_backup = candidate
+                        "target-specific authorization; --confirm yes cannot bypass this gate")
                 target_name = f"{args.database}.{table}"
                 phrase = f"DELETE {target_name}"
-                print(f"DANGEROUS MIGRATION: permanently delete {count} row(s) in {target_name}")
-                print(f"Verified pre-migration SQLite backup: {verified_backup}")
+                print(f"WARNING: Permanently deleting {count} row(s) from {target_name}.")
+                print("A separate 'aurora db backup' is strongly recommended before proceeding; "
+                      "Aurora will not create or restore a backup automatically.")
                 if input(f"Type exactly '{phrase}' to authorize deletion: ").strip() != phrase:
-                    print("Migration cancelled; database unchanged. Verified backup retained.")
+                    print("Migration cancelled; database unchanged.")
                     return 0
             from .sqlite_forward_history import migrate_table_removal
             title = migration_title(args.title or "Untitled", "Untitled")
             with closing(sqlite3.connect(db_file.as_uri() + "?mode=rw", uri=True,
                                          isolation_level=None, timeout=5)) as writing:
                 result = migrate_table_removal(writing, root, db_file, models, title,
-                                               table, count, witness, acknowledged=bool(count),
-                                               verified_backup=verified_backup)
+                                               table, count, witness, acknowledged=bool(count))
             print(f"Migration applied. Schema snapshot: {result}")
             return 0
         if column_removal is not None:
@@ -288,41 +262,24 @@ def run_model_migration(args):
                     print("Migration cancelled; no database changes made.")
                     return 0
             dangerous = [(table, column, count) for table, column, count, _ in column_removal if count]
-            verified_backup = None
             authorized = []
             if dangerous:
                 if not sys.stdin.isatty():
                     from .sqlite_forward_history import UnsafeTableTransition
-                    targets = ", ".join(f"{args.database}.{table}.{column}" for table, column, _ in dangerous)
+                    targets = ", ".join(f"{args.database}.{table}.{column}"
+                                        for table, column, _ in dangerous)
                     raise UnsafeTableTransition(
                         f"Populated column(s) {targets} require interactive target-specific "
-                        "authorization and a verified backup; --confirm yes cannot bypass this gate")
-                backup_root = Path(root) / "backups"
-                if backup_root.is_symlink():
-                    raise PermissionError("Backup directory must not be a symbolic link")
-                backup_root.mkdir(exist_ok=True)
-                backup_dir = backup_root / db_file.stem
-                if backup_dir.is_symlink():
-                    raise PermissionError("Database backup directory must not be a symbolic link")
-                backup_dir.mkdir(exist_ok=True)
-                stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-                for suffix in range(1000):
-                    name = stamp + (f"-{suffix}" if suffix else "") + ".sqlite3"
-                    candidate = backup_dir / name
-                    if not candidate.exists() and not candidate.is_symlink():
-                        break
-                else:
-                    raise RuntimeError("No free backup filename; column removal refused")
-                run_backup(SimpleNamespace(config=args.config, database=args.database,
-                                           to=str(candidate)))
-                verified_backup = candidate
-                print(f"Verified pre-migration SQLite backup: {verified_backup}")
+                        "authorization; --confirm yes cannot bypass this gate")
+                print("WARNING: This operation permanently deletes stored column values.")
+                print("A separate 'aurora db backup' is strongly recommended before proceeding; "
+                      "Aurora will not create or restore a backup automatically.")
                 for table, column, count in dangerous:
                     target = f"{args.database}.{table}.{column}"
                     phrase = f"DELETE {target}"
-                    print(f"DANGEROUS MIGRATION: permanently delete {count} non-NULL value(s) in {target}")
+                    print(f"Permanently deleting {count} non-NULL value(s) from {target}.")
                     if input(f"Type exactly '{phrase}' to authorize deletion: ").strip() != phrase:
-                        print("Migration cancelled; database unchanged. Verified backup retained.")
+                        print("Migration cancelled; database unchanged.")
                         return 0
                     authorized.append((table, column))
             from .sqlite_forward_history import migrate_column_removal, migrate_table_transition
@@ -332,11 +289,10 @@ def run_model_migration(args):
                 if table_transition is not None:
                     result = migrate_table_transition(writing, root, db_file, models, title,
                                                       table_transition, reviewed_removals=column_removal,
-                                                      acknowledged=authorized, verified_backup=verified_backup)
+                                                      acknowledged=authorized)
                 else:
                     result = migrate_column_removal(writing, root, db_file, models, title,
-                                                    column_removal, acknowledged=authorized,
-                                                    verified_backup=verified_backup)
+                                                    column_removal, acknowledged=authorized)
             print(f"Migration applied. Schema snapshot: {result}")
             return 0
         if not changes:
@@ -441,7 +397,7 @@ def run_model_migration(args):
         title = migration_title(getattr(args, "title", None) if not simple_confirm else
                                 (args.title if args.title is not None else "Untitled"), "Untitled")
         if backup:
-            run_backup(SimpleNamespace(config=args.config, database=args.database, to=backup))
+            raise ValueError("Custom backup destinations are retired; use managed aurora db backup")
         raw = sqlite3.connect(db_file.as_uri() + "?mode=rw", uri=True,
                               isolation_level=None, timeout=5)
 
@@ -573,7 +529,7 @@ def run_model_migration(args):
 
     title = migration_title(title_value, "Untitled")
     if backup:
-        run_backup(SimpleNamespace(config=args.config, database=args.database, to=backup))
+        raise ValueError("Custom backup destinations are retired; use managed aurora db backup")
 
     raw = sqlite3.connect(db_file.as_uri() + "?mode=rw", uri=True,
                           isolation_level=None, timeout=5)

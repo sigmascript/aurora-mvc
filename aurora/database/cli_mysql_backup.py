@@ -2,11 +2,9 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import datetime, timezone
 import os
 from pathlib import Path
 import re
-from secrets import token_hex
 import stat
 import subprocess
 import tempfile
@@ -87,10 +85,13 @@ def _client_authentication(url, login_path):
 
 
 def backup_mysql_database(config_path: str, alias: str, destination: str | None,
-                          login_path: str | None) -> Path:
+                          login_path: str | None, expected_url: str | None = None) -> Path:
 
     config, _ = _load_config(config_path)
-    url = urlsplit(config.resolve(alias))
+    selected = config.resolve(alias)
+    if expected_url is not None and selected != expected_url:
+        raise ValueError("Configured MySQL backup destination changed during selection")
+    url = urlsplit(selected)
 
     if url.scheme != "mysql+pymysql":
         raise ValueError("MySQL backup requires a MySQL database alias")
@@ -134,10 +135,7 @@ def _backup_selected_mysql_database(url, alias, destination, database, host, por
         raise ValueError("Consistent online backup supports InnoDB tables only")
 
     if destination is None:
-        folder = Path.cwd() / "backups"
-        folder.mkdir(exist_ok=True)
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        destination = str(folder / f"{alias}-{stamp}-{token_hex(4)}.sql")
+        raise ValueError("Managed MySQL backup destination is required")
 
     output = Path(destination).expanduser().absolute()
 

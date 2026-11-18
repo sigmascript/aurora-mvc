@@ -1,6 +1,6 @@
 """Lazy AuroraSQL connection registry for optional ASGI application lifecycle.
 
-Each alias owns a connection that is closed during application shutdown.
+Each database owns a connection that is closed during application shutdown.
 Do not share these connections across worker threads; use the async work
 manager for request-level work instead.
 """
@@ -11,7 +11,7 @@ from .configuration import DatabaseConfiguration
 
 
 class DatabaseRegistry:
-    """Resolve configured database aliases without implicit schema changes."""
+    """Resolve configured databases without implicit schema changes."""
     def __init__(self, configuration: DatabaseConfiguration):
         if not isinstance(configuration, DatabaseConfiguration):
             raise TypeError("configuration must be a DatabaseConfiguration")
@@ -21,8 +21,8 @@ class DatabaseRegistry:
         self._lock = RLock()
         self._closed = False
 
-    def aliases(self):
-        return self._configuration.aliases()
+    def names(self):
+        return self._configuration.names()
 
     def get(self, alias="default"):
         with self._lock:
@@ -36,7 +36,7 @@ class DatabaseRegistry:
 
             return self._instances[alias]
 
-    def initialized_aliases(self):
+    def initialized_names(self):
         with self._lock:
             return tuple(self._instances)
 
