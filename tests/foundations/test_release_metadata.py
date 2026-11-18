@@ -26,20 +26,21 @@ def test_package_versions_match():
     assert aurora.__version__ == aurora.core.__version__ == _version()
 
 
-def test_published_version_notice_stays_in_root_readme():
+def test_release_version_notice_matches_metadata():
     version = _version()
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     pypi_readme = (ROOT / "README.pypi.md").read_text(encoding="utf-8")
-    assert "**Latest published alpha:** [`1.0.0a7`]" in readme
-    assert "**Latest published alpha:** [`1.0.0a7`]" in pypi_readme
-    assert f"**Release candidate in preparation:** `{version}`" in readme
-    assert f"**Release candidate in preparation:** `{version}`" in pypi_readme
+    for content in (readme, pypi_readme):
+        assert f"**Latest alpha:** [`{version}`]" in content
+        assert f'python -m pip install "aurora-mvc=={version}"' in content
+        assert "Release candidate in preparation:" not in content
+        assert "Latest published alpha:" not in content
     for relative in (
         "docs/index.md", "docs/getting-started.md",
         "docs/cli.md", "docs/database.md",
     ):
         content = (ROOT / relative).read_text(encoding="utf-8")
-        assert "Latest published alpha:" not in content, relative
+        assert "Latest alpha:" not in content, relative
         assert version not in content, relative
 
 

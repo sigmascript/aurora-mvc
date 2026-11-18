@@ -2,16 +2,14 @@
 
 Aurora MVC is a lightweight Python web framework built around ASGI, routing, controllers, and straightforward project layouts. Its built-in AuroraSQL layer supports SQLite, MySQL, and PostgreSQL with explicitly reviewed schema changes.
 
-**Latest published alpha:** [`1.0.0a7`](https://pypi.org/project/aurora-mvc/1.0.0a7/) · [GitHub release](https://github.com/sigmascript/aurora-mvc/releases/tag/v1.0.0a7). The current development branch contains newer **unreleased** features. The published package and this checkout may behave differently.
-
-**Release candidate in preparation:** `1.0.0a8` (not yet published).
+**Latest alpha:** [`1.0.0a8`](https://pypi.org/project/aurora-mvc/1.0.0a8/) · [GitHub release](https://github.com/sigmascript/aurora-mvc/releases/tag/v1.0.0a8).
 
 ## Get started
 
-Python 3.10 or newer is required. Install the published alpha:
+Python 3.10 or newer is required. Install Alpha 8:
 
 ```bash
-python -m pip install "aurora-mvc==1.0.0a7"
+python -m pip install "aurora-mvc==1.0.0a8"
 ```
 
 Or work on the current development checkout:
@@ -35,7 +33,7 @@ See [Getting started](docs/getting-started.md) for the full first-project walkth
 - Reviewed, forward-only schema changes with recorded history. Supported operations depend on the backend and physical schema; unsafe or ambiguous changes are refused.
 - Application-controlled sessions, CSRF protection, password helpers, and authentication guards.
 
-The current development checkout lets you register a model with a selected database:
+Register a model with a selected database:
 
 ```bash
 aurora model add Invoice --database accounting
