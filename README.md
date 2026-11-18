@@ -4,6 +4,8 @@ Aurora MVC is a lightweight Python web framework built around ASGI, routing, con
 
 **Latest published alpha:** [`1.0.0a7`](https://pypi.org/project/aurora-mvc/1.0.0a7/) · [GitHub release](https://github.com/sigmascript/aurora-mvc/releases/tag/v1.0.0a7). The current development branch contains newer **unreleased** features. The published package and this checkout may behave differently.
 
+**Release candidate in preparation:** `1.0.0a8` (not yet published).
+
 ## Get started
 
 Python 3.10 or newer is required. Install the published alpha:

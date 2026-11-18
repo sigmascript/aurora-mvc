@@ -29,9 +29,11 @@ def test_package_versions_match():
 def test_published_version_notice_stays_in_root_readme():
     version = _version()
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    assert f"**Latest published alpha:** [`{version}`]" in readme
     pypi_readme = (ROOT / "README.pypi.md").read_text(encoding="utf-8")
-    assert f"**Latest published alpha:** [`{version}`]" in pypi_readme
+    assert "**Latest published alpha:** [`1.0.0a7`]" in readme
+    assert "**Latest published alpha:** [`1.0.0a7`]" in pypi_readme
+    assert f"**Release candidate in preparation:** `{version}`" in readme
+    assert f"**Release candidate in preparation:** `{version}`" in pypi_readme
     for relative in (
         "docs/index.md", "docs/getting-started.md",
         "docs/cli.md", "docs/database.md",
