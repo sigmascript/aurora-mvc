@@ -1,56 +1,61 @@
 # Getting started
 
-**Status:** These instructions target the **unreleased Milestone 5 development checkout**, not the published `1.0.0a7` package. The public `1.0.0a7` release remains available on PyPI. The newer checkout supports bounded AuroraSQL migrations; database restore execution is disabled for all backends.
+Aurora MVC runs on Python 3.10 or newer. This guide follows the current source checkout.
 
-## Requirements and installation
+## Install Aurora
 
-Use Python 3.10 or newer. To install the **published** alpha, run `python -m pip install 'aurora-mvc==1.0.0a7'`. To use the newer **unreleased Milestone 5** source, run the following from the repository checkout instead:
+From the Aurora repository, install the framework and development tools:
 
 ```bash
 python -m pip install -e '.[dev]'
 ```
 
-The `dev` extra supplies Uvicorn for the development server. Check the installed CLI with `aurora --help` (or `python -m aurora --help`). Use `aurora --version` to display the installed framework version.
+The development extra includes Uvicorn. Check the installed CLI with `aurora --help`.
 
-## Create and run your first project
+## Create your first site
 
-Run the following commands from a directory **outside** the Aurora MVC repository:
+From a directory outside the Aurora source repository:
 
 ```bash
-aurora new hello_app
+aurora new hello_app --mvc
 cd hello_app
-aurora run --no-reload
+aurora run
 ```
 
-Open <http://127.0.0.1:8000/>. The default server imports `app:app` from the current project directory. Stop it with Ctrl+C.
+Open <http://127.0.0.1:8000/> and stop the server with Ctrl+C. Run `aurora run --no-reload` if you don't want automatic reloads.
 
-For automatic development reloads, use `aurora run` without `--no-reload`.
-
-## Application settings (optional)
-
-Generated projects include `aurora_config.json`, which defines validated,
-nonsecret application defaults such as name and time zone. The generated
-`app.py` loads the project configuration and conventional resource paths using `Aurora.from_project(__file__)`. Existing applications
-may continue to construct `Aurora(...)` directly. See
-[Application configuration](application-configuration.md).
-
-## Initialize an MVC project database (optional)
-
-The `--mvc` generator includes `aurora_databases.json` (a default SQLite configuration) and an initially empty `aurora_models.json` manifest. Database initialization requires at least one discoverable model. After creating a model class `Users` in `models/users.py`, from the **project root** run:
+You can also create a minimal ASGI project without controllers and templates, or a modular MVC project with separate application components:
 
 ```bash
-aurora db init
+aurora new simple_site
+aurora new modular_site --modular
+```
+
+## Add a model
+
+MVC and modular projects already include database configuration, but generating a project or model does **not** initialize a database.
+
+```bash
+aurora model add User
 aurora db check
+aurora db init
 aurora db history
 ```
 
-Models in supported shared and modular-app model directories are discovered automatically. Optional explicit model selections belong in `aurora_models.json`; the retired `aurora model register` and `registered` commands are not supported.
+The generated MVC database is named `data` and uses `data.sqlite3`. `init` shows its intended work and asks for approval. Running it again on an initialized database should not create another initial migration.
 
-Re-running `aurora db init` on an initialized database makes no changes. For supported subsequent model changes, use read-only `aurora db check`, then `aurora db migrate` with its confirmation workflow. See the [database guide](database.md).
+When your project has more than one configured database, you can select one for a generated model:
 
-## Create an application manually
+```bash
+aurora model add Invoice --database accounting
+aurora db check --database accounting
+```
 
-Create an `app.py` file:
+Add `accounting` to `aurora_databases.json` first. The generator registers the model without connecting to the database. See [AuroraSQL and migrations](database.md) for configuration examples and safety boundaries.
+
+## Write a route directly
+
+In a minimal project's `app.py`:
 
 ```python
 from aurora import Aurora
@@ -65,24 +70,8 @@ def home(request):
 app.add_route("/", home)
 ```
 
-From the directory containing that file, run:
-
-```bash
-python -m uvicorn app:app --reload
-```
-
-## Choose a project structure
-
-The CLI creates three starter layouts:
-
-```bash
-aurora new my_site
-aurora new my_mvc_site --mvc
-aurora new my_modular_site --modular
-```
-
-The repository also includes a **multilingual example**, but there is no dedicated `--multilingual` generator flag. See [Project templates and examples](project-templates.md).
+Run it from the project directory with `aurora run`, or directly with `python -m uvicorn app:app --reload` if Uvicorn is installed.
 
 ## Next steps
 
-Read the [CLI guide](cli.md) for command groups and options, [routing](routing.md) for URL handling, and the [documentation index](index.md) for additional guides. These instructions assume the local checkout is installed; they do not change database schemas or create user accounts.
+Explore [project layouts](project-templates.md), [controllers and routing](routing.md), [application settings](application-configuration.md), and the [CLI reference](cli.md). The full reference lives on [auroramvc.com](https://auroramvc.com).

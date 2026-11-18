@@ -1,62 +1,65 @@
 # Aurora MVC
 
-Aurora MVC is a lightweight, ASGI-first Python web framework for building practical applications with a clear MVC-friendly structure.
+Aurora MVC is a lightweight Python web framework built around ASGI, routing, controllers, and straightforward project layouts. Its built-in AuroraSQL layer supports SQLite, MySQL, and PostgreSQL with explicitly reviewed schema changes.
 
-**Published alpha:** [`1.0.0a7`](https://pypi.org/project/aurora-mvc/1.0.0a7/) is available on PyPI and [GitHub Releases](https://github.com/sigmascript/aurora-mvc/releases/tag/v1.0.0a7). The current development checkout includes later, **unreleased** Milestone 5 changes; installing `1.0.0a7` does not provide them. The older `0.9.7` is the last established stable release. Alpha APIs and behavior may change.
+**Latest published alpha:** [`1.0.0a7`](https://pypi.org/project/aurora-mvc/1.0.0a7/) · [GitHub release](https://github.com/sigmascript/aurora-mvc/releases/tag/v1.0.0a7). The current development branch contains newer **unreleased** features. The published package and this checkout may behave differently.
 
-## Highlights
+## Get started
 
-- ASGI-first application, routing, requests, responses, and controller-oriented development.
-- Project generators for minimal, MVC, and modular layouts.
-- Integrated **AuroraSQL** database layer under the public `aurora.database` namespace. The retired SQLAlchemy-backed implementation is no longer the framework's database backend or a required package dependency.
-- SQLite support and optional MySQL (`PyMySQL`) and PostgreSQL (`psycopg`) drivers.
-- Explicit database configuration, aliases, model selection, and guarded schema operations.
+Python 3.10 or newer is required. Install the published alpha:
 
-## Installation
-
-Requires Python 3.10 or newer.
-
-```sh
+```bash
 python -m pip install "aurora-mvc==1.0.0a7"
 ```
 
-For a local checkout with development tools:
+Or work on the current development checkout:
 
-```sh
+```bash
 python -m pip install -e '.[dev]'
+aurora new my_site --mvc
+cd my_site
+aurora run
 ```
 
-The version-pinned command installs the **published** `1.0.0a7` package. To evaluate the newer, unreleased Milestone 5 development source, install its checkout with `python -m pip install -e '.[dev]'`. Optional drivers for the published release can be installed with:
+Visit <http://127.0.0.1:8000/>. For a smaller project without generated controllers or views, use `aurora new my_site` instead. For reusable application components, use `--modular`.
 
-```sh
-python -m pip install "aurora-mvc[mysql]==1.0.0a7"
-python -m pip install "aurora-mvc[postgresql]==1.0.0a7"
+See [Getting started](docs/getting-started.md) for the full first-project walkthrough.
+
+## What you can build
+
+- ASGI applications with named routes, HTTP method handling, controllers, Jinja templates, static files, and optional multilingual routing.
+- Minimal, MVC, or modular projects with generators for controllers, views, and models.
+- Model-driven applications using AuroraSQL, including named SQLite, MySQL, and PostgreSQL connections.
+- Reviewed, forward-only schema changes with recorded history. Supported operations depend on the backend and physical schema; unsafe or ambiguous changes are refused.
+- Application-controlled sessions, CSRF protection, password helpers, and authentication guards.
+
+The current development checkout lets you register a model with a selected database:
+
+```bash
+aurora model add Invoice --database accounting
+aurora db check --database accounting
 ```
 
-To allow pip to consider newer prereleases when they become available, use `python -m pip install --pre aurora-mvc`.
+That database must already be configured. Generating a model does not create or modify its database.
 
-## Start a project
+## Database safety
 
-```sh
-aurora new hello_app
-cd hello_app
-aurora run --no-reload
-```
+The public database commands are `check`, `init`, `migrate`, `backup`, `restore`, and `history`. `check` is read-only. Initialization and migrations require the appropriate review and approval; backups are separate and optional, including before destructive changes. Aurora never creates one automatically as part of a migration.
 
-See [Getting started](docs/getting-started.md) for local setup and other layouts.
-
-## Database CLI
-
-The six public commands in the **current development checkout** are `aurora db check`, `init`, `migrate`, `backup`, `restore`, and `history`. The older `db plan` command is retired. **Not every command supports every backend or operation.** `check` is read-only; schema writes require backend-specific safeguards and approval. Database restore execution is disabled for SQLite, MySQL, and PostgreSQL; read-only recovery preflight is not authorization to restore. Use `aurora db COMMAND --help` and the [database safety guide](docs/database.md) for current constraints.
-
-The migration system supports selected guarded operations, including repeatable MySQL/PostgreSQL model-driven successors. The **unreleased development checkout** also supports narrowly guarded single SQLite table/column deletion, with double confirmation for existing data and strict dependency/history verification. It is **not a general-purpose schema migration engine**. In particular, server-side DROP operations, non-SQLite explicit JSON execution, mixed drift, arbitrary renames, foreign-key changes, and primary-key replacement remain unsupported.
-
-## Validation and maturity
-
-For the **unreleased Milestone 5 development checkout**, the team reported **1,593 passed, 37 skipped, 264 subtests passed** on Windows Python 3.11.9 (2026-11-13). Earlier bounded live MySQL/PostgreSQL migration verification preserved existing rows but did **not** demonstrate server restoration. These results are not evidence of production readiness, current CI, or full backend parity. A future release still requires separate acceptance and authorization.
+**Restore execution is disabled** on all three backends. MySQL DDL can have an uncertain outcome if a failure occurs after execution begins; inspect the physical schema and history before attempting recovery. See [Database operations](docs/database.md) before applying a migration to valued data.
 
 ## Documentation
 
-Start at the [documentation index](docs/index.md), including the [CLI reference](docs/cli.md), [database operations](docs/database.md), and [code style](docs/development/CODE_STYLE.md).
+- [Getting started](docs/getting-started.md)
+- [Documentation index](docs/index.md)
+- [CLI commands](docs/cli.md)
+- [Database configuration and migrations](docs/database.md)
+- [Project layouts](docs/project-templates.md)
+- [Application settings](docs/application-configuration.md)
+- [Code style and contributing](docs/development/CODE_STYLE.md)
 
-License: MIT. Repository: https://github.com/sigmascript/aurora-mvc
+The complete, example-rich reference belongs on [auroramvc.com](https://auroramvc.com); the repository keeps the essential guides close to the code. For work not yet published, see the [Unreleased changelog](https://github.com/sigmascript/aurora-mvc/blob/main/changelog/UNRELEASED.md). Published version notes are available through [GitHub Releases](https://github.com/sigmascript/aurora-mvc/releases).
+
+Aurora MVC is alpha software. Review its supported boundaries before production use.
+
+**License:** MIT · [Repository](https://github.com/sigmascript/aurora-mvc)

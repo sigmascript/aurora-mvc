@@ -1,1 +1,0 @@
-"""Aurora integration tests."""

@@ -1,23 +1,24 @@
 # Aurora MVC documentation
 
-Aurora MVC is an ASGI-first Python web framework with MVC-friendly APIs. This documentation follows the **unreleased Milestone 5 development checkout**. The latest published alpha is `1.0.0a7`; some commands and guarded migration features described here were added **after** that publication and are not included in the PyPI `1.0.0a7` distribution.
+Welcome to the Aurora MVC developer guides. Start with a project, then explore the features you need.
 
-The integrated `aurora.database` namespace now uses **AuroraSQL**. The former SQLAlchemy-backed database implementation has been retired. Database features are alpha-stage and backend-specific; consult the CLI help and safety guide before writing schemas.
+## Build an application
 
-## Start here
+- [Getting started](getting-started.md) — install Aurora, create a project, and run it
+- [Project layouts](project-templates.md) — choose minimal, MVC, or modular
+- [Routing and controllers](routing.md) — handle requests and render views
+- [Application settings](application-configuration.md) — project configuration and validation
+- [Multilingual applications](multilingual.md) — locale-aware URLs
+- [Authentication and redirects](security/authentication-redirects.md) — security building blocks
 
-- [Getting started](getting-started.md) — installation, project creation, development server
-- [CLI reference](cli.md) — commands and safety boundaries
-- [Project templates and examples](project-templates.md) — generated layouts and examples
-- [Application configuration](application-configuration.md) — validated defaults, time zones, limits, and read-only constants
-- [Routing and controllers](routing.md) — routes, actions, and handlers
-- [Authentication and safe redirects](security/authentication-redirects.md) — request guards and safe return paths
-- [Database and migrations](database.md) — AuroraSQL, configuration, supported guarded operations
-- [Multilingual applications](multilingual.md) — locale configuration and URL design
+## Work with databases
 
-## Contributors and historical reference
+- [AuroraSQL and migrations](database.md) — configuration, models, migrations, backups, and safety
+- [CLI guide](cli.md) — project and database commands
 
-- [Code style](development/CODE_STYLE.md) — mandatory standards for new and modified code
-- [Alpha 8 compatibility notes (historical)](aurorasql-alpha8-compatibility.md) — pre-cutover snapshot, not current implementation guidance
+## Contribute
 
-NoteFlow is maintained separately as a reference application. Older implementation details remain in Git history.
+- [Code style](development/CODE_STYLE.md) — naming, formatting, natural-language docs, and review rules
+- [Unreleased changes](../changelog/UNRELEASED.md) — what is changing before the next release
+
+Look for the complete tutorials and API reference on [auroramvc.com](https://auroramvc.com). Past releases and their notes remain available in [GitHub Releases](https://github.com/sigmascript/aurora-mvc/releases).

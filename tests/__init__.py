@@ -1,1 +1,1 @@
-"""Active Aurora contract tests, independent from tests_legacy."""
+"""Aurora's active contract and developer-journey tests."""

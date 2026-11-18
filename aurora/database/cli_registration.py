@@ -89,7 +89,7 @@ def _save_manifest(location, data):
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=location.parent,
                                          prefix=".aurora-models-", suffix=".tmp", delete=False) as tmp:
             temp_path = Path(tmp.name)
-            json.dump(data, tmp, indent=2)
+            json.dump(data, tmp, indent=4)
             tmp.write("\n")
             tmp.flush()
             os.fsync(tmp.fileno())

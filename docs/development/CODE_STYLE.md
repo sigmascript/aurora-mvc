@@ -31,6 +31,41 @@ Prefer expressive Python, short straightforward expressions, multiline formattin
 - Apply these standards to every change, including a few new lines. When an old file is touched, improve the changed region without mixing broad formatting changes with behavioral fixes.
 - Supply complete replacement files for every changed source/test file during collaborative implementation. Preserve safety gates and public compatibility.
 
+## Indentation and generated files
+
+- Use **four spaces per indentation level** for Python and all maintained JSON
+  configuration, manifest, snapshot, and review artifacts. Never indent with tabs.
+- JSON examples in public documentation and generated project files use the same
+  four-space convention. Preserve valid Markdown/YAML syntax where their structure
+  requires a different treatment; do not mechanically replace all whitespace.
+- Apply this format to **new and modified files going forward**. Existing database
+  histories, migration snapshots, reviewed digests, and backup manifests are
+  immutable evidence: **never rewrite them solely to reindent**.
+- Format-only work must not change database semantics, approval hashes, or
+  historical interpretation. Verify generated files and the full regression.
+
+## Documentation voice and examples
+
+Write for another developer, not for an internal report. Use everyday language,
+short explanations, and real commands or complete examples where they help. Speak
+directly and say what works, what does not, and what to do next. Avoid bureaucratic,
+robotic, repetitive, or promotional phrasing. Don't narrate milestones in a user guide.
+
+Review examples against the actual source. Label unreleased functionality clearly;
+never imply that a feature is available in the last published package just because
+it works in the development checkout. Keep private engineering checkpoints out of
+public documentation.
+
+## Changelog and release notes
+
+At each meaningful developer-facing change, update `changelog/UNRELEASED.md`
+with a concise bullet. Make this part of the code-review and commit checklist;
+when no entry is needed, explain why in the review. The release maintainer checks
+the list against the shipping code, creates the published version's changelog,
+and writes GitHub release notes from verified changes. No retrospective guessing.
+
 ## Current status
 
-The wider source/test readability audit and renaming of historical batch/alpha test modules are **deferred to a dedicated post-publication milestone**. No claim of repository-wide completion is made.
+The wider source/test readability audit and retirement of historical modules are
+separate reviewed cleanup work. The existence of this policy does not mean every
+file already meets it.

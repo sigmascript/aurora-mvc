@@ -132,3 +132,22 @@ def test_reject_cross_database_existing_model_reference_without_writing(tmp_path
     assert denied.value.code == 1
     assert manifest_path.read_bytes() == before
     assert not (root / "models" / "Invoice.py").exists()
+
+
+def test_generated_json_uses_four_spaces_per_level(tmp_path):
+    root = create_project("sample", directory=tmp_path, mvc=True)
+    for name in ("aurora_config.json", "aurora_databases.json", "aurora_models.json"):
+        source = (root / name).read_text(encoding="utf-8")
+        assert source.endswith("\n")
+        assert json.loads(source)
+        for line in source.splitlines():
+            spaces = len(line) - len(line.lstrip(" "))
+            assert spaces % 4 == 0, (name, line)
+
+
+def test_registered_manifest_uses_four_spaces_per_level(tmp_path, monkeypatch):
+    root = create_project("sample", directory=tmp_path, mvc=True)
+    monkeypatch.chdir(root)
+    assert main(["model", "add", "Invoice"]) == 0
+    source = (root / "aurora_models.json").read_text(encoding="utf-8")
+    assert '\n    "databases": {\n        "data": [\n            "models.Invoice:Invoice"' in source

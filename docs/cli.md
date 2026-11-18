@@ -1,40 +1,73 @@
-# Aurora MVC command-line interface
+# Aurora MVC CLI
 
-Aurora exposes project scaffolding and six public database commands. For exact flags, run `aurora --help`, `aurora db --help`, or `aurora db COMMAND --help`.
+Run `aurora --help` to see the available commands. Use `aurora COMMAND --help` for each command’s options.
+
+## Projects and components
+
+```bash
+aurora new hello_app                # Minimal ASGI project
+aurora new shop --mvc               # MVC layout
+aurora new portal --modular         # MVC with reusable apps
+
+aurora controller add Products
+aurora controller add Orders --methods "get,post"
+aurora view add about
+aurora model add Invoice
+aurora model add Invoice --database accounting
+```
+
+The selected database must exist in the project's configuration. Model generation writes source and model registration only; it does not initialize or migrate databases. For modular components, use `--app APP` where supported. `show` and `list` inspect generated components; removal is guarded by strict-mode policy and additional confirmation.
+
+Run the development server with `aurora run` or `aurora run --no-reload`.
 
 ## Database commands
 
-| Command | Purpose | Writes? |
-| --- | --- | --- |
-| `aurora db init` | Initialize selected model tables in an empty database | Yes, once, with safeguards |
-| `aurora db check` | Inspect database readiness and model changes without writes | No |
-| `aurora db migrate` | Preview or apply supported migrations using backend-specific gates | Only after required approvals |
-| `aurora db backup` | Create verified database backup | Writes backup file, not schema |
-| `aurora db restore` | Disabled; always refuses execution | No |
-| `aurora db history` | Read applied migration records | No |
+| Command | What it does |
+| --- | --- |
+| `aurora db check` | Reports readiness and model differences; never writes |
+| `aurora db init` | Reviews and initializes an eligible database |
+| `aurora db migrate` | Reviews and applies supported forward-only model changes |
+| `aurora db backup` | Creates a separate, verified backup when requested |
+| `aurora db history` | Lists recorded migrations; `--backups` lists backup records |
+| `aurora db restore` | Refuses execution; restore is currently disabled |
 
-There are **no database command aliases**. Legacy commands such as `sync`, `plan`, `inspect`, `status`, `policy`, `readiness`, `compat`, `migration`, `mysql-create-table`, and `mysql-add-column` are removed from the public CLI.
+Typical workflow:
 
-## Examples
+```bash
+aurora db check --database data
+aurora db init --database data
+aurora db history --database data
 
-```sh
-aurora db init
-aurora db check
-aurora db migrate
-aurora db backup --to backup.sqlite3
-aurora db history
+# Later, after editing a model:
+aurora db check --database data
+aurora db migrate --database data --title "Add invoice fields"
+aurora db history --database data
 ```
 
-`--database` selects a configured database alias (default `default`). Shared and app models are discovered automatically; `aurora_models.json` optionally maps trusted explicit references. An invalid existing manifest is an error.
+The `data` name is only an example; use a configured database name. Initialization and migrations ask for approval and refuse unsupported states. Destructive operations may also require a second exact-target acknowledgment. Backups are **optional** and are not created automatically by migrations.
 
-`check` is read-only and uses project conventions. It reports readiness, changes, or specific blocked states.
+To create a separate backup with a useful label:
 
-Ordinary interactive `migrate` reviews supported model differences and asks for explicit confirmation after required preflight safeguards; backups are optional. Supported MySQL/PostgreSQL migrations can have repeated reviewed successors; server-side table/column deletion and ambiguous or unsafe changes remain refused. In the unreleased checkout, verified SQLite forward-history databases support narrow single-table or single-column removal with strict interactive second confirmation when data exists. Uncertain DDL outcomes require manual reconciliation, never blind retry. Advanced compatibility flags do not expand the supported operation set.
+```bash
+aurora db backup --database data --title "Before invoice update"
+aurora db history --database data --backups
+```
 
-### Explicit SQLite schema operations
+MySQL backup authentication may need additional local configuration; check `aurora db backup --help`. Do not put passwords in scripts or CLI arguments.
 
-`aurora db migrate -c renames.json` reads a strictly validated operation document for supported SQLite changes and invokes its guarded review/confirmation workflow. The `-c` / `--change` is the explicit JSON operation option. A preview alone never authorizes DDL. MySQL/PostgreSQL explicit JSON schema-operation execution, arbitrary renames and destructive operations are not implemented.
+To submit a supported explicit schema operation document:
 
-The JSON format, limitations and examples are documented in [Database and migrations](database.md). This guide targets the unreleased Milestone 5 checkout; do not assume its features are present in the published `1.0.0a7` package.
+```bash
+aurora db migrate --database data -c changes.json
+```
 
-`restore` always refuses execution on SQLite, MySQL, and PostgreSQL. It never creates a target database. Read-only recovery preflight remains an internal inspection capability, not authorization to restore.
+The JSON schema and executable operations are backend-specific; inspect the proposal before confirming. The existence of `-c` does not promise arbitrary schema changes.
+
+### Important limits
+
+- `aurora db plan` and retired migration flags aren't public commands.
+- Restore execution is disabled on SQLite, MySQL, and PostgreSQL.
+- MySQL DDL may succeed before a subsequent history-recording failure. Aurora must refuse a blind retry and require manual reconciliation when the outcome is uncertain.
+- No database command bypasses model, physical-state, or dependency verification merely because an approval flag was supplied.
+
+See [Database operations and safety](database.md) for details.
