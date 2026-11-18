@@ -35,5 +35,7 @@ def test_unreleased_changelog_is_kept_during_development():
     body = (ROOT / "changelog/UNRELEASED.md").read_text(encoding="utf-8")
     assert body.startswith("# Unreleased\n")
     assert "## Added" in body and "## Fixed" in body
-    assert "- " in body
+    # An empty Unreleased section is valid immediately after archiving a release.
+    # Require the running headings, not an invented placeholder entry.
+    assert "## Changed" in body and "## Removed or retired" in body
     assert (ROOT / ".github/pull_request_template.md").is_file()
