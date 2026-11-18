@@ -65,9 +65,10 @@ def test_pypi_readme_links_are_version_pinned():
 
 def test_distribution_contains_only_aurora_python_packages():
     """Keep tests, private records, and development helpers out of the wheel."""
-    from setuptools import find_packages
-
-    package_roots = set(find_packages(where=str(ROOT), include=["aurora*"]))
+    package_roots = {
+        ".".join(path.parent.relative_to(ROOT).parts)
+        for path in (ROOT / "aurora").rglob("__init__.py")
+    }
     assert package_roots == {
         "aurora", "aurora.core", "aurora.database", "aurora.security",
     }
