@@ -239,8 +239,8 @@ def _database_failure(exc, args, action):
             "Check your database connection and model definitions. No automatic retry was attempted.\n")
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Run the canonical Aurora developer commands."""
+def _build_parser() -> argparse.ArgumentParser:
+    """Declare the public CLI and its unchanged argument contracts."""
     parser = argparse.ArgumentParser(prog="aurora", description="Aurora MVC developer tools")
 
     try:
@@ -397,6 +397,12 @@ def main(argv: list[str] | None = None) -> int:
                               help="Enable automatic reload")
     reload_flags.add_argument("--no-reload", dest="reload", action="store_false",
                               help="Disable automatic reload")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the canonical Aurora developer commands."""
+    parser = _build_parser()
     args = parser.parse_args(argv)
 
     if args.command == "db" and args.action != "restore" and args.database is None:

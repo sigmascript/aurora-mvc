@@ -33,30 +33,31 @@ def _mixed_delta(before, after):
             not before or len(before) != len(after) or
             any(not isinstance(t, dict) for t in (*before, *after))):
         return None
-    old, new = _strip_preview(before), _strip_preview(after)
+    previous_tables, desired_tables = _strip_preview(before), _strip_preview(after)
     changes = []
-    for prior, desired in zip(old, new):
+    for prior, desired in zip(previous_tables, desired_tables):
         if (set(prior) != set(desired) or prior.get('name') != desired.get('name') or
                 not _identifier(prior.get('name')) or
                 any(prior[k] != desired[k] for k in prior if k != 'columns')):
             return None
-        a, b = prior.get('columns'), desired.get('columns')
-        if (not isinstance(a, list) or not isinstance(b, list) or
+        previous_columns, desired_columns = prior.get('columns'), desired.get('columns')
+        if (not isinstance(previous_columns, list) or not isinstance(desired_columns, list) or
                 any(not isinstance(c, dict) or not _identifier(c.get('name'))
-                    for c in (*a, *b))):
+                    for c in (*previous_columns, *desired_columns))):
             return None
-        if a == b:
+        if previous_columns == desired_columns:
             continue
-        an = {c['name']: c for c in a}
-        bn = {c['name']: c for c in b}
-        if len(an) != len(a) or len(bn) != len(b):
+        previous_by_name = {column['name']: column for column in previous_columns}
+        desired_by_name = {column['name']: column for column in desired_columns}
+        if len(previous_by_name) != len(previous_columns) or len(desired_by_name) != len(desired_columns):
             return None
-        removed = set(an) - set(bn)
-        added = set(bn) - set(an)
+        removed = set(previous_by_name) - set(desired_by_name)
+        added = set(desired_by_name) - set(previous_by_name)
         if (len(removed) != 1 or len(added) != 1 or
-                any(an[k] != bn[k] for k in set(an) & set(bn))):
+                any(previous_by_name[name] != desired_by_name[name]
+                    for name in set(previous_by_name) & set(desired_by_name))):
             return None
-        changes.append((prior['name'], an[removed.pop()], bn[added.pop()]))
+        changes.append((prior['name'], previous_by_name[removed.pop()], desired_by_name[added.pop()]))
     return changes[0] if len(changes) == 1 else None
 
 
