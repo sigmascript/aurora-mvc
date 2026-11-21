@@ -8,8 +8,9 @@ from datetime import datetime, timezone
 from hashlib import sha256
 import hmac
 import json
-import os
 from urllib.parse import urlsplit
+
+from aurora.core.project_policy import project_is_production
 
 from .coordination import _PG_LOCK_KEY
 from .explicit_model_rename import (apply_source_changes, restore_source_changes,
@@ -106,7 +107,7 @@ def run_server_rename_operation(args, document, config, root, *, simple_confirm,
     from .migration_titles import migration_title
     if args.apply or args.approve or args.backup:
         raise PermissionError('Server renames require ordinary confirmation, not advanced flags')
-    if os.environ.get('AURORA_ENV', 'development').lower() == 'production' and not args.dry_run:
+    if not args.dry_run and project_is_production(root):
         raise PermissionError('Explicit server rename disabled in production')
     operation = document['operation']
     if operation['kind'] != 'rename_columns' or len(operation['columns']) != 1:

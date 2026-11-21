@@ -94,13 +94,13 @@ def _verify_baseline(conn, snapshot, *, native=False):
         raise RuntimeError('Existing foreign key violation')
 
 
-def _column_sql(model, name):
-    """Allow ordinary columns; required additions need a validated SQL default."""
+def _column_sql(model, name, *, allow_empty_required=False):
+    """Render an ordinary column; undefaulted NOT NULL needs empty-table proof."""
     field = model.__columns__[name]
 
     if (field.primary_key or field.unique or field.references is not None or
             field.server_default is not None or
-            (not field.nullable and field.default is None)):
+            (not field.nullable and field.default is None and not allow_empty_required)):
         raise ValueError('Only ordinary nullable or defaulted required columns are supported')
     # Reuse AuroraSQL's own DDL renderer; avoid a second type-mapping engine.
     from .schema import _SQL_TYPES, _default_literal

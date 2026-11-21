@@ -643,6 +643,7 @@ def run_check(args):
                 print(json.dumps(report, indent=2, sort_keys=True))
             else:
                 print(f"Database: {args.database} — READY for initialization review")
+                print("Next: aurora db init (requires review and confirmation).")
                 print("No database or schema changes were made.")
 
             return 0

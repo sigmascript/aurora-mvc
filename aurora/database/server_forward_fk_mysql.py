@@ -9,8 +9,9 @@ from datetime import datetime, timezone
 from hashlib import sha256
 import hmac
 import json
-import os
 import sys
+
+from aurora.core.project_policy import project_is_production
 
 from .coordination import migration_lock
 from .init_validation import validate_init_models
@@ -213,7 +214,7 @@ def execute_mysql_fk(connection, models, root, alias, identity, parsed, operatio
 
 def run_mysql_fk(args, connection, models, root, alias, identity, parsed, configured_url):
     from .migration_titles import migration_title
-    if os.environ.get('AURORA_ENV', 'development').lower() == 'production':
+    if project_is_production(root):
         raise PermissionError('Server foreign-key changes disabled in production')
     if any(getattr(args, option, None) for option in ('apply', 'approve', 'backup', 'name')):
         raise PermissionError('Foreign-key changes require interactive review')

@@ -7,6 +7,8 @@ runs automatically after a failed migration.
 from datetime import datetime, timezone
 from pathlib import Path
 
+from aurora.core.project_policy import project_is_production
+
 from .coordination import migration_lock
 from .server_forward_history import (TABLE, _physical, _verify_table,
                                      history_table, read_history, _directory)
@@ -122,10 +124,9 @@ def _verify_backups(connection, root, database, url):
 def reconcile_interrupted_addition(connection, root, database, models, target, title,
                                    *, expected_identity, parsed, configured_url):
     """Perform history-only completion under the established migration lock."""
-    import os
     from .cli_init import _mysql_database_identity
 
-    if os.environ.get('AURORA_ENV', 'development').lower() == 'production':
+    if project_is_production(root):
         raise PermissionError('Production recovery is disabled')
     if connection._transaction_active or getattr(connection, '_migration_lock_active', False):
         raise RuntimeError('Recovery cannot nest transactions or locks')

@@ -19,7 +19,7 @@ def _project(tmp_path, monkeypatch):
         "data": {"engine": "sqlite", "extension": "sqlite3"}
     }}), encoding="utf-8")
     (tmp_path / "aurora_config.json").write_text(json.dumps({
-        "default_database": "data"
+        "production": False, "default_database": "data"
     }), encoding="utf-8")
 
 
@@ -101,7 +101,7 @@ def test_catalog_does_not_break_existing_forward_history(tmp_path, monkeypatch):
         "data": {"engine": "sqlite", "extension": "sqlite3"}
     }}))
     (tmp_path / "aurora_config.json").write_text(json.dumps({
-        "default_database": "data"
+        "production": False, "default_database": "data"
     }))
     (tmp_path / "aurora_models.json").write_text(json.dumps({"databases": {
         "data": ["models.Item:Item"]

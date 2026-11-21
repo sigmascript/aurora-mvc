@@ -1,4 +1,5 @@
 import asyncio
+from contextvars import ContextVar
 import json
 import re
 from dataclasses import dataclass
@@ -14,6 +15,8 @@ from aurora.core.http_exception import HTTPException
 
 
 MULTIPART_MAX_BYTES = 8 * 1024 * 1024
+SYNC_MAX_BODY_BYTES = 8 * 1024 * 1024
+_sync_controller_body = ContextVar("aurora_sync_controller_body", default=None)
 MULTIPART_MAX_FILE_BYTES = 4 * 1024 * 1024
 MULTIPART_MAX_PARTS = 100
 
@@ -229,7 +232,20 @@ class Request:
         body = await self.body()
         return body.decode("utf-8")
 
-    async def json(self) -> Any:
+    def json(self) -> Any:
+        """Parse JSON in sync controllers or return an awaitable elsewhere."""
+        loop = _sync_controller_body.get()
+
+        if loop is not None:
+            async def parse():
+                await self.body(max_bytes=SYNC_MAX_BODY_BYTES)
+                return await self._json_async()
+
+            return asyncio.run_coroutine_threadsafe(parse(), loop).result()
+
+        return self._json_async()
+
+    async def _json_async(self) -> Any:
         """Parse the body as JSON.
 
         Invalid JSON or UTF-8 raises HTTPException with status 400.
@@ -241,7 +257,20 @@ class Request:
         except (json.JSONDecodeError, UnicodeDecodeError):
             raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    async def form(self) -> dict[str, str | UploadedFile]:
+    def form(self) -> dict[str, str | UploadedFile]:
+        """Parse forms in sync controllers or return an awaitable elsewhere."""
+        loop = _sync_controller_body.get()
+
+        if loop is not None:
+            async def parse():
+                await self.body(max_bytes=SYNC_MAX_BODY_BYTES)
+                return await self._form_async()
+
+            return asyncio.run_coroutine_threadsafe(parse(), loop).result()
+
+        return self._form_async()
+
+    async def _form_async(self) -> dict[str, str | UploadedFile]:
         """Parse bounded URL-encoded or multipart form data.
 
         Multipart uploads are in-memory and never stored automatically. A

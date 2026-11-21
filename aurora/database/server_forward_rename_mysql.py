@@ -8,8 +8,9 @@ from datetime import datetime, timezone
 from hashlib import sha256
 import hmac
 import json
-import os
 from urllib.parse import urlsplit
+
+from aurora.core.project_policy import project_is_production
 
 from .coordination import migration_lock
 from .explicit_model_rename import apply_source_changes, source_changes, staged_model_source
@@ -104,7 +105,7 @@ def run_mysql_rename_operation(args, document, config, root, *, simple_confirm, 
     from .migration_titles import migration_title
     if args.apply or args.approve or args.backup:
         raise PermissionError('MySQL rename requires ordinary interactive confirmation')
-    if os.environ.get('AURORA_ENV', 'development').lower() == 'production' and not args.dry_run:
+    if not args.dry_run and project_is_production(root):
         raise PermissionError('MySQL explicit rename disabled in production')
     operation = document['operation']
     if operation['kind'] != 'rename_columns' or len(operation['columns']) != 1:

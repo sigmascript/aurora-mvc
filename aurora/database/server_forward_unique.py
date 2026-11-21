@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 from hashlib import sha256
 import hmac
 import json
-import os
+
+from aurora.core.project_policy import project_is_production
 
 from .coordination import _PG_LOCK_KEY, migration_lock
 from .init_validation import validate_init_models
@@ -284,7 +285,7 @@ def execute_unique_change(connection, models, root, alias, identity, parsed, ope
 def run_unique_change(args, connection, models, root, alias, identity, parsed, configured_url):
     """Single interactive reviewed model transition; no automatic general drift adoption."""
     from .migration_titles import migration_title
-    if os.environ.get('AURORA_ENV', 'development').lower() == 'production':
+    if project_is_production(root):
         raise PermissionError('Server UNIQUE migration execution disabled in production')
     if any(getattr(args, option, None) for option in ('apply', 'approve', 'backup', 'name')):
         raise PermissionError('UNIQUE changes require interactive ordinary approval')

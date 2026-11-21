@@ -73,7 +73,7 @@ def _read_document(source):
     if not isinstance(document, dict) or document.get("format", _FORMAT) != _FORMAT:
         raise ValueError("Unsupported application configuration format")
 
-    if set(document) - {"format", "application", "limits", "constants", "statics", "strict", "server", "sessions", "default_database"}:
+    if set(document) - {"format", "application", "limits", "constants", "statics", "strict", "server", "sessions", "default_database", "production"}:
         raise ValueError("Unknown application configuration section")
 
     return document
@@ -148,6 +148,10 @@ def load_application_settings(source):
     strict = document.get("strict", True)
     server = document.get("server", {})
     default_database = document.get("default_database")
+    production = document.get("production", True)
+
+    if not isinstance(production, bool):
+        raise ValueError("production must be a JSON boolean")
 
     if "default_database" in document:
         if (not isinstance(default_database, str) or
@@ -212,6 +216,9 @@ def load_application_settings(source):
             ) from error
 
     constructor_options = _session_options(document, source)
+
+    if "production" in document:
+        constructor_options["production"] = production
 
     # Reuse the Application constructor's existing locale validation contract.
     if "locales" in application or "default_locale" in application:

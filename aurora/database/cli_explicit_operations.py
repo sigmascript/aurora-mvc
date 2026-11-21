@@ -8,13 +8,14 @@ backend-specific implementation.
 import hashlib
 import hmac
 import json
-import os
 from pathlib import Path
 from contextlib import closing
 import re
 import sqlite3
 import sys
 from urllib.parse import urlsplit
+
+from aurora.core.project_policy import project_is_production
 
 from .cli_backup import _sqlite_source
 from .cli_plan import _load_config
@@ -389,7 +390,7 @@ def _rehearse_sqlite(db_file, statements):
 
 def _apply_sqlite_operations(args, document, db_file, preview_digest, *, model_mapping=None):
     """Apply one reviewed SQLite operation after a bounded rehearsal."""
-    if os.environ.get("AURORA_ENV", "development").lower() == "production":
+    if project_is_production(Path(args.config).expanduser().resolve().parent):
         raise PermissionError("Explicit schema migration is disabled in production")
 
     if args.backup:
@@ -588,7 +589,7 @@ def _forward_explicit_operation(args, document, db_file, root, *, simple_confirm
             print(f"Operation: {operation['kind']} on {operation['table']}")
             print("Status: READY_FOR_REVIEW; no database changes made")
         return 2 if args.check else 0
-    if os.environ.get("AURORA_ENV", "development").lower() == "production":
+    if project_is_production(Path(args.config).expanduser().resolve().parent):
         raise PermissionError("Explicit SQLite operations are disabled in production")
     if not simple_confirm and not interactive:
         raise PermissionError("Confirmation required; use --confirm yes")

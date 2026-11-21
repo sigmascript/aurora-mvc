@@ -74,6 +74,89 @@ aurora db check --database shop
 aurora db check --database reports
 ```
 
+## Use models from application code
+
+Creating a model registers its Python class with a configured database; it does **not** create its table. After `aurora db init` (or a reviewed migration), import the model class in your controller and call CRUD directly. Aurora opens and closes a short-lived connection for an ordinary registered-model operation.
+
+For example, in an MVC project run `aurora model add Notes`. Edit the generated `models/Notes.py` to declare the columns you need **before** initializing the database. A simple SQLite model could be:
+
+```python
+from aurora.database import Model, column
+
+
+class Notes(Model):
+    __table__ = "notes"
+    id = column(int, primary_key=True)
+    title = column(str)
+```
+
+Then use `aurora db check`, review `aurora db init`, and import the class from the package:
+
+```python
+from models import Notes
+
+created = Notes.create({"title": "First note"})
+note_id = created["id"]
+rows = Notes.read({"id": note_id})  # Materialized, list-compatible rows of dictionaries
+changed = Notes.update(values={"title": "Edited"}, where={"id": note_id})
+deleted = Notes.delete(where={"id": note_id})
+```
+
+`create()` takes **one positional mapping** and returns a native dictionary. Keyword-style `create(title="...")` is not supported. `read()` returns a materialized `ModelResult` with `.first()` and `.all()` conveniences; `update()` and `delete()` return affected-row counts. Check those counts when deciding whether to report a missing record. A write with no `where` condition requires the deliberate `confirm=True` safeguard; do not use it for ordinary item updates/deletions.
+
+For operations that must succeed or fail together, use an explicit transaction:
+
+```python
+from aurora.db import transaction
+
+with transaction():
+    note = Notes.create({"title": "Atomic note"})
+    # Other operations for this same configured database can go here.
+```
+
+An exception rolls back the transaction. A nested `connection()` scope for the same database borrows the transaction's connection without committing separately. Nested transactions and cross-database borrowing inside a transaction are not supported. Use `with connection():` for an explicitly shared non-transaction scope; caller-owned `connect()` and `.using(db)` remain available for advanced access. Database work is synchronous: in asynchronous handlers, delegate blocking database operations to a supported worker instead of running them directly on the event loop.
+
+### MVC and Modular imports
+
+The managed model exports are package-local:
+
+```python
+# MVC, or project-shared models in a Modular project:
+from models import Notes
+
+# A model generated for the blog application in a Modular project:
+from apps.blog.models import Posts
+```
+
+Create an application-local model using `aurora model add Posts --app blog` after creating the `blog` application. Shared models live in the project-level `models/` package; application models live under `apps/blog/models/`. Aurora maintains only the generated package exports on add/remove, preserving unrelated `__init__.py` code. A package import does not choose a database: registration in `aurora_models.json`, and the configured default or named database, determine the target. Use `aurora model add NAME --database ALIAS` where necessary. Identical names across packages may still be refused by existing model/database identity guards; different Python import paths do not override those rules.
+
+### Requests and JSON responses
+
+A synchronous controller can parse form submissions or JSON using `self.request.form()` or `self.request.json()`; asynchronous actions use `await self.request.form()` or `await self.request.json()`. Both are explicit APIs. For example, after creating and initializing `Notes`:
+
+```python
+from aurora import Controller
+from models import Notes
+
+
+class NotesApi(Controller):
+    def get(self):
+        return Notes.read()  # JSON array
+
+    def post(self):
+        data = self.request.json()
+        title = data.get("title") if isinstance(data, dict) else None
+        if not isinstance(title, str) or not title.strip():
+            return {"error": "A title is required"}, 400
+        return Notes.create({"title": title.strip()}), 201
+```
+
+Register it using `app.route("/notes/", NotesApi)` in `app.py`. `get()` and `post()` are discovered automatically. For an HTML form, replace `self.request.json()` with `self.request.form()` and validate the returned fields before writing. In an async controller use `async def post(self)` and `data = await self.request.json()`; follow the worker rule above for synchronous database work.
+
+Returning a dictionary, list, materialized AuroraSQL result or supported `(data, HTTP_status)` tuple produces a JSON response; you can also import `JSONResponse` directly from `aurora` for explicit control. Unsupported values are **not** silently converted to strings. Invalid JSON is rejected with HTTP 400; unsupported form content types with HTTP 415. Request body and upload limits still apply. These snippets show basic inputs, not a complete authentication/CSRF policy: protect state-changing routes, validate ownership and use the application's session/CSRF mechanisms where appropriate.
+
+See [Routing and controllers](routing.md) for HTTP methods and [Project layouts](project-templates.md) for where controllers and models belong.
+
 ## Initialize and evolve a schema
 
 From a project whose models and database connections are configured:

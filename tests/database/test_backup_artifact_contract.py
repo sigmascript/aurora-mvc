@@ -16,7 +16,7 @@ def _project(tmp_path, monkeypatch):
         "data": {"engine": "sqlite", "extension": "sqlite3"}
     }}), encoding="utf-8")
     (tmp_path / "aurora_config.json").write_text(json.dumps({
-        "default_database": "data"
+        "production": False, "default_database": "data"
     }), encoding="utf-8")
 
 
@@ -85,7 +85,7 @@ def test_server_backup_dispatch_records_verified_artifacts_without_live_ddl(tmp_
 
     monkeypatch.chdir(tmp_path)
     (tmp_path / "aurora_config.json").write_text(json.dumps({
-        "default_database": "warehouse"
+        "production": False, "default_database": "warehouse"
     }), encoding="utf-8")
 
     def fake_mysql(_, __, destination, ___, expected_url=None):

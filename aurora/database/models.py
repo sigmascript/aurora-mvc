@@ -6,6 +6,7 @@ existing tables and never implicitly modify database structure.
 
 import re
 import math
+from collections.abc import Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import date, datetime
@@ -337,28 +338,46 @@ class Model:
     def _operations(cls):
         connection = _REQUEST_CONNECTION.get()
 
-        if connection is None:
-            connection = Model.database
+        if connection is not None:
+            from aurora.db import _check_scoped_model
 
-        if connection is None:
-            raise RuntimeError("No database is bound to Model")
+            _check_scoped_model(cls)
+            return cls.using(connection)
 
-        return cls.using(connection)
+        if Model.database is not None:
+            return cls.using(Model.database)
+
+        raise RuntimeError("No database is bound to Model; use a project connection scope")
+
+    @classmethod
+    def _execute(cls, method, *args, **kwargs):
+        """Close an implicit connection only after its result is materialized."""
+        if _REQUEST_CONNECTION.get() is not None or Model.database is not None:
+            return getattr(cls._operations(), method)(*args, **kwargs)
+
+        from aurora.db import _alias_for_model, connection
+
+        with connection(_alias_for_model(cls)) as db:
+            from aurora.db import _check_scoped_model
+
+            _check_scoped_model(cls)
+            return getattr(cls.using(db), method)(*args, **kwargs)
 
     @classmethod
     def read(cls, where=None, *, order_by=None, limit=None, offset=0):
         """Read plain dictionaries in a list-compatible ModelResult."""
-        return cls._operations().read(where, order_by=order_by, limit=limit,
-                                      offset=offset)
+        return cls._execute("read", where, order_by=order_by, limit=limit,
+                            offset=offset)
 
     @classmethod
     def query(cls, sql, parameters=None):
         """Execute parameterized SQL directly; return rows or affected count."""
-        return cls._operations().query(sql, parameters)
+        return cls._execute("query", sql, parameters)
 
     @classmethod
     def legacy_query(cls, where=None, *, order_by=None, limit=None, offset=0):
         """Temporary Alpha 8 lazy-query compatibility; slated for retirement."""
+        # Lazy results cannot own a connection that would close on return.
         return cls._operations().legacy_query(where, order_by=order_by,
                                               limit=limit, offset=offset)
 
@@ -366,21 +385,21 @@ class Model:
     def join(cls, models, *, cols=None, where=None, order_by=None,
              limit=None, offset=0, on=None):
         """Read related models directly, using declared relationships or explicit on."""
-        return cls._operations().join(models, cols=cols, where=where,
-                                      order_by=order_by, limit=limit,
-                                      offset=offset, on=on)
+        return cls._execute("join", models, cols=cols, where=where, order_by=order_by,
+                            limit=limit, offset=offset, on=on)
 
     @classmethod
-    def create(cls, **values):
-        return cls._operations().create(**values)
+    def create(cls, data, /):
+        """Insert a positional mapping of column values using the active binding."""
+        return cls._execute("create", data)
 
     @classmethod
     def update(cls, *, values=None, where=None, confirm=False):
-        return cls._operations().update(values=values, where=where, confirm=confirm)
+        return cls._execute("update", values=values, where=where, confirm=confirm)
 
     @classmethod
     def delete(cls, *, where=None, confirm=False):
-        return cls._operations().delete(where=where, confirm=confirm)
+        return cls._execute("delete", where=where, confirm=confirm)
 
     @classmethod
     def using(cls, connection):
@@ -708,13 +727,17 @@ class ModelOperations:
             f"SELECT * FROM {self.table}{clause} LIMIT 1", parameters)
         return None if row is None else self.model._from_row(row)
 
-    def create(self, **values):
-        """Insert a record and populate an omitted integer primary key.
+    def create(self, data, /):
+        """Insert one positional mapping of columns into an existing table.
 
         Generated-key retrieval uses the same connection as the insert. It is
         not safe to share a Connection concurrently between tasks or threads.
         """
-        values = dict(values)
+        if not isinstance(data, Mapping):
+            raise TypeError("create() expects a dictionary or mapping")
+
+        values = dict(data)
+
         self.model._validate(values)
 
         # Omitted defaults are applied by the database, not by this insert.
@@ -760,7 +783,11 @@ class ModelOperations:
 
                 values[key_name] = row["generated_key"]
 
-        return self.model(**{**defaulted, **values})
+        result = {**defaulted, **values}
+        # The former model-instance construction validated returned defaults.
+        # Preserve that validation without creating a model just for the return.
+        self.model._validate(result)
+        return result
 
     def update(self, *, values=None, where=None, confirm=False):
         values = dict(values or {})

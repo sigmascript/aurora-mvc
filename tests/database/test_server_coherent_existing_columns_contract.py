@@ -247,3 +247,125 @@ def test_verified_forward_execution_one_ddl_and_one_history(monkeypatch, tmp_pat
     assert result == snapshot and backup is None
     assert events.count('ddl') == 1 and events.count('history') == 1
     assert events.index('ddl') < events.index('verified') < events.index('history')
+
+
+@pytest.mark.parametrize('dialect', ['mysql', 'postgresql'])
+def test_required_column_addition_checks_empty_table(observed, dialect):
+    class RequiredMessages(Model):
+        __table__ = 'server_coherent_messages'
+        id = column(int, primary_key=True)
+        title = column(str, length=250, not_null=False)
+        visits = column(int, default=7)
+        note = column(str, length=80, not_null=False)
+        category = column(str, length=40, not_null=True)
+
+    observed['kinds'] = [('missing_column', 'category')]
+    rows = {'existing': None}
+    queries = []
+
+    def fetch(sql):
+        queries.append(sql)
+        return rows['existing']
+
+    connection = SimpleNamespace(dialect=dialect, fetch_first=fetch)
+    proposal = reviewer.review_server_model_changes(
+        connection, (RequiredMessages,), 'default', 'identity'
+    )
+
+    assert proposal.operations[0]['kind'] == 'add_column'
+    assert 'ADD COLUMN' in proposal.statements[0]
+    assert 'NOT NULL' in proposal.statements[0]
+    assert 'DEFAULT' not in proposal.statements[0]
+    assert len(queries) == 1
+    assert 'SELECT 1 AS present FROM' in queries[0]
+    assert 'LIMIT 1' in queries[0]
+
+    rows['existing'] = {'present': 1}
+
+    with pytest.raises(ValueError, match='requires an empty existing table'):
+        reviewer.review_server_model_changes(connection, (RequiredMessages,), 'default', 'identity')
+
+
+@pytest.mark.parametrize('dialect', ['mysql', 'postgresql'])
+def test_required_addition_with_other_safe_columns_still_checks_rows(observed, dialect):
+    class RequiredMessages(Model):
+        __table__ = 'server_coherent_messages'
+        id = column(int, primary_key=True)
+        title = column(str, length=250, not_null=False)
+        visits = column(int, default=7)
+        note = column(str, length=80, not_null=False)
+        category = column(str, length=40, not_null=True)
+
+    observed['kinds'] = [('type_mismatch', 'title'), ('missing_column', 'category')]
+    connection = SimpleNamespace(dialect=dialect, fetch_first=lambda sql: None)
+    proposal = reviewer.review_server_model_changes(
+        connection, (RequiredMessages,), 'default', 'identity'
+    )
+
+    assert proposal.operations[0]['kind'] == 'alter_columns'
+    assert proposal.operations[0]['additions'] == ('category',)
+    assert 'NOT NULL' in proposal.statements[0]
+
+
+@pytest.mark.parametrize('dialect', ['mysql', 'postgresql'])
+def test_required_addition_refuses_new_rows_during_locked_review(
+        observed, monkeypatch, tmp_path, dialect):
+    from aurora.database import cli_init
+
+    class RequiredMessages(Model):
+        __table__ = 'server_coherent_messages'
+        id = column(int, primary_key=True)
+        title = column(str, length=250, not_null=False)
+        visits = column(int, default=7)
+        note = column(str, length=80, not_null=False)
+        category = column(str, length=40, not_null=True)
+
+    observed['kinds'] = [('missing_column', 'category')]
+    occupied = {'value': False}
+    events = []
+
+    class Connection:
+        _transaction_active = False
+        _migration_lock_active = False
+
+        def __init__(self):
+            self.dialect = dialect
+
+        def fetch_first(self, sql, parameters=None):
+            if 'pg_try_advisory_xact_lock' in sql:
+                return {'acquired': True}
+
+            return {'present': 1} if occupied['value'] else None
+
+        @contextmanager
+        def transaction(self):
+            yield
+
+        def execute_write(self, sql, parameters=None):
+            events.append(sql)
+
+    @contextmanager
+    def locked(connection):
+        yield
+
+    connection = Connection()
+    proposal = reviewer.review_server_model_changes(
+        connection, (RequiredMessages,), 'default', 'identity'
+    )
+    occupied['value'] = True
+
+    monkeypatch.setattr(cli_init, '_mysql_database_identity', lambda *_: 'identity')
+    monkeypatch.setattr(cli_init, '_postgres_database_identity', lambda *_: 'identity')
+    monkeypatch.setattr(executor, 'read_history', lambda *_: ([{'id': 1}], {}))
+    monkeypatch.setattr(executor, 'history_table', lambda *_: '__migrations__')
+    monkeypatch.setattr(executor, 'migration_lock', locked)
+
+    with pytest.raises(ValueError, match='requires an empty existing table'):
+        executor.execute_server_forward_migration(
+            connection, (RequiredMessages,), tmp_path, 'default',
+            identity='identity', parsed=object(), review=proposal,
+            approval=proposal.review_sha256, title='Add required field',
+            backup_path=None, config_path='dummy'
+        )
+
+    assert events == []

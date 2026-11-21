@@ -3,10 +3,11 @@
 Never creates databases, initializes journals, or falls back to legacy DDL.
 """
 
-import os
 import sqlite3
 from pathlib import Path
 from urllib.parse import urlsplit
+
+from aurora.core.project_policy import project_is_production
 
 from .cli_plan import _existing_sqlite_path, _load_config, _select_models
 from .review_artifacts import load_review, verify_review_acknowledgment
@@ -17,7 +18,7 @@ from .sqlite_guarded_migration import execute_sqlite_create_tables
 def run_reviewed_migration(args):
     """Apply exactly one reviewed SQLite migration after independent approval."""
 
-    if os.environ.get('AURORA_ENV', 'development').lower() == 'production':
+    if project_is_production(Path(args.config).expanduser().resolve().parent):
         raise PermissionError('Migration execution is disabled in production')
 
     if not (args.apply and args.confirm == 'APPLY' and args.review_file and args.approve):

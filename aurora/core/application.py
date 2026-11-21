@@ -1,4 +1,6 @@
+import asyncio
 import inspect
+import logging
 import sqlite3
 from datetime import timezone
 from types import MappingProxyType
@@ -13,8 +15,8 @@ from aurora.core.configuration import (
 )
 from aurora.core.controller import Controller
 from aurora.core.http_exception import HTTPException
-from aurora.core.request import ClientDisconnect, Request
-from aurora.core.response import Response
+from aurora.core.request import ClientDisconnect, Request, _sync_controller_body
+from aurora.core.response import JSONResponse, Response
 from aurora.core.router import Router
 from aurora.core.static_files import serve_static_file
 from aurora.rendering import ViewRenderer
@@ -25,6 +27,9 @@ from aurora.security.sessions import (
     SessionStorageError,
 )
 from aurora.urls import _current_application, with_query
+
+
+_logger = logging.getLogger("aurora.runtime")
 
 
 class Application:
@@ -45,7 +50,7 @@ class Application:
         view_headers=None,
         static_directory=None,
         static_url="/statics",
-        environment="production",
+        production=True,
         statics_directory=None,
         view_namespaces=None,
         database_work=None,
@@ -59,7 +64,7 @@ class Application:
         # Resolve compatible session forms before validating dependent options.
         settings = validate_session_settings(sessions, session_settings)
         validate_runtime_settings(
-            environment, database_work, database_registry, max_request_body_bytes
+            production, database_work, database_registry, max_request_body_bytes
         )
         self.locales, self.default_locale = validate_locales(locales, default_locale)
         validate_locale_cookie(locale_cookie_name, self.locales, settings)
@@ -78,7 +83,7 @@ class Application:
         self.database_registry = database_registry
         self._lifespan_started = False
         self._lifespan_stopped = False
-        self.environment = environment
+        self.production = production
         # Defaults are inert; only from_config opts into project JSON settings.
         self.settings = MappingProxyType({})
         self.constants = MappingProxyType({})
@@ -133,10 +138,14 @@ class Application:
             app.renderer.environment.globals["constants"] = app.constants
         app.timezone = configuration.tzinfo
         app.settings = MappingProxyType({
+            "production": app.production,
             "name": configuration.name,
             "timezone": configuration.timezone_name,
             "constants": configuration.constants,
         })
+        from pathlib import Path
+
+        app._project_root = Path(source).resolve().parent
         return app
 
     @classmethod
@@ -179,7 +188,9 @@ class Application:
         if static_folder.is_dir() and not static_folder.is_symlink():
             options.setdefault("statics_directory", static_folder)
 
-        return cls.from_config(config, **options)
+        app = cls.from_config(config, **options)
+        app._project_root = root
+        return app
 
     # --- Middleware and route registration ---
 
@@ -244,6 +255,15 @@ class Application:
             return self.add_error_handler(status_code, handler)
         return register
 
+    def _log_unexpected_error(self, request, context, error):
+        """Keep internal diagnostics off the HTTP response and out of production traces."""
+        message = "Unhandled %s during %s %s" % (context, request.method, request.path)
+
+        if self.production:
+            _logger.error("%s (%s)", message, type(error).__name__)
+        else:
+            _logger.exception(message)
+
     async def _http_error(self, request, status_code, detail, headers=None):
         """Render one custom HTTP error, falling back safely on failure."""
         fallback = Response(detail, status_code=status_code, headers=headers)
@@ -266,7 +286,8 @@ class Application:
                 }
             response.prepare()  # Broken custom responses must fail before sending.
             return response
-        except Exception:
+        except Exception as error:
+            self._log_unexpected_error(request, "HTTP error handler failure", error)
             return Response("Internal Server Error", status_code=500)
         finally:
             _current_application.reset(token)
@@ -296,6 +317,7 @@ class Application:
 
         route = self.add_route(path, controller.dispatch, methods=methods, name=name)
         route.method_controller = True
+        route.controller_class = controller
         return route
 
     def static_url_for(self, path):
@@ -425,7 +447,8 @@ class Application:
             response = Response("Session Unavailable", status_code=503)
         except HTTPException as exc:
             response = await self._http_error(request, exc.status_code, exc.detail)
-        except Exception:
+        except Exception as error:
+            self._log_unexpected_error(request, "request failure", error)
             # Unexpected details are not exposed, even through custom 500 handlers.
             response = await self._http_error(request, 500, "Internal Server Error")
 
@@ -433,7 +456,8 @@ class Application:
         # become a clean 500, but transport failures must never be retried.
         try:
             response.prepare()
-        except Exception:
+        except Exception as error:
+            self._log_unexpected_error(request, "response preparation failure", error)
             response = Response("Internal Server Error", status_code=500)
 
         if request.method == "HEAD":
@@ -562,7 +586,31 @@ class Application:
         token = _current_application.set(self)
 
         try:
-            result = route.handler(request, **params)
+            controller = getattr(route, "controller_class", None)
+            action = None
+
+            if controller is not None:
+                action = getattr(controller, request.method.lower(), None)
+
+                if request.method == "HEAD" and not callable(action):
+                    action = getattr(controller, "get", None)
+            else:
+                action = getattr(route.handler, "_aurora_controller_action", None)
+
+            if callable(action) and not inspect.iscoroutinefunction(action):
+                loop = asyncio.get_running_loop()
+
+                def call_sync_controller():
+                    token = _sync_controller_body.set(loop)
+
+                    try:
+                        return route.handler(request, **params)
+                    finally:
+                        _sync_controller_body.reset(token)
+
+                result = await asyncio.to_thread(call_sync_controller)
+            else:
+                result = route.handler(request, **params)
 
             if inspect.isawaitable(result):
                 result = await result
@@ -615,5 +663,21 @@ class Application:
             return Response(html, status_code=result.status_code,
                             content_type="text/html; charset=utf-8",
                             headers={**self.view_headers, **result.headers})
+
+        # Explicit responses and rendered views always take precedence.
+        # AuroraSQL ModelResult is already eager and list-compatible; JSON
+        # serialization must never acquire or retain a database connection.
+        from aurora.database.models import ModelResult, ModelRow
+
+        status = 200
+        if (isinstance(result, tuple) and len(result) == 2
+                and type(result[1]) is int
+                and isinstance(result[0], (dict, list, ModelRow, ModelResult))):
+            result, status = result
+            if not 100 <= status <= 599:
+                raise ValueError("JSON response status must be between 100 and 599")
+
+        if isinstance(result, (dict, list, ModelRow, ModelResult)):
+            return JSONResponse(result, status_code=status)
 
         return Response(result)

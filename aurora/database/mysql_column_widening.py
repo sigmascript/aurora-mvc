@@ -1,9 +1,10 @@
 """Internal guarded MySQL widening with durable post-DDL uncertainty."""
 
 from hashlib import sha256
-import os
 from pathlib import Path
 from uuid import uuid4
+
+from aurora.core.project_policy import project_is_production
 
 from .coordination import migration_lock
 from .schema import _quote
@@ -23,7 +24,7 @@ def execute_mysql_column_widening(connection, models, *, alias, identity, parsed
     if connection.dialect != "mysql":
         raise ValueError("MySQL widening requires MySQL")
 
-    if os.environ.get("AURORA_ENV", "development").lower() == "production":
+    if project_is_production(Path(config_path).expanduser().resolve().parent):
         raise PermissionError("Production migration requires separate approval")
 
     if connection._transaction_active or getattr(connection, "_migration_lock_active", False):

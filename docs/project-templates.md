@@ -45,3 +45,14 @@ The command above assumes your shell started in the repository root. For the oth
 The multilingual example selects language from the URL. It does not imply that every generated Aurora project automatically enables multilingual routes.
 
 Each example has its own README documenting its behavior. The independent **NoteFlow** reference application is maintained outside the Aurora MVC framework repository.
+
+## Shared and application models
+
+MVC projects keep shared model classes in `models/`. Modular projects also have a root `models/` package for shared models, while application-specific classes live under `apps/APP/models/`. After generating a model, use its package's managed export:
+
+```python
+from models import Users                 # MVC or Modular shared model
+from apps.blog.models import Posts       # Modular blog model
+```
+
+Models registered through the generator are associated with the configured default or selected database; imports do not change that association. See the [practical AuroraSQL walkthrough](database.md#use-models-from-application-code) for model declarations, CRUD and controllers.

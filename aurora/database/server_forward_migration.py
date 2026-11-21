@@ -5,9 +5,10 @@ uncertain result is left intact for explicit reconciliation, never retried.
 """
 
 import hmac
-import os
 from pathlib import Path
 from datetime import datetime, timezone
+
+from aurora.core.project_policy import project_is_production
 
 from .coordination import _PG_LOCK_KEY, migration_lock
 from .server_forward_history import read_history, history_table
@@ -28,7 +29,7 @@ def execute_server_forward_migration(connection, models, root, alias, *,
     dialect = connection.dialect
     if dialect not in ("mysql", "postgresql"):
         raise ValueError("Server forward migration requires MySQL or PostgreSQL")
-    if os.environ.get("AURORA_ENV", "development").lower() == "production":
+    if project_is_production(root):
         raise PermissionError("Server migration execution is disabled in production")
     if connection._transaction_active or getattr(connection, "_migration_lock_active", False):
         raise RuntimeError("Cannot nest server migration execution")

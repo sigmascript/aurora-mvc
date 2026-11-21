@@ -51,7 +51,7 @@ aurora model add Invoice --database accounting
 aurora db check --database accounting
 ```
 
-Add `accounting` to `aurora_databases.json` first. The generator registers the model without connecting to the database. See [AuroraSQL and migrations](database.md) for configuration examples and safety boundaries.
+Add `accounting` to `aurora_databases.json` first. The generator registers the model without connecting to the database. See [AuroraSQL and migrations](database.md) for configuration, safe schema changes, and a [controller-to-model CRUD walkthrough](database.md#use-models-from-application-code). Creating a model registers its class, but you must declare its fields and initialize the schema before storing records.
 
 ## Write a route directly
 

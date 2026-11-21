@@ -8,8 +8,9 @@ from datetime import datetime, timezone
 from hashlib import sha256
 import hmac
 import json
-import os
 from urllib.parse import urlsplit
+
+from aurora.core.project_policy import project_is_production
 
 from .coordination import _PG_LOCK_KEY, migration_lock
 from .init_validation import validate_init_models
@@ -224,7 +225,7 @@ def run_server_index_operation(args, document, config, root, *, simple_confirm, 
         raise PermissionError('Server indexes use one ordinary confirmation; advanced flags are unsupported')
     from .migration_titles import migration_title
     title = migration_title(getattr(args, 'title', None) or 'Untitled', 'Untitled')
-    if os.environ.get('AURORA_ENV', 'development').lower() == 'production' and not args.dry_run:
+    if not args.dry_run and project_is_production(root):
         raise PermissionError('Server index execution is disabled in production')
     _, models = _select_models(args, root)
     parsed = urlsplit(config.resolve(args.database))

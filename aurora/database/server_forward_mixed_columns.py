@@ -8,8 +8,9 @@ from datetime import datetime, timezone
 from hashlib import sha256
 import hmac
 import json
-import os
 import sys
+
+from aurora.core.project_policy import project_is_production
 
 from .coordination import _PG_LOCK_KEY, migration_lock
 from .init_validation import validate_init_models
@@ -120,7 +121,7 @@ def run_mixed_columns(args, connection, models, root, alias, identity, parsed):
     from .migration_titles import migration_title
 
     dialect = connection.dialect
-    if os.environ.get('AURORA_ENV', 'development').lower() == 'production':
+    if project_is_production(root):
         raise PermissionError('Destructive server migrations are disabled in production')
     if (any(getattr(args, key, None) for key in ('apply', 'approve', 'backup', 'name')) or
             getattr(args, 'confirm', None) is not None or not sys.stdin.isatty()):

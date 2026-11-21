@@ -31,6 +31,7 @@ class Controller:
             action = getattr(controller, action_name)
             return action(**params)
 
+        handler._aurora_controller_action = getattr(cls, action_name)
         return handler
 
     @classmethod

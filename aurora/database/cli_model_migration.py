@@ -3,12 +3,13 @@
 import hmac
 from contextlib import closing
 import json
-import os
 from pathlib import Path
 import sqlite3
 import sys
 from types import SimpleNamespace
 from urllib.parse import urlsplit
+
+from aurora.core.project_policy import project_is_production
 
 from .schema_records import prepare_schema_record, write_schema_record
 from .cli_plan import _existing_sqlite_path, _load_config, _select_models
@@ -83,7 +84,7 @@ def run_model_migration(args):
         with closing(sqlite3.connect(db_file.as_uri() + "?mode=ro", uri=True)) as observed:
             legacy = legacy_initial_review(observed, root, db_file, models, args.database)
         if legacy is not None:
-            if os.environ.get("AURORA_ENV", "development").lower() == "production":
+            if project_is_production(Path(args.config).expanduser().resolve().parent):
                 raise PermissionError("History conversion is disabled in production")
             print(f"Database: {args.database} (SQLite)")
             print("  Replace verified alpha history with migrations table")
@@ -119,7 +120,7 @@ def run_model_migration(args):
     if forward:
         if args.dry_run or args.apply or args.backup:
             raise ValueError("Advanced migration options are not supported by forward-only SQLite history")
-        if os.environ.get("AURORA_ENV", "development").lower() == "production":
+        if project_is_production(Path(args.config).expanduser().resolve().parent):
             raise PermissionError("Model migration is disabled in production")
         from .init_validation import validate_init_models
         models = validate_init_models(models, dialect="sqlite", allow_extended=True)
@@ -132,7 +133,12 @@ def run_model_migration(args):
             removal = None
             if removed_tables:
                 from .sqlite_forward_history import review_table_removal
-                removal = review_table_removal(checked._raw, root, db_file, models)
+
+                added_tables = {model.__table_name__ for model in models} - prior_tables
+                removal = review_table_removal(
+                    checked._raw, root, db_file, models,
+                    allow_new_tables=bool(added_tables),
+                )
             trusted_indexes = {item["name"] for item in prior["physical_schema"]
                                if item["type"] == "index" and item["sql"] is not None}
             plans = [plan_schema(checked, model, models=models,
@@ -155,18 +161,39 @@ def run_model_migration(args):
             # Reject unsafe additions during read-only preflight, before the
             # confirmation prompt. Apply this consistently to FK and plain tables.
             from .sqlite_additive_migration import _column_sql
+            required_empty_addition = False
+
             for plan in plans:
                 model = next(model for model in models if model.__table_name__ == plan.table)
+
                 for change in plan.changes:
-                    if change.kind == "missing_column":
-                        try:
-                            _column_sql(model, change.column)
-                        except ValueError as exc:
+                    if change.kind != "missing_column":
+                        continue
+
+                    field = model.__columns__[change.column]
+                    requires_empty_table = not field.nullable and field.default is None
+                    if requires_empty_table:
+                        table_name = '"' + plan.table.replace('"', '""') + '"'
+                        if checked._raw.execute(
+                                f'SELECT 1 FROM {table_name} LIMIT 1').fetchone():
                             raise ValueError(
                                 f"Cannot add {plan.table}.{change.column}: "
                                 "the column must be nullable or have a database default, "
                                 "and cannot introduce a new constraint"
-                            ) from exc
+                            )
+
+                    try:
+                        _column_sql(
+                            model, change.column,
+                            allow_empty_required=requires_empty_table,
+                        )
+                    except ValueError as exc:
+                        raise ValueError(
+                            f"Cannot add {plan.table}.{change.column}: "
+                            "a new key or unsupported constraint needs separate review"
+                        ) from exc
+
+                    required_empty_addition |= requires_empty_table
         column_removal = None
         mixed_removal = bool(changes and any(change.kind == "extra_column" for change in changes)
                              and any(change.kind != "extra_column" for change in changes))
@@ -179,7 +206,8 @@ def run_model_migration(args):
         ordinary_edit = None
         length_edit = None
         table_transition = None
-        if changes and (len(changes) > 1 or changes[0].kind in ("foreign_key_mismatch", "foreign_key_action_mismatch")) and all(change.kind in (
+        if changes and (len(changes) > 1 or required_empty_addition or changes[0].kind in (
+                "foreign_key_mismatch", "foreign_key_action_mismatch")) and all(change.kind in (
                 "type_mismatch", "default_mismatch", "nullability_mismatch", "unique_mismatch",
                 "foreign_key_mismatch", "foreign_key_action_mismatch", "missing_column", "extra_column") for change in changes):
             from .sqlite_forward_history import review_table_transition
@@ -213,8 +241,10 @@ def run_model_migration(args):
                                             for change in changes):
             raise ValueError("Unsupported model change; database unchanged")
         if removal is not None:
-            if changes:
-                raise ValueError("Table removal cannot be combined with other schema changes")
+            new_table_changes = changes and all(change.kind == "create_table" for change in changes)
+            if changes and not new_table_changes:
+                raise ValueError("Table removal can only be combined with new tables")
+
             table, count, witness = removal
             print(f"AuroraSQL migration — {args.database} (SQLite)")
             print(f"  DROP TABLE {table}; existing rows: {count}")
@@ -238,12 +268,15 @@ def run_model_migration(args):
                 if input(f"Type exactly '{phrase}' to authorize deletion: ").strip() != phrase:
                     print("Migration cancelled; database unchanged.")
                     return 0
-            from .sqlite_forward_history import migrate_table_removal
+            from .sqlite_forward_history import migrate_table_removal, migrate_mixed_table_transition
+
             title = migration_title(args.title or "Untitled", "Untitled")
+            executor = migrate_mixed_table_transition if new_table_changes else migrate_table_removal
+
             with closing(sqlite3.connect(db_file.as_uri() + "?mode=rw", uri=True,
                                          isolation_level=None, timeout=5)) as writing:
-                result = migrate_table_removal(writing, root, db_file, models, title,
-                                               table, count, witness, acknowledged=bool(count))
+                result = executor(writing, root, db_file, models, title,
+                                  table, count, witness, acknowledged=bool(count))
             print(f"Migration applied. Schema snapshot: {result}")
             return 0
         if column_removal is not None:
@@ -370,7 +403,7 @@ def run_model_migration(args):
 
             return 2 if args.check else 0
 
-        if os.environ.get("AURORA_ENV", "development").lower() == "production":
+        if project_is_production(Path(args.config).expanduser().resolve().parent):
             raise PermissionError("Model migration is disabled in production")
 
         approval = args.approve
@@ -436,7 +469,7 @@ def run_model_migration(args):
 
             return 2 if args.check else 0
 
-        if os.environ.get("AURORA_ENV", "development").lower() == "production":
+        if project_is_production(Path(args.config).expanduser().resolve().parent):
             raise PermissionError("Model migration is disabled in production")
 
         approval = args.approve
@@ -494,7 +527,7 @@ def run_model_migration(args):
 
         return 2 if args.check else 0
 
-    if os.environ.get("AURORA_ENV", "development").lower() == "production":
+    if project_is_production(Path(args.config).expanduser().resolve().parent):
         raise PermissionError("Model migration is disabled in production")
 
     approval = args.approve

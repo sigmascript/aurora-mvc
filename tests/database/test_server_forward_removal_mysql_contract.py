@@ -113,6 +113,7 @@ def test_populated_removal_is_allowed_without_backup_and_records_warning(monkeyp
     conn, models, args, config = _execution_setup(monkeypatch)
     approvals = iter(['y', 'DELETE data_mysql.mysql_fk_child.parent_id'])
     monkeypatch.setattr('builtins.input', lambda _: next(approvals))
+    monkeypatch.setattr(remove, 'project_is_production', lambda root: False)
     monkeypatch.setattr(remove.os, 'name', 'nt')
     assert remove.run_mysql_column_removal(args, config, conn, models, '.', 'data_mysql',
                                             'same', None) == 0

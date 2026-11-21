@@ -620,6 +620,9 @@ def _run_init_apply_existing(args):
             print(f"Database {args.database} is already initialized; no changes made.")
             return 0
 
+        if preflight["status"] != "EMPTY":
+            raise ValueError("Existing SQLite database is not eligible for initialization; review with 'aurora db check' and use 'aurora db migrate' for supported model changes")
+
     if interactive:
         import sys
 

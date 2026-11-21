@@ -1,13 +1,15 @@
 """Minimal, explicit Aurora developer CLI."""
 from __future__ import annotations
 
+
 import argparse
 from importlib.machinery import PathFinder
 from importlib.metadata import PackageNotFoundError, version
-import os
 from pathlib import Path
 import re
 import sys
+
+from aurora.core.project_policy import project_is_production
 
 from ._cli_scaffolding import (
     create_project,
@@ -39,6 +41,14 @@ from ._cli_scaffolding import (
     remove_component,
     parse_controller_methods,
 )
+
+
+def _cli_project_is_production(parser, project_root=None):
+    """Report missing project policy without exposing configuration internals."""
+    try:
+        return project_is_production(project_root)
+    except PermissionError as error:
+        parser.exit(1, f"aurora: {error} No changes were made.\n")
 
 
 def _database_failure(exc, args, action):
@@ -143,6 +153,9 @@ def _database_failure(exc, args, action):
         if detail in top_level:
             return (f"aurora: Database {action} refused: {top_level[detail]}. "
                     "No database changes were made.\n")
+    if type(exc) is PermissionError and str(exc).startswith("Project production policy"):
+        return f"aurora: Database {action} refused: {exc} No changes were made.\n"
+
     # Never show raw driver exception text; it may include endpoints or credentials.
     kind = type(exc)
     module = kind.__module__
@@ -207,6 +220,13 @@ def _database_failure(exc, args, action):
             return (f"aurora: Database {action} refused: foreign-key target model is not "
                     "in the selected database model set. Check reference= and aurora_models.json. "
                     "No database changes were made.\n")
+        if detail == ("Existing SQLite database is not eligible for initialization; "
+                      "review with 'aurora db check' and use 'aurora db migrate' "
+                      "for supported model changes"):
+            return ("aurora: Database initialization refused: this SQLite database already "
+                    "contains schema or history that is not eligible for initialization. "
+                    "Run 'aurora db check' to inspect the state; use 'aurora db migrate' "
+                    "for supported model changes. No database changes were made.\n")
         if detail == "SQLite database does not exist":
             return (f"aurora: Database {action} refused: SQLite database file does not exist. "
                     "Run 'aurora db check' and initialize it with 'aurora db init' "
@@ -447,7 +467,7 @@ def main(argv: list[str] | None = None) -> int:
             scheme = urlsplit(config.resolve(args.database)).scheme
 
             if scheme == "mysql+pymysql":
-                if os.environ.get("AURORA_ENV", "development").lower() == "production":
+                if _cli_project_is_production(parser, Path(args.config).expanduser().resolve().parent):
                     raise ValueError("Production backup requires separate approval")
 
                 from aurora.database.cli_mysql_backup import backup_mysql_database
@@ -477,7 +497,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
 
             if scheme == "postgresql+psycopg":
-                if os.environ.get("AURORA_ENV", "development").lower() == "production":
+                if _cli_project_is_production(parser, Path(args.config).expanduser().resolve().parent):
                     raise ValueError("Production backup requires separate approval")
 
                 if args.login_path:
@@ -674,7 +694,7 @@ def main(argv: list[str] | None = None) -> int:
 
                 return run_init_check(args)
 
-            if os.environ.get("AURORA_ENV", "development").lower() == "production":
+            if _cli_project_is_production(parser, Path(args.config).expanduser().resolve().parent):
                 parser.exit(1, "aurora: Refusing AuroraSQL initialization in production.\n")
 
             return run_init_apply(args)
@@ -706,7 +726,7 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(f"{resource} {args.action} requires a component name. Example: aurora {resource} {args.action} "
                          + ("user" if resource == "view" else "User"))
 
-        if args.action in ("add", "remove") and os.environ.get("AURORA_ENV", "development").lower() == "production":
+        if args.action in ("add", "remove") and _cli_project_is_production(parser):
             parser.exit(1, "aurora: Refusing to modify project in production environment.\n")
 
         try:
@@ -726,6 +746,10 @@ def main(argv: list[str] | None = None) -> int:
                     if any(reference in refs for refs in manifest["databases"].values()):
                         raise ValueError("Model reference already registered; no source file created")
 
+                    from aurora._model_exports import plan_model_export
+                    export_folder = (Path.cwd() / "models" if app_name is None else
+                                     Path.cwd() / "apps" / app_name / "models")
+                    package_export, updated_export, original_export = plan_model_export(export_folder, name)
                     backend = args.backend
                     destination = (create_shared_component("model", name, backend=backend)
                                    if app_name is None else create_model(app_name, name, backend=backend))
@@ -741,8 +765,21 @@ def main(argv: list[str] | None = None) -> int:
 
                 if resource == "model" and backend == "aurorasql":
                     from aurora.database.cli_registration import register_generated_model
-                    reference, _ = register_generated_model(destination, name, alias=selected)
-                    note = f" (registered {reference}; database unchanged)"
+                    from aurora._model_exports import write_model_export
+                    manifest_file = Path.cwd() / "aurora_models.json"
+                    original_manifest = manifest_file.read_bytes()
+                    try:
+                        reference, _ = register_generated_model(destination, name, alias=selected)
+                        write_model_export(package_export, updated_export, expected=original_export)
+                    except BaseException:
+                        # Undo a partially completed generation, including registration.
+                        if manifest_file.read_bytes() != original_manifest:
+                            from aurora.database.cli_registration import _save_manifest
+                            import json
+                            _save_manifest(manifest_file, json.loads(original_manifest))
+                        destination.unlink(missing_ok=True)
+                        raise
+                    note = f" (registered {reference}; database unchanged; exported)"
 
                 print(f"Created {destination}" + note)
             elif args.action == "remove":
@@ -775,7 +812,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "app-add":
-        if os.environ.get("AURORA_ENV", "development").lower() == "production":
+        if _cli_project_is_production(parser):
             parser.exit(1, "aurora: Refusing to modify project in production environment.\n")
 
         try:
@@ -787,7 +824,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "app-remove":
-        if os.environ.get("AURORA_ENV", "development").lower() == "production":
+        if _cli_project_is_production(parser):
             parser.exit(1, "aurora: Refusing to modify project in production environment.\n")
         try:
             removed = remove_app(args.name)

@@ -26,16 +26,28 @@ class ServerModelProposal:
     execution_allowed: bool = False
 
 
-def _add_column_clause(model, field_name, dialect):
-    """Render one validated, literal-only additive column clause."""
+def _add_column_clause(model, field_name, dialect, *, connection=None):
+    """Render a validated addition, checking empty-table required columns."""
     from .schema import _SQL_TYPES
 
     field = model.__columns__[field_name]
 
     if (field.primary_key or field.unique or field.references is not None
-            or field.server_default is not None
-            or (not field.nullable and field.default is None)):
-        raise ValueError("New column requires a nullable field or a validated literal default; keys need separate review")
+            or field.server_default is not None):
+        raise ValueError("New column requires an ordinary field; keys need separate review")
+
+    if not field.nullable and field.default is None:
+        if connection is None:
+            raise ValueError(
+                "New column requires a nullable field or a validated literal default; "
+                "undefaulted required fields need verified empty-table review"
+            )
+
+        table_name = _quote(model.__table_name__, dialect)
+        row = connection.fetch_first(f"SELECT 1 AS present FROM {table_name} LIMIT 1")
+
+        if row is not None:
+            raise ValueError("New required column without a default requires an empty existing table")
 
     if field.sql_type is not None:
         sql_type = field.sql_type
@@ -124,7 +136,7 @@ def _review_coherent_columns(connection, model, changes, table):
     for column, kinds in by_column.items():
         field = model.__columns__[column]
         if kinds == {'missing_column'}:
-            clauses.append(_add_column_clause(model, column, dialect))
+            clauses.append(_add_column_clause(model, column, dialect, connection=connection))
             added.append(column)
             continue
         if 'missing_column' in kinds or column not in actual:
@@ -280,7 +292,7 @@ def review_server_model_changes(connection, models, alias, database_identity):
 
         if all(change.kind == "missing_column" for change in changes):
             names = tuple(change.column for change in changes)
-            clauses = [_add_column_clause(model, name, dialect) for name in names]
+            clauses = [_add_column_clause(model, name, dialect, connection=connection) for name in names]
             statement = f"ALTER TABLE {_quote(model.__table_name__, dialect)} " + ", ".join(clauses)
             operation = ({"kind": "add_column", "table": model.__table_name__, "column": names[0]}
                          if len(names) == 1 else

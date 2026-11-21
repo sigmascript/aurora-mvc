@@ -4,12 +4,14 @@ MySQL DDL is not transactional. Never retry automatically after DDL starts.
 A populated-column removal warns and requires exact consent, never a backup.
 """
 
+import os
 from datetime import datetime, timezone
 from hashlib import sha256
 import hmac
 import json
-import os
 import sys
+
+from aurora.core.project_policy import project_is_production
 
 from .coordination import migration_lock
 from .init_validation import validate_init_models
@@ -73,7 +75,7 @@ def run_mysql_column_removal(args, config, connection, models, root, alias,
     from .cli_init import _mysql_database_identity
     from .migration_titles import migration_title
 
-    if os.environ.get('AURORA_ENV', 'development').lower() == 'production':
+    if project_is_production(root):
         raise PermissionError('MySQL destructive migrations are disabled in production')
     if any(getattr(args, option, None) for option in ('apply', 'approve', 'backup', 'name')):
         raise PermissionError('Column removal requires ordinary interactive review')

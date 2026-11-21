@@ -14,7 +14,7 @@ def _project(root):
     (root / "models" / "Account.py").write_text(
         "from aurora.database import Model, column\n"
         "class Account(Model):\n    id = column(int, primary_key=True)\n")
-    (root / "aurora_config.json").write_text(json.dumps({"default_database": "accounts"}))
+    (root / "aurora_config.json").write_text(json.dumps({"production": False, "default_database": "accounts"}))
     (root / "aurora_databases.json").write_text(json.dumps({"databases": {
         "accounts": {"engine": "sqlite", "extension": "sqlite3"}}}))
     (root / "aurora_models.json").write_text(json.dumps({"databases": {

@@ -17,7 +17,7 @@ def test_explicit_migration_only_changes_selected_database(tmp_path, monkeypatch
     second.write_text("from aurora.database import Model, column\n"
                       "class Second(Model):\n    id = column(int, primary_key=True)\n")
     (tmp_path / "aurora_config.json").write_text(json.dumps({
-        "application": {"name": "isolated"}, "default_database": "first"}))
+        "application": {"name": "isolated"}, "production": False, "default_database": "first"}))
     (tmp_path / "aurora_databases.json").write_text(json.dumps({"databases": {
         "first": {"engine": "sqlite", "extension": "sqlite3"},
         "second": {"engine": "sqlite", "extension": "sqlite3"}}}))
@@ -67,7 +67,7 @@ def test_changing_default_preserves_both_physical_histories(tmp_path, monkeypatc
             "from aurora.database import Model, column\n"
             f"class {name}(Model):\n    id = column(int, primary_key=True)\n")
     settings = tmp_path / "aurora_config.json"
-    settings.write_text(json.dumps({"default_database": "alpha"}))
+    settings.write_text(json.dumps({"production": False, "default_database": "alpha"}))
     (tmp_path / "aurora_databases.json").write_text(json.dumps({"databases": {
         "alpha": {"engine": "sqlite", "extension": "sqlite3"},
         "beta": {"engine": "sqlite", "extension": "sqlite3"}}}))
@@ -81,7 +81,7 @@ def test_changing_default_preserves_both_physical_histories(tmp_path, monkeypatc
     with sqlite3.connect(tmp_path / "beta.sqlite3") as db:
         db.execute("INSERT INTO beta(id) VALUES(29)")
     original = {p: p.read_bytes() for p in (tmp_path / "__migrations__").rglob("*.json")}
-    settings.write_text(json.dumps({"default_database": "beta"}))
+    settings.write_text(json.dumps({"production": False, "default_database": "beta"}))
     assert main(["db", "check"]) == 0
     assert main(["db", "history"]) == 0
     assert main(["db", "init"]) == 0

@@ -13,7 +13,7 @@ Welcome to the Aurora MVC developer guides. Start with a project, then explore t
 
 ## Work with databases
 
-- [AuroraSQL and migrations](database.md) — configuration, models, migrations, backups, and safety
+- [AuroraSQL and migrations](database.md) — configuration, model imports, CRUD, requests, migrations, backups, and safety
 - [CLI guide](cli.md) — project and database commands
 
 ## Contribute

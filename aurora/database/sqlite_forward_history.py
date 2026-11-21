@@ -406,18 +406,22 @@ def _data_witness(raw, table):
     return digest.hexdigest()
 
 
-def review_table_removal(raw, root, db_file, models):
+def review_table_removal(raw, root, db_file, models, *, allow_new_tables=False):
     """Return one independently evidenced table removal, or refuse.
 
-    A table is eligible only when no foreign keys, views, triggers or explicit
-    indexes can be affected. This is inspection, not execution authorization.
+    A table is eligible when no surviving table references it and no views or
+    triggers can be affected. Its own outgoing foreign keys disappear with it.
+    This is inspection, not execution authorization.
     """
     _, snapshot = read_history(raw, root, db_file)
     prior = {entry["name"] for entry in snapshot["models"]}
     current = {model.__table_name__ for model in models}
     removed = prior - current
-    if len(removed) != 1 or current - prior:
-        raise UnsafeTableTransition("Table removal requires exactly one undeclared table and no added tables")
+    if len(removed) != 1 or (current - prior and not allow_new_tables):
+        raise UnsafeTableTransition(
+            "Table removal requires exactly one undeclared table; "
+            "added tables require a mixed review"
+        )
     target = removed.pop()
     catalog = _physical(raw)
     # Ordinary indexes owned by the removed table go with that table.
@@ -432,11 +436,64 @@ def review_table_removal(raw, root, db_file, models):
         if item["type"] != "table":
             continue
         for key in raw.execute(f'PRAGMA foreign_key_list({_quote(item["name"], "sqlite")})'):
-            if item["name"] == target or key[2].casefold() == target.casefold():
-                raise UnsafeTableTransition(f"Cannot remove {target}: foreign-key dependencies require separate review")
+            if item["name"] != target and key[2].casefold() == target.casefold():
+                raise UnsafeTableTransition(
+                    f"Cannot remove {target}: surviving table {item['name']} references it"
+                )
     # Count inside the writer's IMMEDIATE transaction again before execution.
     count = raw.execute(f'SELECT COUNT(*) FROM {_quote(target, "sqlite")}').fetchone()[0]
     return target, count, _data_witness(raw, target)
+
+
+def migrate_mixed_table_transition(raw, root, db_file, models, title, target,
+                                   expected_count, expected_witness, *, acknowledged=False):
+    """Drop one reviewed table and create new ones in one forward transaction."""
+    from .init_validation import validate_init_models
+
+    ordered_models = validate_init_models(models, dialect="sqlite", allow_extended=True)
+    raw.execute("PRAGMA foreign_keys=ON")
+    if raw.execute("PRAGMA foreign_keys").fetchone() != (1,):
+        raise RuntimeError("SQLite foreign keys must be enabled")
+
+    snapshot_path = None
+
+    try:
+        raw.execute("BEGIN IMMEDIATE")
+        _, previous = read_history(raw, root, db_file)
+        old_tables = {item["name"] for item in previous["models"]}
+        new_models = [model for model in ordered_models if model.__table_name__ not in old_tables]
+
+        if not new_models:
+            raise UnsafeTableTransition("Mixed table migration requires a new model table")
+
+        actual_target, count, witness = review_table_removal(
+            raw, root, db_file, models, allow_new_tables=True
+        )
+        if (actual_target, count, witness) != (target, expected_count, expected_witness):
+            raise RuntimeError("Mixed table review is stale; run db check again")
+        if count and not acknowledged:
+            raise PermissionError("Populated table removal requires typed authorization")
+
+        raw.execute(f'DROP TABLE {_quote(target, "sqlite")}')
+
+        for model in new_models:
+            raw.execute(create_table_sql(model, "sqlite", models=ordered_models))
+
+        matches_models_with_indexes(raw, models)
+        warnings = (
+            [f'Approved permanent deletion of table {target}: {count} existing row(s); '
+             'backup recommended; not automatically created'] if count else []
+        )
+        snapshot_path = _new_record(raw, root, db_file, models, title, warnings)
+        raw.commit()
+
+    except BaseException:
+        raw.rollback()
+        if snapshot_path is not None:
+            snapshot_path.unlink(missing_ok=True)
+        raise
+
+    return snapshot_path
 
 
 def migrate_table_removal(raw, root, db_file, models, title, target, expected_count, expected_witness,
@@ -743,6 +800,26 @@ class UnsafeTableTransition(ValueError):
     """An internally verified, developer-safe table-transition refusal."""
 
 
+def _incoming_foreign_keys(raw, parent_table):
+    """Return columns on surviving tables that reference the selected parent."""
+    references = []
+
+    for item in _physical(raw):
+        if item["type"] != "table" or item["name"] == parent_table:
+            continue
+
+        child = item["name"]
+        keys = raw.execute(
+            f'PRAGMA foreign_key_list({_quote(child, "sqlite")})'
+        ).fetchall()
+
+        for key in keys:
+            if key[2].casefold() == parent_table.casefold():
+                references.append((child, key[4]))
+
+    return references
+
+
 def _review_ordinary_rebuild(raw, root, db_file, models, kind):
     """Review an ordinary SQLite table transition and its real data risks.
 
@@ -785,10 +862,18 @@ def _review_ordinary_rebuild(raw, root, db_file, models, kind):
         field = model.__columns__[name]
         if change.kind == "missing_column":
             from .sqlite_additive_migration import _column_sql
-            # Follow the same eligibility as ordinary ADD COLUMN. In the
-            # reconstructed table, omitted columns receive a declared default
-            # or NULL; previously stored columns remain unchanged.
-            _column_sql(model, name)
+            # A rebuild can introduce an undefaulted required column only
+            # when no existing row needs a value for that column.
+            required_without_default = not field.nullable and field.default is None
+
+            if required_without_default and raw.execute(
+                    f'SELECT 1 FROM {_quote(table, "sqlite")} LIMIT 1').fetchone():
+                raise UnsafeTableTransition(
+                    f"Cannot add {table}.{name}: populated rows require a value "
+                    "before NOT NULL can be applied"
+                )
+
+            _column_sql(model, name, allow_empty_required=required_without_default)
             continue
         if (field.primary_key or field.server_default is not None or
                 (field.references is not None and change.kind not in (
@@ -894,12 +979,18 @@ def _review_ordinary_rebuild(raw, root, db_file, models, kind):
                if idx_table == table]
     if any(item["type"] in ("trigger", "view") for item in _physical(raw)):
         raise UnsafeTableTransition("Table transition has view or trigger dependencies")
-    for item in _physical(raw):
-        if item["type"] != "table" or item["name"] == table:
-            continue
-        if any(key[2].casefold() == table.casefold() for key in raw.execute(
-                f'PRAGMA foreign_key_list({_quote(item["name"], "sqlite")})')):
-            raise UnsafeTableTransition("Table transition has inbound foreign-key dependencies")
+    incoming = _incoming_foreign_keys(raw, table)
+
+    if incoming:
+        # A UNIQUE-only rebuild may leave existing child references intact,
+        # but it must never modify a column referenced by those children.
+        if kind != "unique_mismatch" or any(
+                not referenced_column or referenced_column.casefold() == names[0].casefold()
+                for _, referenced_column in incoming):
+            raise UnsafeTableTransition(
+                "Table transition has inbound foreign-key dependencies"
+            )
+
     if any(key[2].casefold() == table.casefold() for key in raw.execute(
             f'PRAGMA foreign_key_list({_quote(table, "sqlite")})')):
         raise UnsafeTableTransition("Self-referencing foreign keys need separate review")
@@ -934,6 +1025,18 @@ def migrate_default_change(raw, root, db_file, models, title, proposal, *, kind=
     raw.execute("PRAGMA foreign_keys=ON")
     if raw.in_transaction or raw.execute("PRAGMA foreign_keys").fetchone() != (1,):
         raise RuntimeError("Default migration requires an unlocked FK-enforced SQLite connection")
+
+    # SQLite cannot drop a referenced parent while FK enforcement is enabled.
+    # For an approved UNIQUE-only edit, temporarily disable enforcement on
+    # this private writer and verify all relationships before committing.
+    incoming_unique = (
+        kind == "unique_mismatch" and bool(_incoming_foreign_keys(raw, table))
+    )
+    if incoming_unique:
+        raw.execute("PRAGMA foreign_keys=OFF")
+        if raw.execute("PRAGMA foreign_keys").fetchone() != (0,):
+            raise RuntimeError("Cannot prepare the reviewed parent-table rebuild")
+
     path = None
     try:
         raw.execute("BEGIN IMMEDIATE")
@@ -997,7 +1100,14 @@ def migrate_default_change(raw, root, db_file, models, title, proposal, *, kind=
         if path is not None:
             path.unlink(missing_ok=True)
         raise
+    finally:
+        if incoming_unique:
+            raw.execute("PRAGMA foreign_keys=ON")
+            if raw.execute("PRAGMA foreign_keys").fetchone() != (1,):
+                raise RuntimeError("SQLite foreign keys could not be restored")
+
     return path
+
 
 def migrate_column_edit(raw, root, db_file, models, title, proposal):
     """Rebuild one ordinary table under the same forward-history transaction.

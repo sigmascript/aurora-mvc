@@ -125,3 +125,40 @@ def test_history_before_initialization_explains_next_action(tmp_path, monkeypatc
     assert "aurora db init" in message
     assert not (tmp_path / "data.sqlite3").exists()
     assert not (tmp_path / "__migrations__").exists()
+
+
+def test_repeated_init_with_changed_models_explains_migration_without_writes(tmp_path, monkeypatch, capsys):
+    _mvc_models(tmp_path, relationship=False)
+    monkeypatch.chdir(tmp_path)
+    assert main(["db", "init", "--confirm", "yes"]) == 0
+    capsys.readouterr()
+    database = tmp_path / "data.sqlite3"
+    with sqlite3.connect(database) as db:
+        before = db.execute('SELECT * FROM "__migrations__"').fetchall()
+        db.execute("INSERT INTO users(id, username) VALUES (1, 'Ada')")
+
+    model = tmp_path / "models" / "Users.py"
+    model.write_text(model.read_text(encoding="utf-8").replace(
+        "    username = column(str, length=50)\n",
+        "    username = column(str, length=50)\n    email = column(str, length=80)\n",
+    ), encoding="utf-8")
+
+    with pytest.raises(SystemExit) as outcome:
+        main(["db", "init", "--confirm", "yes"])
+    assert outcome.value.code == 1
+    message = capsys.readouterr().err
+    assert "aurora db check" in message
+    assert "aurora db migrate" in message
+    assert "RuntimeError" not in message
+    with sqlite3.connect(database) as db:
+        assert db.execute('SELECT * FROM "__migrations__"').fetchall() == before
+        assert db.execute("SELECT username FROM users WHERE id=1").fetchone() == ("Ada",)
+        assert "email" not in [row[1] for row in db.execute("PRAGMA table_info(users)")]
+
+
+def test_ready_check_suggests_init_without_creating_database(tmp_path, monkeypatch, capsys):
+    _mvc_models(tmp_path, relationship=False)
+    monkeypatch.chdir(tmp_path)
+    assert main(["db", "check"]) == 0
+    assert "Next: aurora db init" in capsys.readouterr().out
+    assert not (tmp_path / "data.sqlite3").exists()

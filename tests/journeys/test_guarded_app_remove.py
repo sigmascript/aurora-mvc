@@ -106,7 +106,10 @@ def test_cli_removal_refuses_strict_and_production(tmp_path, monkeypatch, capsys
     assert "strict" in capsys.readouterr().err
 
     set_strict(root, False)
-    monkeypatch.setenv("AURORA_ENV", "production")
+    config = root / "aurora_config.json"
+    settings = json.loads(config.read_text(encoding="utf-8"))
+    settings["production"] = True
+    config.write_text(json.dumps(settings), encoding="utf-8")
     with pytest.raises(SystemExit) as production:
         main(["app", "remove", "accounts"])
     assert production.value.code == 1

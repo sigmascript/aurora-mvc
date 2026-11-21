@@ -35,12 +35,12 @@ def validate_session_settings(sessions, session_settings):
 
 
 def validate_runtime_settings(
-    environment, database_work, database_registry, max_request_body_bytes
+    production, database_work, database_registry, max_request_body_bytes
 ):
     """Validate opt-in database integration and request body limits."""
 
-    if environment not in {"development", "production"}:
-        raise ValueError("environment must be development or production")
+    if not isinstance(production, bool):
+        raise ValueError("production must be a boolean")
     # Database lifecycle is opt-in; existing applications remain unchanged.
     if (database_work is None) != (database_registry is None):
         raise ValueError("database_work and database_registry must be supplied together")

@@ -3,11 +3,13 @@
 A supported review is never itself permission to execute DDL.
 """
 
+from pathlib import Path
 import hmac
-import os
 import re
 import sys
 from urllib.parse import urlsplit
+
+from aurora.core.project_policy import project_is_production
 
 from .cli_plan import _load_config, _select_models
 from .migration_titles import migration_title
@@ -37,9 +39,6 @@ def run_server_model_migration(args):
     from .server_default_review import review_server_default_addition
     from .server_default_history import verify_server_default_predecessor
     from .server_history_chain import verify_server_review_predecessor
-
-    if os.environ.get("AURORA_ENV", "development").lower() == "production":
-        raise PermissionError("Server migration execution is disabled in production")
 
     forbidden = ("review_file", "changes", "schema", "table", "column",
                  "approve_review", "approve_sql")
@@ -72,6 +71,8 @@ def run_server_model_migration(args):
     requires_terminal = not automated and not simple_confirm and not sys.stdin.isatty()
 
     config, root = _load_config(args.config)
+    if project_is_production(root):
+        raise PermissionError("Server migration execution is disabled in production")
     _, models = _select_models(args, root)
 
     if not models:
@@ -300,6 +301,14 @@ def _run_forward_migration(args, config, root, connection, models, parsed, login
     if single_table_removal(latest["models"], declared):
         return run_table_removal(args, connection, models, root, args.database,
                                  identity, parsed)
+    # PostgreSQL commits mixed DDL together. MySQL uses reviewed CREATE-first
+    # operations and refuses automatic retries after uncertain partial DDL.
+    from .server_forward_table_removal import mixed_table_transition
+    if mixed_table_transition(latest["models"], declared):
+        return run_table_removal(
+            args, connection, models, root, args.database, identity, parsed,
+            allow_new_tables=True,
+        )
     # A single-table add+remove is two intentional operations, never a rename.
     # One reviewed ALTER and one history successor avoid intermediate MySQL DDL.
     from .server_forward_mixed_columns import single_mixed_column_delta, run_mixed_columns
@@ -398,14 +407,14 @@ def run_interrupted_reconciliation(args):
     from .server_interrupted_reconciliation import (verify_interrupted_addition,
                                                      reconcile_interrupted_addition)
     from .cli_init import _mysql_database_identity
-    if os.environ.get('AURORA_ENV', 'development').lower() == 'production':
-        raise PermissionError('Production recovery is disabled')
     if getattr(args, 'confirm', None) not in (None, 'yes', 'y'):
         raise ValueError('Recovery confirmation accepts only yes or y')
     if any(getattr(args, name, None) for name in ('apply', 'approve', 'backup', 'name',
            'changes', 'review_file', 'schema', 'table', 'column')):
         raise ValueError('Recovery cannot be combined with another migration workflow')
     config, root = _load_config(args.config)
+    if project_is_production(root):
+        raise PermissionError("Production recovery is disabled")
     _, models = _select_models(args, root)
     parsed = urlsplit(config.resolve(args.database))
     if parsed.scheme != 'mysql+pymysql' or not models:

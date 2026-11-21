@@ -10,6 +10,8 @@ from pathlib import Path
 import sqlite3
 from urllib.parse import unquote, urlsplit
 
+from aurora.core.project_policy import project_is_production
+
 from .cli_plan import _load_config
 from .sqlite_forward_history import has_forward_history, read_history
 
@@ -53,7 +55,7 @@ def _integrity(connection):
 def create_managed_sqlite_backup(args):
     """Create one verified managed artifact; return its immutable path."""
 
-    if os.environ.get("AURORA_ENV", "development").lower() == "production":
+    if project_is_production(Path(args.config).expanduser().resolve().parent):
         raise ValueError("AuroraSQL backup in production requires separate approval")
 
     from .backup_artifacts import (prepare_artifact, record_artifact,

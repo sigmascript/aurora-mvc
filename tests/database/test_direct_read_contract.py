@@ -19,8 +19,8 @@ def db():
             "CREATE TABLE active_read_entries (id INTEGER PRIMARY KEY, title TEXT, active INTEGER)"
         )
         with connection.transaction():
-            ReadEntry.using(connection).create(id=1, title="Alpha", active=True)
-            ReadEntry.using(connection).create(id=2, title="Beta", active=False)
+            ReadEntry.using(connection).create({"id": 1, "title": "Alpha", "active": True})
+            ReadEntry.using(connection).create({"id": 2, "title": "Beta", "active": False})
         yield connection
 
 

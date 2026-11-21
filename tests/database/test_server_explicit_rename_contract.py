@@ -186,6 +186,7 @@ def _run_rename(*, dry_run=False, confirm='yes', fail_snapshot=False):
     from contextlib import ExitStack
     with ExitStack() as stack:
         captures = [stack.enter_context(mock) for mock in mocks]
+        stack.enter_context(patch.object(rename, "project_is_production", return_value=False))
         # Keep date comparison independent of wall-clock time.
         if not dry_run and not fail_snapshot:
             original_read = rename.read_history

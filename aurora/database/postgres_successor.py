@@ -5,9 +5,10 @@ ordinary CLI execution before backup/recovery and live database acceptance.
 """
 
 from hashlib import sha256
-import os
 from pathlib import Path
 from uuid import uuid4
+
+from aurora.core.project_policy import project_is_production
 
 from .coordination import _PG_LOCK_KEY
 from .execution import CreateApproval, execute_create
@@ -33,7 +34,7 @@ def execute_postgres_new_table_successor(connection, models, *, alias, identity,
     if connection.dialect != "postgresql":
         raise ValueError("PostgreSQL successor requires a PostgreSQL connection")
 
-    if os.environ.get("AURORA_ENV", "development").lower() == "production":
+    if project_is_production(Path(config_path).expanduser().resolve().parent):
         raise PermissionError("Server migrations require separate production approval")
 
     if connection._transaction_active:

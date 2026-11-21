@@ -96,6 +96,7 @@ def create_project(name: str, *, directory: Path | None = None, mvc: bool = Fals
         (root / "aurora_config.json").write_text(
             json.dumps({
                 "application": {"name": name, "timezone": "UTC"},
+                "production": False,
                 **({"default_database": "data"} if mvc else {}),
                 "limits": {},
                 "constants": {},
@@ -1169,6 +1170,10 @@ def remove_component(resource: str, name: str, *, app_name: str | None = None,
         for refs in mapping["databases"].values():
             refs[:] = [item for item in refs if item != ref]
 
+        from ._model_exports import plan_model_export
+        export_package, updated_export, original_export = plan_model_export(folder, target.stem, remove=True)
+        original_manifest = manifest.read_bytes()
+
     print(f"Remove {resource}: {target}")
 
     if input("Remove this component? [y/N]: ").strip().lower() != "y":
@@ -1210,8 +1215,17 @@ def remove_component(resource: str, name: str, *, app_name: str | None = None,
                     temporary_app.unlink(missing_ok=True)
         else:
             from .database.cli_registration import _save_manifest
+            from ._model_exports import write_model_export
 
-            _save_manifest(manifest, mapping)
+            try:
+                _save_manifest(manifest, mapping)
+                write_model_export(export_package, updated_export, expected=original_export)
+            except BaseException:
+                if manifest.read_bytes() != original_manifest:
+                    _save_manifest(manifest, json.loads(original_manifest))
+                if export_package.read_bytes() != original_export:
+                    write_model_export(export_package, original_export)
+                raise
 
         published = True
     finally:
