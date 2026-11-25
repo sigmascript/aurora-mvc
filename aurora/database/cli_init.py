@@ -1,14 +1,20 @@
 """Read-only AuroraSQL initialization preflight; no schema or journal writes."""
 
 import json
+import re
 import sqlite3
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote, urlsplit, urlunsplit
 
-from .cli_plan import _load_config, _select_models
-from .core import Connection
-from .inspection import inspect_table
-from .planning import plan_schema
+from .cli_check import _load_config, _select_models
+from .connections import (
+    Connection,
+    connect,
+    _mysql_database_identity,
+    _postgres_database_identity,
+)
+from .schema_inspection import inspect_table
+from .schema_planning import plan_schema
 
 
 def _preflight(connection, models, alias, *, project_root=None):
@@ -16,15 +22,20 @@ def _preflight(connection, models, alias, *, project_root=None):
     dialect = connection.dialect
 
     if dialect == "sqlite":
-        rows = connection.fetch_all("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        rows = connection.fetch_all(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        )
         existing = {row["name"] for row in rows}
     elif dialect == "mysql":
-        rows = connection.fetch_all("SELECT TABLE_NAME AS name FROM information_schema.TABLES "
-                                    "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE'")
+        rows = connection.fetch_all(
+            "SELECT TABLE_NAME AS name FROM information_schema.TABLES "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE'"
+        )
         existing = {row["name"] for row in rows}
     else:
-        rows = connection.fetch_all("SELECT tablename AS name FROM pg_catalog.pg_tables "
-                                    "WHERE schemaname = current_schema()")
+        rows = connection.fetch_all(
+            "SELECT tablename AS name FROM pg_catalog.pg_tables WHERE schemaname = current_schema()"
+        )
         existing = {row["name"] for row in rows}
 
     target = {model.__table_name__ for model in models}
@@ -35,39 +46,61 @@ def _preflight(connection, models, alias, *, project_root=None):
     unexpected = existing - target
     verified_current = False
 
-    if dialect in ("mysql", "postgresql") and existing.intersection({"migrations", "__migrations__"}):
-        from .server_forward_history import read_history
+    if dialect in ("mysql", "postgresql") and existing.intersection(
+        {"migrations", "__migrations__"}
+    ):
+        from .migration_history import read_history
         from .snapshots import schema_snapshot
+
         try:
             _, latest = read_history(connection, project_root or Path.cwd(), alias)
             # An index recorded in the verified physical history is not
             # unreviewed drift. The history reader already compared that
             # entire witness with the current server catalog.
-            indexed = {item["table"]: set(item["indexes"])
-                       for item in latest["physical_schema"]}
-            plans = [plan_schema(connection, model, models=models,
-                                 trusted_indexes=indexed.get(model.__table_name__, ()))
-                     for model in models]
+            indexed = {item["table"]: set(item["indexes"]) for item in latest["physical_schema"]}
+            plans = [
+                plan_schema(
+                    connection,
+                    model,
+                    models=models,
+                    trusted_indexes=indexed.get(model.__table_name__, ()),
+                )
+                for model in models
+            ]
             missing = [plan.table for plan in plans if not plan.exists]
             warnings = [warning for plan in plans for warning in plan.warnings]
-            drift = [plan.table for plan in plans
-                     if plan.exists and (plan.changes or plan.warnings)]
+            drift = [
+                plan.table for plan in plans if plan.exists and (plan.changes or plan.warnings)
+            ]
             unexpected -= {"migrations", "__migrations__"}
             if "__backups__" in unexpected:
-                from .server_backup_catalog import _catalog_exists
+                from .backup_catalog import _catalog_exists
+
                 if _catalog_exists(connection):
                     unexpected.remove("__backups__")
-            verified_current = (not unexpected and not missing and not drift and
-                                latest["models"] ==
-                                schema_snapshot(*models, dialect=dialect, allow_v2=True)["tables"])
+            verified_current = (
+                not unexpected
+                and not missing
+                and not drift
+                and latest["models"]
+                == schema_snapshot(*models, dialect=dialect, allow_v2=True)["tables"]
+            )
         except (RuntimeError, ValueError, OSError) as error:
-            return {"database_alias": alias, "read_only": True, "status": "REFUSED",
-                    "reason": str(error), "existing_tables": sorted(existing),
-                    "missing_tables": missing, "unexpected_tables": sorted(unexpected),
-                    "review_warnings": warnings, "model_tables": sorted(target)}
+            return {
+                "database_alias": alias,
+                "read_only": True,
+                "status": "REFUSED",
+                "reason": str(error),
+                "existing_tables": sorted(existing),
+                "missing_tables": missing,
+                "unexpected_tables": sorted(unexpected),
+                "review_warnings": warnings,
+                "model_tables": sorted(target),
+            }
     if dialect == "sqlite" and existing.intersection({"migrations", "__migrations__"}):
-        from .sqlite_forward_history import read_history, matches_models
-        from .cli_plan import _load_config
+        from .migration_history import sqlite_read_history as read_history
+        from .migration_review import sqlite_matches_models as matches_models
+
         # Do not confuse a malformed or incomplete single-table history with
         # a harmless model change. Its independent schema witness must agree.
         try:
@@ -76,16 +109,28 @@ def _preflight(connection, models, alias, *, project_root=None):
             read_history(connection._raw, base_dir, database_path)
             unexpected -= {"migrations", "__migrations__"}
             if "__backups__" in unexpected:
-                from .sqlite_backup_catalog import _catalog_exists
+                from .cli_backup import _catalog_exists
+
                 if _catalog_exists(connection._raw):
                     unexpected.remove("__backups__")
-            verified_current = (not unexpected and not missing and not drift and
-                                matches_models(connection._raw, models))
+            verified_current = (
+                not unexpected
+                and not missing
+                and not drift
+                and matches_models(connection._raw, models)
+            )
         except (RuntimeError, ValueError, sqlite3.Error) as error:
-            return {"database_alias": alias, "read_only": True, "status": "REFUSED",
-                    "reason": str(error), "existing_tables": sorted(existing),
-                    "missing_tables": missing, "unexpected_tables": sorted(unexpected),
-                    "review_warnings": warnings, "model_tables": sorted(target)}
+            return {
+                "database_alias": alias,
+                "read_only": True,
+                "status": "REFUSED",
+                "reason": str(error),
+                "existing_tables": sorted(existing),
+                "missing_tables": missing,
+                "unexpected_tables": sorted(unexpected),
+                "review_warnings": warnings,
+                "model_tables": sorted(target),
+            }
     elif dialect == "sqlite" and existing:
         from .migration_timeline import _JOURNALS, inspect_native_history, verify_current_models
 
@@ -95,16 +140,31 @@ def _preflight(connection, models, alias, *, project_root=None):
 
         if not unexpected and not missing and not drift:
             timeline, entries, findings = inspect_native_history(connection, alias)
-            verified_current = (not findings and timeline is not None and
-                                verify_current_models(connection._raw, models, timeline, entries))
+            verified_current = (
+                not findings
+                and timeline is not None
+                and verify_current_models(connection._raw, models, timeline, entries)
+            )
 
-    status = ("EMPTY" if not existing else
-              "ALREADY_INITIALIZED" if verified_current else
-              "REFUSED" if unexpected or missing or drift else "EXISTING_UNVERIFIED")
-    return {"database_alias": alias, "read_only": True, "status": status,
-            "existing_tables": sorted(existing), "missing_tables": missing,
-            "unexpected_tables": sorted(unexpected), "review_warnings": warnings,
-            "model_tables": sorted(target)}
+    status = (
+        "EMPTY"
+        if not existing
+        else "ALREADY_INITIALIZED"
+        if verified_current
+        else "REFUSED"
+        if unexpected or missing or drift
+        else "EXISTING_UNVERIFIED"
+    )
+    return {
+        "database_alias": alias,
+        "read_only": True,
+        "status": status,
+        "existing_tables": sorted(existing),
+        "missing_tables": missing,
+        "unexpected_tables": sorted(unexpected),
+        "review_warnings": warnings,
+        "model_tables": sorted(target),
+    }
 
 
 def _postgres_read_only_preflight(connection, models, alias, *, project_root=None):
@@ -157,7 +217,12 @@ def _sqlite_init_path(parsed, base_dir):
     Three-slash URLs are project-relative; four-slash URLs are absolute.
     Never follow a symbolic-link database target during initialization.
     """
-    if parsed.scheme not in ("sqlite", "sqlite+pysqlite") or parsed.netloc or parsed.query or parsed.fragment:
+    if (
+        parsed.scheme not in ("sqlite", "sqlite+pysqlite")
+        or parsed.netloc
+        or parsed.query
+        or parsed.fragment
+    ):
         raise ValueError("Initialization requires a SQLite file URL without host or URL options")
 
     path = unquote(parsed.path)
@@ -179,7 +244,8 @@ def run_init_check(args):
     """Inspect whether initialization is safe without applying schema changes."""
     config, base_dir = _load_config(args.config)
     refs, models = _select_models(args, base_dir)
-    from .init_validation import validate_init_models
+    from .schema import validate_init_models
+
     url = config.resolve(args.database)
     parsed = urlsplit(url)
     dialect = _dialect_for_init_scheme(parsed.scheme)
@@ -189,21 +255,29 @@ def run_init_check(args):
         db_file = _sqlite_init_path(parsed, base_dir)
 
         if not db_file.is_file():
-            report = {"database_alias": args.database, "read_only": True,
-                      "status": "MISSING_DATABASE", "model_tables": sorted(m.__table_name__ for m in models)}
+            report = {
+                "database_alias": args.database,
+                "read_only": True,
+                "status": "MISSING_DATABASE",
+                "model_tables": sorted(m.__table_name__ for m in models),
+            }
         else:
-            raw = sqlite3.connect(db_file.resolve().as_uri() + "?mode=ro", uri=True,
-                                  isolation_level=None)
+            raw = sqlite3.connect(
+                db_file.resolve().as_uri() + "?mode=ro", uri=True, isolation_level=None
+            )
 
             with Connection(raw, "sqlite") as connection:
                 report = _preflight(connection, models, args.database, project_root=base_dir)
     elif parsed.scheme == "postgresql+psycopg":
         with config.connect(args.database) as connection:
-            report = _postgres_read_only_preflight(connection, models, args.database, project_root=base_dir)
+            report = _postgres_read_only_preflight(
+                connection, models, args.database, project_root=base_dir
+            )
             report["write_enabled"] = False
             report["proposal_sha256"] = (
-                _postgres_approval_digest(models, args.database,
-                                          _postgres_database_identity(connection, parsed))
+                _postgres_approval_digest(
+                    models, args.database, _postgres_database_identity(connection, parsed)
+                )
                 if report["status"] == "EMPTY" and not _unsafe_warnings(report)
                 else None
             )
@@ -212,7 +286,9 @@ def run_init_check(args):
         # MySQL remains read-only by convention; a dedicated permission-limited
         # account is required until its own guarded preflight is implemented.
         with config.connect(args.database) as connection:
-            report = _mysql_read_only_preflight(connection, models, args.database, project_root=base_dir)
+            report = _mysql_read_only_preflight(
+                connection, models, args.database, project_root=base_dir
+            )
 
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0 if report["status"] in ("EMPTY", "MISSING_DATABASE", "ALREADY_INITIALIZED") else 3
@@ -221,31 +297,17 @@ def run_init_check(args):
 def _approval_digest(models, alias, db_path):
     """Bind the whole dependency-ordered schema and database identity."""
     from hashlib import sha256
+
     from .schema import create_table_sql
 
-    reviewed = "\n".join([alias, str(db_path.resolve()),
-                          *(create_table_sql(model, "sqlite", models=models) for model in models)])
-    return sha256(reviewed.encode("utf-8")).hexdigest()
-
-
-def _postgres_database_identity(connection, parsed):
-    """Bind approval to the actual PostgreSQL database, schema, and endpoint."""
-    row = connection.fetch_first(
-        "SELECT current_database() AS database_name, current_schema() AS schema_name"
+    reviewed = "\n".join(
+        [
+            alias,
+            str(db_path.resolve()),
+            *(create_table_sql(model, "sqlite", models=models) for model in models),
+        ]
     )
-
-    if not row or not row["database_name"] or not row["schema_name"]:
-        raise RuntimeError("Cannot identify PostgreSQL database and schema")
-
-    if row["database_name"] != unquote(parsed.path.lstrip("/")):
-        raise RuntimeError("Connected PostgreSQL database differs from configuration")
-
-    return json.dumps({
-        "host": parsed.hostname.lower(),
-        "port": parsed.port or 5432,
-        "database": row["database_name"],
-        "schema": row["schema_name"],
-    }, sort_keys=True, separators=(",", ":"))
+    return sha256(reviewed.encode("utf-8")).hexdigest()
 
 
 def _postgres_approval_digest(models, alias, database_identity):
@@ -255,49 +317,43 @@ def _postgres_approval_digest(models, alias, database_identity):
     execution gate requires a separate locked, transactional implementation.
     """
     from hashlib import sha256
+
     from .schema import create_table_sql
 
     if not isinstance(database_identity, str) or not database_identity:
         raise ValueError("PostgreSQL database identity is required")
 
-    proposal = json.dumps({
-        "version": "aurorasql-postgresql-init-preview-v1",
-        "alias": alias,
-        "database_identity": database_identity,
-        "ordered_ddl": [create_table_sql(model, "postgresql", models=models) for model in models],
-    }, sort_keys=True, separators=(",", ":"))
-    return sha256(proposal.encode("utf-8")).hexdigest()
-
-
-def _mysql_database_identity(connection, parsed):
-    """Bind review to the actual server and selected database without credentials."""
-    row = connection.fetch_first(
-        "SELECT DATABASE() AS database_name, @@hostname AS server_name, @@port AS server_port"
+    proposal = json.dumps(
+        {
+            "version": "aurorasql-postgresql-init-preview-v1",
+            "alias": alias,
+            "database_identity": database_identity,
+            "ordered_ddl": [
+                create_table_sql(model, "postgresql", models=models) for model in models
+            ],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
     )
-
-    if not row or not row["database_name"]:
-        raise RuntimeError("Cannot identify MySQL database")
-
-    if row["database_name"] != unquote(parsed.path.lstrip("/")):
-        raise RuntimeError("Connected MySQL database differs from configuration")
-
-    return json.dumps({
-        "host": parsed.hostname.lower(), "port": parsed.port or 3306,
-        "database": row["database_name"], "server_name": row["server_name"],
-        "server_port": row["server_port"],
-    }, sort_keys=True, separators=(",", ":"))
+    return sha256(proposal.encode("utf-8")).hexdigest()
 
 
 def _mysql_approval_digest(models, alias, identity):
     """Fingerprint the entire ordered MySQL CREATE-only proposal."""
     from hashlib import sha256
+
     from .schema import create_table_sql
 
-    proposal = json.dumps({
-        "version": "aurorasql-mysql-init-v1", "alias": alias,
-        "database_identity": identity,
-        "ordered_ddl": [create_table_sql(model, "mysql", models=models) for model in models],
-    }, sort_keys=True, separators=(",", ":"))
+    proposal = json.dumps(
+        {
+            "version": "aurorasql-mysql-init-v1",
+            "alias": alias,
+            "database_identity": identity,
+            "ordered_ddl": [create_table_sql(model, "mysql", models=models) for model in models],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     return sha256(proposal.encode("utf-8")).hexdigest()
 
 
@@ -326,11 +382,15 @@ def _execute_batch(connection, models, alias="default", title="Initial migration
     from hashlib import sha256
     from uuid import uuid4
 
-    from .coordination import migration_lock
-    from .execution import CreateApproval, execute_create
-    from .history import initialize_history, list_history, review_history
-    from .inspection import inspect_table
-    from .migration_journal_v2 import initialize_intent_journal_locked
+    from .migration_coordination import migration_lock
+    from .migration_history import (
+        CreateApproval,
+        execute_create,
+        initialize_history,
+        list_history,
+        review_history,
+    )
+    from .migration_journal import initialize_intent_journal_locked
     from .migration_timeline import complete_initial, prepare_initial
     from .schema import _quote, create_table_sql
 
@@ -367,11 +427,14 @@ def _execute_batch(connection, models, alias="default", title="Initial migration
 
         for model in models:
             sql = create_table_sql(model, connection.dialect)
-            approval = CreateApproval(model.__table_name__, connection.dialect,
-                                      sha256(sql.encode("utf-8")).hexdigest())
+            approval = CreateApproval(
+                model.__table_name__, connection.dialect, sha256(sql.encode("utf-8")).hexdigest()
+            )
 
-            if review_history(connection) or list_history(connection) and any(
-                entry.table == model.__table_name__ for entry in list_history(connection)
+            if (
+                review_history(connection)
+                or list_history(connection)
+                and any(entry.table == model.__table_name__ for entry in list_history(connection))
             ):
                 raise RuntimeError("Migration journal requires manual review")
 
@@ -382,9 +445,14 @@ def _execute_batch(connection, models, alias="default", title="Initial migration
             connection.execute_write(
                 f"INSERT INTO {journal} (operation_id, table_name, dialect, fingerprint, status) "
                 "VALUES (:id, :name, :dialect, :fingerprint, :status)",
-                {"id": operation_id, "name": model.__table_name__,
-                 "dialect": connection.dialect, "fingerprint": approval.fingerprint,
-                 "status": "started"})
+                {
+                    "id": operation_id,
+                    "name": model.__table_name__,
+                    "dialect": connection.dialect,
+                    "fingerprint": approval.fingerprint,
+                    "status": "started",
+                },
+            )
 
             try:
                 execute_create(connection, model, approval, confirm=True)
@@ -392,7 +460,8 @@ def _execute_batch(connection, models, alias="default", title="Initial migration
                 try:
                     connection.execute_write(
                         f"UPDATE {journal} SET status=:status WHERE operation_id=:id",
-                        {"status": "uncertain", "id": operation_id})
+                        {"status": "uncertain", "id": operation_id},
+                    )
                 except BaseException:
                     pass
 
@@ -400,7 +469,8 @@ def _execute_batch(connection, models, alias="default", title="Initial migration
 
             connection.execute_write(
                 f"UPDATE {journal} SET status=:status WHERE operation_id=:id",
-                {"status": "applied", "id": operation_id})
+                {"status": "applied", "id": operation_id},
+            )
             operation_ids.append(operation_id)
         # Verify that the resulting schema has no broken FK references before
         # releasing coordination. Any failure leaves the journal for review.
@@ -428,21 +498,26 @@ def _mark_batch_uncertain(connection, journal, operation_ids):
         try:
             connection.execute_write(
                 f"UPDATE {journal} SET status=:status WHERE operation_id=:id",
-                {"status": "uncertain", "id": operation_id})
+                {"status": "uncertain", "id": operation_id},
+            )
         except BaseException:
             # Preserve the original failure. Never auto-retry this database.
             pass
 
 
 def _unsafe_warnings(report):
-    return [warning for warning in report["review_warnings"]
-            if warning != "Preview only: creating a table requires explicit approval and execution."]
+    return [
+        warning
+        for warning in report["review_warnings"]
+        if warning != "Preview only: creating a table requires explicit approval and execution."
+    ]
 
 
 def _server_initial_decision(args, report, digest, models, dialect):
     """Review a server initialization interactively or retain explicit automation."""
     import sys
-    from .migration_titles import migration_title
+
+    from .migration_review import migration_title
 
     eligible = report["status"] == "EMPTY" and not _unsafe_warnings(report)
     interactive = args.approve is None and args.confirm is None
@@ -493,26 +568,32 @@ def run_init_apply(args):
     try:
         return _run_init_apply_existing(args)
     except Exception as error:
-        from .server_provisioning import (is_missing_database, is_verified_missing_postgres,
-                                          provision_database)
         config, _ = _load_config(args.config)
         url = config.resolve(args.database)
         scheme = urlsplit(url).scheme
-        if not (is_missing_database(error, scheme) or
-                (scheme == "postgresql+psycopg" and
-                 is_verified_missing_postgres(error, url))):
+        if not (
+            is_missing_database(error, scheme)
+            or (scheme == "postgresql+psycopg" and is_verified_missing_postgres(error, url))
+        ):
             raise
-        from .init_validation import validate_init_models
+        from .schema import validate_init_models
+
         _, models = _select_models(args, Path(args.config).resolve().parent)
-        models = validate_init_models(models, dialect="mysql" if scheme.startswith("mysql") else "postgresql", allow_extended=True)
-        created = provision_database(url, models, alias=args.database,
-                                     confirm=getattr(args, "confirm", None))
+        models = validate_init_models(
+            models,
+            dialect="mysql" if scheme.startswith("mysql") else "postgresql",
+            allow_extended=True,
+        )
+        created = provision_database(
+            url, models, alias=args.database, confirm=getattr(args, "confirm", None)
+        )
         if not created:
             return 0
         try:
             # The creation review already approved initialization of the listed
             # models. Do not ask a second question after creating the database.
             from copy import copy
+
             approved = copy(args)
             if getattr(approved, "approve", None) is None:
                 approved.confirm = "yes"
@@ -529,7 +610,8 @@ def _run_init_apply_existing(args):
     """Initialize a verified existing database using the original guarded path."""
     config, base_dir = _load_config(args.config)
     refs, models = _select_models(args, base_dir)
-    from .init_validation import validate_init_models
+    from .schema import validate_init_models
+
     url = config.resolve(args.database)
     parsed = urlsplit(url)
 
@@ -540,21 +622,32 @@ def _run_init_apply_existing(args):
             identity = _postgres_database_identity(connection, parsed)
             digest = _postgres_approval_digest(models, args.database, identity)
 
-            report = _postgres_read_only_preflight(connection, models, args.database, project_root=base_dir)
+            report = _postgres_read_only_preflight(
+                connection, models, args.database, project_root=base_dir
+            )
             decision, result = _server_initial_decision(args, report, digest, models, "PostgreSQL")
 
             if decision is None:
                 return result
 
-            from .server_forward_init import execute_server_forward_init
+            from .initialization import execute_server_forward_init
+
             snapshot = execute_server_forward_init(
-                connection, models, base_dir, args.database, approval=decision[0],
-                expected_approval=digest, expected_identity=identity,
-                parsed=parsed, title=decision[1],
+                connection,
+                models,
+                base_dir,
+                args.database,
+                approval=decision[0],
+                expected_approval=digest,
+                expected_identity=identity,
+                parsed=parsed,
+                title=decision[1],
             )
 
         print(f"Initialized database: {args.database} (PostgreSQL).")
-        print(f"Created {len(models)} table(s): {', '.join(model.__table_name__ for model in models)}.")
+        print(
+            f"Created {len(models)} table(s): {', '.join(model.__table_name__ for model in models)}."
+        )
         print(f"Schema snapshot: {snapshot}")
         return 0
 
@@ -565,21 +658,32 @@ def _run_init_apply_existing(args):
             identity = _mysql_database_identity(connection, parsed)
             digest = _mysql_approval_digest(models, args.database, identity)
 
-            report = _mysql_read_only_preflight(connection, models, args.database, project_root=base_dir)
+            report = _mysql_read_only_preflight(
+                connection, models, args.database, project_root=base_dir
+            )
             decision, result = _server_initial_decision(args, report, digest, models, "MySQL")
 
             if decision is None:
                 return result
 
-            from .server_forward_init import execute_server_forward_init
+            from .initialization import execute_server_forward_init
+
             snapshot = execute_server_forward_init(
-                connection, models, base_dir, args.database, approval=decision[0],
-                expected_approval=digest, expected_identity=identity,
-                parsed=parsed, title=decision[1],
+                connection,
+                models,
+                base_dir,
+                args.database,
+                approval=decision[0],
+                expected_approval=digest,
+                expected_identity=identity,
+                parsed=parsed,
+                title=decision[1],
             )
 
         print(f"Initialized database: {args.database} (MySQL).")
-        print(f"Created {len(models)} table(s): {', '.join(model.__table_name__ for model in models)}.")
+        print(
+            f"Created {len(models)} table(s): {', '.join(model.__table_name__ for model in models)}."
+        )
         print(f"Schema snapshot: {snapshot}")
         return 0
 
@@ -609,8 +713,12 @@ def _run_init_apply_existing(args):
             raise ValueError("New SQLite database file requires an interactive terminal")
 
     if not create_file:
-        with Connection(sqlite3.connect(db_file.resolve().as_uri() + "?mode=ro",
-                                        uri=True, isolation_level=None), "sqlite") as checked:
+        with Connection(
+            sqlite3.connect(
+                db_file.resolve().as_uri() + "?mode=ro", uri=True, isolation_level=None
+            ),
+            "sqlite",
+        ) as checked:
             preflight = _preflight(checked, models, args.database, project_root=base_dir)
 
         if preflight["status"] == "ALREADY_INITIALIZED":
@@ -621,15 +729,21 @@ def _run_init_apply_existing(args):
             return 0
 
         if preflight["status"] != "EMPTY":
-            raise ValueError("Existing SQLite database is not eligible for initialization; review with 'aurora db check' and use 'aurora db migrate' for supported model changes")
+            raise ValueError(
+                "Existing SQLite database is not eligible for initialization; review with 'aurora db check' and use 'aurora db migrate' for supported model changes"
+            )
 
     if interactive:
         import sys
 
         if sys.stdin.isatty():
             if not create_file:
-                with Connection(sqlite3.connect(db_file.resolve().as_uri() + "?mode=ro",
-                                                uri=True, isolation_level=None), "sqlite") as checked:
+                with Connection(
+                    sqlite3.connect(
+                        db_file.resolve().as_uri() + "?mode=ro", uri=True, isolation_level=None
+                    ),
+                    "sqlite",
+                ) as checked:
                     preflight = _preflight(checked, models, args.database, project_root=base_dir)
 
                 if preflight["status"] != "EMPTY" or _unsafe_warnings(preflight):
@@ -663,13 +777,16 @@ def _run_init_apply_existing(args):
         approved_confirm = args.confirm
 
     if approved_digest is None and approved_confirm is None:
-        raw = sqlite3.connect(db_file.resolve().as_uri() + "?mode=ro", uri=True,
-                              isolation_level=None)
+        raw = sqlite3.connect(
+            db_file.resolve().as_uri() + "?mode=ro", uri=True, isolation_level=None
+        )
 
         with Connection(raw, "sqlite") as connection:
             report = _preflight(connection, models, args.database)
 
-        report["approval_sha256"] = digest if report["status"] == "EMPTY" and not _unsafe_warnings(report) else None
+        report["approval_sha256"] = (
+            digest if report["status"] == "EMPTY" and not _unsafe_warnings(report) else None
+        )
         report["write_enabled"] = False
         print(json.dumps(report, indent=2, sort_keys=True))
         return 0 if report["status"] == "EMPTY" else 3
@@ -677,7 +794,8 @@ def _run_init_apply_existing(args):
     if approved_digest != digest or approved_confirm != "APPLY":
         raise ValueError("Exact schema approval and --confirm APPLY are required")
 
-    from .migration_titles import migration_title
+    from .migration_review import migration_title
+
     title_value = getattr(args, "title", None)
 
     if not interactive:
@@ -688,7 +806,8 @@ def _run_init_apply_existing(args):
     # The default title is sufficient; do not ask for a second interactive approval.
     title = migration_title(title_value or "Initial migration", "Initial migration")
 
-    from .schema_records import prepare_schema_record
+    from .snapshots import prepare_schema_record
+
     prepare_schema_record(base_dir, db_file, models)
 
     if create_file:
@@ -697,8 +816,7 @@ def _run_init_apply_existing(args):
         with db_file.open("xb"):
             pass
 
-    raw = sqlite3.connect(db_file.resolve().as_uri() + "?mode=rw", uri=True,
-                          isolation_level=None)
+    raw = sqlite3.connect(db_file.resolve().as_uri() + "?mode=rw", uri=True, isolation_level=None)
 
     with Connection(raw, "sqlite") as connection:
         report = _preflight(connection, models, args.database)
@@ -706,7 +824,8 @@ def _run_init_apply_existing(args):
         if report["status"] != "EMPTY" or _unsafe_warnings(report):
             raise RuntimeError("Database changed after review; initialization refused")
 
-        from .sqlite_forward_history import initialize
+        from .initialization import sqlite_initialize as initialize
+
         # A fresh project must use the approved single-table history; old
         # databases remain on their verified compatibility path.
         record = initialize(connection._raw, base_dir, db_file, models, title)
@@ -714,3 +833,158 @@ def _run_init_apply_existing(args):
     print(f"Initialized {len(models)} table(s) in {db_file.name}.")
     print(f"Schema snapshot: {record}")
     return 0
+
+
+# Explicit creation of an absent configured server database.
+
+_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+_PORTS = {"mysql+pymysql": 3306, "postgresql+psycopg": 5432}
+
+
+class ProvisioningUncertain(RuntimeError):
+    """A CREATE DATABASE attempt may have taken effect; no automatic retry."""
+
+
+def is_missing_database(error, scheme):
+    """Recognize *only* the documented, unambiguous missing-db driver codes."""
+    kind = type(error).__module__
+    if scheme == "mysql+pymysql" and kind.startswith("pymysql"):
+        return bool(error.args and type(error.args[0]) is int and error.args[0] == 1049)
+    if scheme == "postgresql+psycopg" and kind.startswith("psycopg"):
+        return getattr(error, "sqlstate", None) == "3D000"
+    return False
+
+
+def is_verified_missing_postgres(error, application_url):
+    """Resolve ambiguous PostgreSQL connection-startup errors without guessing.
+
+    Some libpq/psycopg connection failures omit SQLSTATE even when the named
+    database does not exist. A successful independent catalog lookup using
+    exactly the configured credentials is required before treating this as a
+    missing database. Never interpret known authentication/permission errors
+    as missing-database evidence.
+    """
+    if (
+        not type(error).__module__.startswith("psycopg")
+        or getattr(error, "sqlstate", None) is not None
+    ):
+        return False
+    maintenance_url, name, maintenance_db = _same_connection_bootstrap(application_url)
+    if urlsplit(application_url).scheme != "postgresql+psycopg":
+        return False
+    try:
+        with connect(maintenance_url) as connection:
+            if connection.dialect != "postgresql":
+                return False
+            row = connection.fetch_first("SELECT current_database() AS name")
+            return bool(
+                row
+                and row["name"] == maintenance_db
+                and not _present(connection, "postgresql+psycopg", name)
+            )
+    except Exception:
+        # If the independent connection fails, absence has not been proved.
+        return False
+
+
+def _present(connection, scheme, name):
+    if scheme == "mysql+pymysql":
+        row = connection.fetch_first(
+            "SELECT SCHEMA_NAME AS name FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=:name",
+            {"name": name},
+        )
+    else:
+        row = connection.fetch_first(
+            "SELECT datname AS name FROM pg_catalog.pg_database WHERE datname=:name",
+            {"name": name},
+        )
+    return row is not None
+
+
+def _same_connection_bootstrap(application_url):
+    """Use the configured account on a known existing server database.
+
+    No second credential or new privilege is invented. The server decides
+    whether this account may CREATE DATABASE; lack of privilege fails closed.
+    """
+    app = urlsplit(application_url)
+    if app.scheme not in _PORTS or app.query or app.fragment:
+        raise ValueError("Database creation requires a supported, plain server URL")
+    name = unquote(app.path.lstrip("/"))
+    if not _NAME.fullmatch(name):
+        raise ValueError("Database creation requires a simple ASCII database name")
+    # Bootstrap databases exist on standard MySQL/PostgreSQL installations.
+    bootstrap = "mysql" if app.scheme == "mysql+pymysql" else "postgres"
+    if name == bootstrap:
+        raise ValueError("The configured database is a reserved server bootstrap database")
+    return urlunsplit((app.scheme, app.netloc, "/" + bootstrap, "", "")), name, bootstrap
+
+
+def provision_database(application_url, models, *, alias, confirm):
+    """Create the target once after a proven missing-db error; never retry uncertain DDL.
+
+    Returns only after the target is created. Schema initialization is separately
+    verified and executed by the existing server-forward init implementation.
+    """
+    import sys
+
+    maintenance_url, name, maintenance_db = _same_connection_bootstrap(application_url)
+    app = urlsplit(application_url)
+    if confirm not in (None, "yes", "y"):
+        raise ValueError("Database creation requires --confirm yes or an interactive review")
+    if confirm is None and not sys.stdin.isatty():
+        raise ValueError("Database creation needs an interactive terminal or --confirm yes")
+
+    # Validate endpoint and target through an already-existing independent DB.
+    with connect(maintenance_url) as connection:
+        if connection.dialect != ("mysql" if app.scheme == "mysql+pymysql" else "postgresql"):
+            raise RuntimeError("Database creation driver differs from the application database")
+        if app.scheme == "mysql+pymysql":
+            witness = connection.fetch_first("SELECT DATABASE() AS name, @@hostname AS server_name")
+        else:
+            witness = connection.fetch_first(
+                "SELECT current_database() AS name, current_user AS role"
+            )
+        if not witness or witness["name"] != maintenance_db:
+            raise RuntimeError("Cannot verify the selected maintenance database identity")
+        if _present(connection, app.scheme, name):
+            raise RuntimeError(
+                "Target database appeared during initialization review; no DDL executed"
+            )
+
+        print(f"AuroraSQL database initialization — {alias} ({connection.dialect})")
+        print(f"  create database: {name}")
+        for model in models:
+            print(f"  then initialize table: {model.__table_name__}")
+        print("  Aurora will verify database creation before initializing its schema.")
+        if (
+            confirm is None
+            and input("Create this database and initialize its schema? [y/N]: ").strip().lower()
+            != "y"
+        ):
+            print("Initialization cancelled; no database changes made.")
+            return False
+
+        # Recheck immediately before DDL; plain CREATE refuses a race instead
+        # of silently adopting an unexpected database.
+        if _present(connection, app.scheme, name):
+            raise RuntimeError("Target database appeared before creation; no DDL executed")
+        sql = (
+            f"CREATE DATABASE `{name}`"
+            if app.scheme == "mysql+pymysql"
+            else f'CREATE DATABASE "{name}"'
+        )
+        try:
+            connection.execute_write(sql)
+        except Exception as error:
+            raise ProvisioningUncertain(
+                "Database creation outcome is uncertain; inspect server catalog before retrying"
+            ) from error
+        # The DDL may have taken effect even if subsequent verification fails;
+        # do not delete it, retry CREATE, or assume schema initialization.
+        if not _present(connection, app.scheme, name):
+            raise ProvisioningUncertain(
+                "Database creation outcome is uncertain; inspect server catalog before retrying"
+            )
+        print(f"Created and verified database: {name}.")
+    return True

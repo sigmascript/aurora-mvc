@@ -54,9 +54,7 @@ def verify_password(password: str, stored: str) -> bool:
     # Bound parsing before any costly password derivation.
     if (
         len(stored)
-        != len(f"scrypt${SCRYPT_N}${SCRYPT_R}${SCRYPT_P}$")
-        + 2 * (_SALT_BYTES + _HASH_BYTES)
-        + 1
+        != len(f"scrypt${SCRYPT_N}${SCRYPT_R}${SCRYPT_P}$") + 2 * (_SALT_BYTES + _HASH_BYTES) + 1
     ):
         return False
 

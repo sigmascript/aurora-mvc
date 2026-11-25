@@ -3,8 +3,8 @@ from jinja2 import (
     Environment,
     FileSystemLoader,
     PrefixLoader,
-    select_autoescape,
     TemplateNotFound,
+    select_autoescape,
 )
 
 from aurora.view import View
@@ -22,9 +22,11 @@ class ViewRenderer:
         loaders = []
 
         if view_namespaces:
-            loaders.append(PrefixLoader(
-                {name: FileSystemLoader(path) for name, path in view_namespaces.items()}
-            ))
+            loaders.append(
+                PrefixLoader(
+                    {name: FileSystemLoader(path) for name, path in view_namespaces.items()}
+                )
+            )
 
         if views_directory is not None:
             loaders.append(FileSystemLoader(views_directory))

@@ -1,9 +1,11 @@
 """Postgres URL spelling is a driver synonym, not a database-name alias."""
+
 from types import SimpleNamespace
+
 import pytest
 
+from aurora.database import connections as core
 from aurora.database.configuration import DatabaseConfiguration
-from aurora.database import core
 
 SHORT = "postgres+psycopg://reader:placeholder@localhost:5432/app_data"
 CANONICAL = "postgresql+psycopg://reader:placeholder@localhost:5432/app_data"
@@ -33,19 +35,35 @@ def test_mismatching_database_name_is_refused():
 
 def test_direct_connection_accepts_short_postgres_driver(monkeypatch):
     called = []
+
     class Module:
         def connect(self, **kwargs):
             called.append(kwargs)
             return SimpleNamespace(close=lambda: None)
+
     original = core.importlib.import_module
-    monkeypatch.setattr(core.importlib, "import_module", lambda name: Module() if name == "psycopg" else original(name))
+    monkeypatch.setattr(
+        core.importlib,
+        "import_module",
+        lambda name: Module() if name == "psycopg" else original(name),
+    )
     with core.connect(SHORT) as connection:
         assert connection.dialect == "postgresql"
-    assert called == [{"host": "localhost", "dbname": "app_data", "autocommit": True,
-                       "user": "reader", "password": "placeholder", "port": 5432}]
+    assert called == [
+        {
+            "host": "localhost",
+            "dbname": "app_data",
+            "autocommit": True,
+            "user": "reader",
+            "password": "placeholder",
+            "port": 5432,
+        }
+    ]
 
 
-@pytest.mark.parametrize("scheme", ["postgres", "postgres://", "postgres+psycopg2", "postgresql+psycopg2"])
+@pytest.mark.parametrize(
+    "scheme", ["postgres", "postgres://", "postgres+psycopg2", "postgresql+psycopg2"]
+)
 def test_unsupported_postgres_drivers_still_refused(scheme):
     candidate = scheme.rstrip(":/") + "://reader@localhost:5432/app_data"
     with pytest.raises(ValueError, match="unsupported URL"):

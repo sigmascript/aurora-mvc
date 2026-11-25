@@ -5,9 +5,11 @@ import sqlite3
 import pytest
 
 from aurora.database import Model, column
-from aurora.database.sqlite_forward_history import (
-    TABLE, adopt_history, has_forward_history, initialize, read_history,
-)
+from aurora.database.initialization import sqlite_initialize as initialize
+from aurora.database.migration_history import SQLITE_TABLE as TABLE
+from aurora.database.migration_history import sqlite_adopt_history as adopt_history
+from aurora.database.migration_history import sqlite_has_forward_history as has_forward_history
+from aurora.database.migration_history import sqlite_read_history as read_history
 
 
 class Note(Model):
@@ -28,8 +30,10 @@ def test_fresh_history_name_and_existing_history_adoption(tmp_path):
         assert read_history(db, tmp_path, path) == (original, snapshot)
         assert adopt_history(db, tmp_path, path) == 1
         assert read_history(db, tmp_path, path) == (original, snapshot)
-        assert db.execute('SELECT id,title FROM note').fetchall() == [(1, "keep")]
-        assert db.execute('SELECT name FROM sqlite_master WHERE name="migrations"').fetchone() is None
+        assert db.execute("SELECT id,title FROM note").fetchall() == [(1, "keep")]
+        assert (
+            db.execute('SELECT name FROM sqlite_master WHERE name="migrations"').fetchone() is None
+        )
 
 
 def test_dual_history_tables_are_blocked_without_mutation(tmp_path):
@@ -45,7 +49,7 @@ def test_dual_history_tables_are_blocked_without_mutation(tmp_path):
 
 
 def test_server_history_identity_fails_closed_when_conflicting():
-    from aurora.database import server_forward_history as server
+    from aurora.database import migration_history as server
 
     class ListedTables:
         dialect = "mysql"

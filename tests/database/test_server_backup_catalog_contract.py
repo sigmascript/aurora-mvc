@@ -4,9 +4,13 @@ from contextlib import contextmanager
 
 import pytest
 
-from aurora.database import server_backup_catalog as catalog
-from aurora.database.backup_artifacts import (destination_fingerprint, prepare_artifact,
-                                               record_artifact, list_artifacts)
+from aurora.database import backup_catalog as catalog
+from aurora.database.backup_catalog import (
+    destination_fingerprint,
+    list_artifacts,
+    prepare_artifact,
+    record_artifact,
+)
 
 
 class Database:
@@ -50,8 +54,11 @@ class Database:
 
 def _evidence(tmp_path, backend):
     alias = "warehouse"
-    uri = ("mysql+pymysql://tester@localhost/actual_data" if backend == "mysql" else
-           "postgresql+psycopg://tester@localhost/actual_data")
+    uri = (
+        "mysql+pymysql://tester@localhost/actual_data"
+        if backend == "mysql"
+        else "postgresql+psycopg://tester@localhost/actual_data"
+    )
     identity = destination_fingerprint(uri)
     backup_id, path = prepare_artifact(tmp_path, alias, backend)
     path.write_bytes(b"verified hypothetical server backup")
@@ -64,24 +71,34 @@ def _mock_catalog(monkeypatch, database):
         assert connection is database
         return database.created
 
-    monkeypatch.setattr(catalog, "_catalog_format", lambda connection: "current" if exists(connection) else None)
+    monkeypatch.setattr(
+        catalog, "_catalog_format", lambda connection: "current" if exists(connection) else None
+    )
+
     @contextmanager
     def lock(connection):
         assert connection is database
         yield
 
-    from aurora.database import coordination
-    monkeypatch.setattr(coordination, "migration_lock", lock)
+    from aurora.database import migration_coordination as core
+
+    monkeypatch.setattr(core, "migration_lock", lock)
 
 
 @pytest.mark.parametrize("backend", ["mysql", "postgresql"])
-def test_server_catalog_records_verified_manifests_without_editing_artifacts(tmp_path, monkeypatch, backend):
+def test_server_catalog_records_verified_manifests_without_editing_artifacts(
+    tmp_path, monkeypatch, backend
+):
     alias, identity, backup_id = _evidence(tmp_path, backend)
     database = Database(backend)
     _mock_catalog(monkeypatch, database)
     before = (tmp_path / "__backups__" / alias / (backup_id + ".json")).read_bytes()
-    assert catalog.inspect_server_catalog(database, tmp_path, alias, identity,
-                                          list_artifacts(tmp_path, alias, identity))[0]["status"] == "ARTIFACT_VERIFIED"
+    assert (
+        catalog.inspect_server_catalog(
+            database, tmp_path, alias, identity, list_artifacts(tmp_path, alias, identity)
+        )[0]["status"]
+        == "ARTIFACT_VERIFIED"
+    )
     assert not database.created
     catalog.reconcile_server_catalog(database, tmp_path, alias, identity)
     assert database.created and database.ddl_count == 1
@@ -89,8 +106,12 @@ def test_server_catalog_records_verified_manifests_without_editing_artifacts(tmp
     catalog.reconcile_server_catalog(database, tmp_path, alias, identity)
     assert database.ddl_count == 1
     assert (tmp_path / "__backups__" / alias / (backup_id + ".json")).read_bytes() == before
-    assert catalog.inspect_server_catalog(database, tmp_path, alias, identity,
-                                          list_artifacts(tmp_path, alias, identity))[0]["status"] == "ARTIFACT_VERIFIED"
+    assert (
+        catalog.inspect_server_catalog(
+            database, tmp_path, alias, identity, list_artifacts(tmp_path, alias, identity)
+        )[0]["status"]
+        == "ARTIFACT_VERIFIED"
+    )
 
 
 @pytest.mark.parametrize("backend", ["mysql", "postgresql"])
@@ -100,8 +121,9 @@ def test_catalog_rejects_mutated_rows_and_refuses_new_manifest(tmp_path, monkeyp
     _mock_catalog(monkeypatch, database)
     catalog.reconcile_server_catalog(database, tmp_path, alias, identity)
     database.rows[backup_id + (".sql" if backend == "mysql" else ".dump")]["title"] = "tampered"
-    reports = catalog.inspect_server_catalog(database, tmp_path, alias, identity,
-                                             list_artifacts(tmp_path, alias, identity))
+    reports = catalog.inspect_server_catalog(
+        database, tmp_path, alias, identity, list_artifacts(tmp_path, alias, identity)
+    )
     assert reports[0]["status"] == "CATALOG_MISMATCH"
     with pytest.raises(ValueError, match="conflicts"):
         catalog.reconcile_server_catalog(database, tmp_path, alias, identity)
@@ -153,16 +175,21 @@ def test_mysql_catalog_post_ddl_failure_is_uncertain(tmp_path, monkeypatch):
         catalog.reconcile_server_catalog(database, tmp_path, alias, identity)
     assert database.created
 
+
 @pytest.mark.parametrize("backend", ["mysql", "postgresql"])
 def test_catalog_rejects_nonmatching_internal_table_without_modification(monkeypatch, backend):
-    from aurora.database.inspection import TableInfo, ColumnInfo
+    from aurora.database.schema_inspection import ColumnInfo, TableInfo
 
     connection = Database(backend)
-    columns = tuple(ColumnInfo(
-        name, ("varchar(80)" if index == 0 else
-               "text" if index in (1, 4) else "varchar(64)"),
-        index in (1, 4), index == 0)
-        for index, name in enumerate(catalog._COLUMNS))
+    columns = tuple(
+        ColumnInfo(
+            name,
+            ("varchar(80)" if index == 0 else "text" if index in (1, 4) else "varchar(64)"),
+            index in (1, 4),
+            index == 0,
+        )
+        for index, name in enumerate(catalog._COLUMNS)
+    )
     # A table with the expected names but the wrong types is not an internal catalog.
     table = TableInfo("__backups__", True, columns, indexes=("PRIMARY",), uniqueness_verified=True)
     monkeypatch.setattr(catalog, "inspect_table", lambda *_: table)
@@ -171,14 +198,17 @@ def test_catalog_rejects_nonmatching_internal_table_without_modification(monkeyp
 
 
 @pytest.mark.parametrize("backend", ["mysql", "postgresql"])
-def test_server_catalog_backfills_missing_verified_rows_without_read_only_writes(tmp_path, monkeypatch, backend):
+def test_server_catalog_backfills_missing_verified_rows_without_read_only_writes(
+    tmp_path, monkeypatch, backend
+):
     alias, identity, first_id = _evidence(tmp_path, backend)
     database = Database(backend)
     _mock_catalog(monkeypatch, database)
     catalog.reconcile_server_catalog(database, tmp_path, alias, identity)
     database.rows.clear()  # Derived catalog lost a row, manifest and artifact remain intact.
-    reports = catalog.inspect_server_catalog(database, tmp_path, alias, identity,
-                                             list_artifacts(tmp_path, alias, identity))
+    reports = catalog.inspect_server_catalog(
+        database, tmp_path, alias, identity, list_artifacts(tmp_path, alias, identity)
+    )
     assert len(reports) == 1 and reports[0]["status"] == "ARTIFACT_VERIFIED"
     assert not database.rows
     catalog.reconcile_server_catalog(database, tmp_path, alias, identity)
@@ -193,15 +223,18 @@ def test_orphaned_server_catalog_row_is_never_silently_repaired(tmp_path, monkey
     _mock_catalog(monkeypatch, database)
     catalog.reconcile_server_catalog(database, tmp_path, alias, identity)
     database.rows["orphan.sql"] = dict(next(iter(database.rows.values())), artifact="orphan.sql")
-    reports = catalog.inspect_server_catalog(database, tmp_path, alias, identity,
-                                             list_artifacts(tmp_path, alias, identity))
+    reports = catalog.inspect_server_catalog(
+        database, tmp_path, alias, identity, list_artifacts(tmp_path, alias, identity)
+    )
     assert any(report["status"] == "CATALOG_ORPHAN" for report in reports)
     with pytest.raises(ValueError, match="conflicts"):
         catalog.reconcile_server_catalog(database, tmp_path, alias, identity)
 
+
 @pytest.mark.parametrize("backend", ["mysql", "postgresql"])
 def test_new_server_catalog_is_five_columns_and_uses_filename_as_history_key(
-        tmp_path, monkeypatch, backend):
+    tmp_path, monkeypatch, backend
+):
     name, identity, backup_id = _evidence(tmp_path, backend)
     connection = Database(backend)
     _mock_catalog(monkeypatch, connection)
@@ -220,16 +253,19 @@ def test_new_server_catalog_is_five_columns_and_uses_filename_as_history_key(
 
 @pytest.mark.parametrize("backend", ["mysql", "postgresql"])
 def test_legacy_server_catalog_requires_transition_not_implicit_replacement(
-        tmp_path, monkeypatch, backend):
+    tmp_path, monkeypatch, backend
+):
     name, identity, backup_id = _evidence(tmp_path, backend)
     connection = Database(backend)
     connection.created = True
     monkeypatch.setattr(catalog, "_catalog_format", lambda _: "legacy")
-    from aurora.database import coordination
+    from aurora.database import migration_coordination as core
+
     @contextmanager
     def lock(_):
         yield
-    monkeypatch.setattr(coordination, "migration_lock", lock)
+
+    monkeypatch.setattr(core, "migration_lock", lock)
     with pytest.raises(ValueError, match="explicitly reviewed transition"):
         catalog.reconcile_server_catalog(connection, tmp_path, name, identity)
     assert connection.ddl_count == 0
@@ -238,15 +274,32 @@ def test_legacy_server_catalog_requires_transition_not_implicit_replacement(
 
 @pytest.mark.parametrize("backend", ["mysql", "postgresql"])
 def test_server_five_column_schema_inspection_rejects_extra_fields(monkeypatch, backend):
-    from aurora.database.inspection import TableInfo, ColumnInfo
+    from aurora.database.schema_inspection import ColumnInfo, TableInfo
+
     connection = Database(backend)
     names = catalog._COLUMNS + ("backend",)
-    columns = tuple(ColumnInfo(
-        name, "bigint" if name == "id" else "text" if name in ("title", "warnings")
-        else "varchar(180)" if name == "artifact" else "varchar(64)",
-        name in ("title", "warnings"), name == "id") for name in names)
-    table = TableInfo("__backups__", True, columns,
-                      indexes=("PRIMARY", "unique_artifact"), uniqueness_verified=True)
+    columns = tuple(
+        ColumnInfo(
+            name,
+            "bigint"
+            if name == "id"
+            else "text"
+            if name in ("title", "warnings")
+            else "varchar(180)"
+            if name == "artifact"
+            else "varchar(64)",
+            name in ("title", "warnings"),
+            name == "id",
+        )
+        for name in names
+    )
+    table = TableInfo(
+        "__backups__",
+        True,
+        columns,
+        indexes=("PRIMARY", "unique_artifact"),
+        uniqueness_verified=True,
+    )
     monkeypatch.setattr(catalog, "inspect_table", lambda *_: table)
     with pytest.raises(ValueError, match="Conflicting"):
         catalog._catalog_format(connection)

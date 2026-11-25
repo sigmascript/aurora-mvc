@@ -2,7 +2,6 @@ import json
 import re
 from http.cookies import SimpleCookie
 
-
 _HEADER_NAME = re.compile(rb"[!#$%&'*+.^_`|~0-9A-Za-z-]+\Z")
 
 
@@ -83,19 +82,17 @@ class Response:
         if any(ord(char) < 32 or ord(char) == 127 for char in value):
             raise ValueError("Cookie values cannot contain control characters")
 
-        if not path or not path.isascii() or any(
-            ord(char) < 32 or ord(char) == 127 or char == ";" for char in path
+        if (
+            not path
+            or not path.isascii()
+            or any(ord(char) < 32 or ord(char) == 127 or char == ";" for char in path)
         ):
             raise ValueError("Invalid cookie path")
 
-        if max_age is not None and (
-            not isinstance(max_age, int) or isinstance(max_age, bool)
-        ):
+        if max_age is not None and (not isinstance(max_age, int) or isinstance(max_age, bool)):
             raise ValueError("Cookie max_age must be an integer")
 
-        if not isinstance(samesite, str) or samesite.lower() not in {
-            "lax", "strict", "none"
-        }:
+        if not isinstance(samesite, str) or samesite.lower() not in {"lax", "strict", "none"}:
             raise ValueError("Invalid cookie SameSite value")
 
         if samesite.lower() == "none" and not secure:
@@ -125,12 +122,15 @@ class Response:
     ) -> None:
         """Expire a cookie; path must match the path used when setting it."""
         self.set_cookie(
-            name, "", path=path, max_age=0, secure=secure,
-            httponly=httponly, samesite=samesite,
+            name,
+            "",
+            path=path,
+            max_age=0,
+            secure=secure,
+            httponly=httponly,
+            samesite=samesite,
         )
-        self._cookie_headers[(name, path)] += (
-            b"; expires=Thu, 01 Jan 1970 00:00:00 GMT"
-        )
+        self._cookie_headers[(name, path)] += b"; expires=Thu, 01 Jan 1970 00:00:00 GMT"
 
     def prepare(self):
         """Validate and serialize both ASGI messages before transmission."""
@@ -147,10 +147,12 @@ class Response:
         headers = []
 
         if not body_forbidden:
-            headers.extend([
-                [b"content-type", _header_value(self.content_type)],
-                [b"content-length", str(len(body)).encode("ascii")],
-            ])
+            headers.extend(
+                [
+                    [b"content-type", _header_value(self.content_type)],
+                    [b"content-length", str(len(body)).encode("ascii")],
+                ]
+            )
 
         if body_forbidden:
             body = b""
@@ -167,9 +169,7 @@ class Response:
             headers.append([normalized_key, normalized_value])
 
         # Set-Cookie fields must remain separate rather than comma-joined.
-        headers.extend(
-            [b"set-cookie", value] for value in self._cookie_headers.values()
-        )
+        headers.extend([b"set-cookie", value] for value in self._cookie_headers.values())
 
         return (
             {

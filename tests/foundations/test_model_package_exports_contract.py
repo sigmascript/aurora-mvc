@@ -13,9 +13,16 @@ from aurora.cli import main
 
 def _invoke_import(project, command):
     env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join((str(project), str(__import__("pathlib").Path(__file__).resolve().parents[2]), os.environ.get("PYTHONPATH", "")))
-    result = subprocess.run([sys.executable, "-c", command], cwd=project, env=env,
-                            capture_output=True, text=True)
+    env["PYTHONPATH"] = os.pathsep.join(
+        (
+            str(project),
+            str(__import__("pathlib").Path(__file__).resolve().parents[2]),
+            os.environ.get("PYTHONPATH", ""),
+        )
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", command], cwd=project, env=env, capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
 
 
@@ -29,8 +36,11 @@ def test_shared_models_export_classes_and_preserve_custom_code(tmp_path, monkeyp
     assert main(["model", "add", "Users"]) == 0
     source = package.read_text()
     assert '"""Developer package."""' in source and "CUSTOM = 7" in source
-    _invoke_import(root, "from models import Notes, Users, CUSTOM; "
-                         "assert isinstance(Notes, type) and isinstance(Users, type) and CUSTOM == 7")
+    _invoke_import(
+        root,
+        "from models import Notes, Users, CUSTOM; "
+        "assert isinstance(Notes, type) and isinstance(Users, type) and CUSTOM == 7",
+    )
     settings = json.loads((root / "aurora_config.json").read_text())
     settings["strict"] = False
     (root / "aurora_config.json").write_text(json.dumps(settings))
@@ -38,7 +48,9 @@ def test_shared_models_export_classes_and_preserve_custom_code(tmp_path, monkeyp
     assert main(["model", "remove", "Notes"]) == 0
     assert "from .Notes import Notes" not in package.read_text()
     assert "from .Users import Users" in package.read_text()
-    _invoke_import(root, "from models import Users, CUSTOM; assert isinstance(Users, type) and CUSTOM == 7")
+    _invoke_import(
+        root, "from models import Users, CUSTOM; assert isinstance(Users, type) and CUSTOM == 7"
+    )
     assert main(["model", "add", "Notes"]) == 0
     _invoke_import(root, "from models import Notes; assert isinstance(Notes, type)")
 
@@ -51,9 +63,12 @@ def test_modular_app_exports_are_package_local(tmp_path, monkeypatch):
     assert main(["model", "add", "Notes", "--app", "home"]) == 0
     assert "Posts" not in (root / "models/__init__.py").read_text()
     assert "Notes" not in (root / "apps/blog/models/__init__.py").read_text()
-    _invoke_import(root, "from models import Users; from apps.blog.models import Posts; "
-                         "from apps.home.models import Notes; "
-                         "assert all(isinstance(x, type) for x in (Users, Posts, Notes))")
+    _invoke_import(
+        root,
+        "from models import Users; from apps.blog.models import Posts; "
+        "from apps.home.models import Notes; "
+        "assert all(isinstance(x, type) for x in (Users, Posts, Notes))",
+    )
     settings = json.loads((root / "aurora_config.json").read_text())
     settings["strict"] = False
     (root / "aurora_config.json").write_text(json.dumps(settings))
@@ -90,6 +105,7 @@ def test_removed_model_custom_import_refuses_without_changes(tmp_path, monkeypat
     monkeypatch.setattr("builtins.input", lambda _: pytest.fail("Must refuse before prompt"))
     with pytest.raises(ValueError, match="custom"):
         from aurora._cli_scaffolding import remove_component
+
         remove_component("model", "Notes")
     assert package.read_text() == "from .Notes import Notes\n"
     assert (root / "models/Notes.py").exists()
@@ -99,6 +115,7 @@ def test_removed_model_custom_import_refuses_without_changes(tmp_path, monkeypat
 def test_public_jsonresponse_export():
     from aurora import JSONResponse
     from aurora.core.response import JSONResponse as Original
+
     assert JSONResponse is Original
 
 

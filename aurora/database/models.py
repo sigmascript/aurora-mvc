@@ -4,23 +4,62 @@ Schema creation/migration is intentionally outside this module. Models use
 existing tables and never implicitly modify database structure.
 """
 
-import re
 import math
+import re
 from collections.abc import Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import date, datetime
 from decimal import Decimal
 
-from .sql_types import parse_sql_type
-from ._model_filters import _FILTER_OPERATORS, _compile_filters, _normalize_ordering
-from ._model_join import execute_model_join
-
+from .model_query import (
+    _FILTER_OPERATORS,
+    _compile_filters,
+    _normalize_ordering,
+    execute_model_join,
+)
 
 _TYPES = (str, int, float, bool, date, datetime)
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _REQUEST_CONNECTION = ContextVar("aurorasql_request_connection", default=None)
 _UNSET = object()
+
+
+_PATTERN = re.compile(
+    r"^(TEXT|VARCHAR\(([1-9][0-9]{0,4})\)|DECIMAL\(([1-9][0-9]?),([0-9]{1,2})\))$", re.I
+)
+
+
+def parse_sql_type(declaration):
+    """Validate a supported SQL type declaration and return its Python type.
+
+    Arbitrary DDL fragments are rejected rather than passed through."""
+
+    if not isinstance(declaration, str):
+        raise TypeError("SQL type declaration must be a string")
+
+    match = _PATTERN.fullmatch(declaration.strip())
+
+    if match is None:
+        raise ValueError("Unsupported SQL type; use TEXT, VARCHAR(n), or DECIMAL(p,s)")
+
+    if match.group(1).upper() == "TEXT":
+        return "TEXT", str
+
+    if match.group(2) is not None:
+        size = int(match.group(2))
+
+        if size > 65535:
+            raise ValueError("VARCHAR length exceeds supported limit")
+
+        return f"VARCHAR({size})", str
+
+    precision, scale = int(match.group(3)), int(match.group(4))
+
+    if precision > 65 or scale > precision:
+        raise ValueError("DECIMAL requires 1 <= precision <= 65 and 0 <= scale <= precision")
+
+    return f"DECIMAL({precision},{scale})", Decimal
 
 
 def _identifier(name):
@@ -33,10 +72,22 @@ def _identifier(name):
 class Column:
     """Describe a supported Python field; does not generate database DDL."""
 
-    def __init__(self, python_type, *, primary_key=False, not_null=_UNSET,
-                 default=None, length=None, unique=False,
-                 server_default=None, references=None, reference=_UNSET,
-                 on_update=None, on_delete=None, **legacy):
+    def __init__(
+        self,
+        python_type,
+        *,
+        primary_key=False,
+        not_null=_UNSET,
+        default=None,
+        length=None,
+        unique=False,
+        server_default=None,
+        references=None,
+        reference=_UNSET,
+        on_update=None,
+        on_delete=None,
+        **legacy,
+    ):
         self.sql_type = None
 
         if isinstance(python_type, str):
@@ -48,7 +99,9 @@ class Column:
         if self.sql_type is not None and length is not None:
             raise ValueError("SQL type declarations already include their length")
 
-        if length is not None and (python_type is not str or type(length) is not int or length <= 0):
+        if length is not None and (
+            python_type is not str or type(length) is not int or length <= 0
+        ):
             raise ValueError("length must be a positive integer for str fields")
 
         if set(legacy) - {"nullable"}:
@@ -95,6 +148,7 @@ class Column:
             _identifier(column_name)
 
         actions = {"NO ACTION", "RESTRICT", "CASCADE", "SET NULL", "SET DEFAULT"}
+
         def normalize_action(value):
             if value is None:
                 return "NO ACTION"
@@ -113,7 +167,11 @@ class Column:
             raise ValueError("SET NULL requires a nullable referencing column")
         if "SET DEFAULT" in (self.on_update, self.on_delete) and default is None:
             raise ValueError("SET DEFAULT requires a database-side column default")
-        self.model_reference = reference is not _UNSET and references is not None and references.split(".")[0][0].isupper()
+        self.model_reference = (
+            reference is not _UNSET
+            and references is not None
+            and references.split(".")[0][0].isupper()
+        )
         self.server_default = server_default
         self.references = references
 
@@ -121,7 +179,9 @@ class Column:
             raise ValueError("Primary-key columns cannot be nullable")
 
         if callable(default):
-            raise TypeError("Dynamic defaults belong in application logic; column default must be a SQL literal")
+            raise TypeError(
+                "Dynamic defaults belong in application logic; column default must be a SQL literal"
+            )
 
         if default is not None:
             self.validate(default)
@@ -231,8 +291,9 @@ class ModelResult(list):
     def sum(self, column):
         values = self._values(column)
 
-        if any(type(value) is bool or not isinstance(value, (int, float, Decimal))
-               for value in values):
+        if any(
+            type(value) is bool or not isinstance(value, (int, float, Decimal)) for value in values
+        ):
             raise TypeError("sum requires a numeric column")
 
         return sum(values) if values else None
@@ -240,11 +301,25 @@ class ModelResult(list):
     def avg(self, column):
         values = self._values(column)
 
-        if any(type(value) is bool or not isinstance(value, (int, float, Decimal))
-               for value in values):
+        if any(
+            type(value) is bool or not isinstance(value, (int, float, Decimal)) for value in values
+        ):
             raise TypeError("avg requires a numeric column")
 
         return sum(values) / len(values) if values else None
+
+
+def _normalize_field_value(field, value):
+    """Normalize a DB-API value using its declared model field."""
+    if field.python_type is Decimal and value is not None and not isinstance(value, Decimal):
+        return Decimal(str(value))
+    if field.python_type is bool and type(value) is int and value in (0, 1):
+        return bool(value)
+    if field.python_type is datetime and isinstance(value, str):
+        return datetime.fromisoformat(value)
+    if field.python_type is date and isinstance(value, str):
+        return date.fromisoformat(value)
+    return value
 
 
 class Model:
@@ -254,8 +329,7 @@ class Model:
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
-        fields = {name: value for name, value in cls.__dict__.items()
-                  if isinstance(value, Column)}
+        fields = {name: value for name, value in cls.__dict__.items() if isinstance(value, Column)}
 
         if not fields:
             raise ValueError("Model must declare at least one column")
@@ -292,16 +366,8 @@ class Model:
         values = dict(row)
 
         for name, field in cls.__columns__.items():
-            value = values.get(name)
-
-            if field.python_type is Decimal and value is not None and not isinstance(value, Decimal):
-                values[name] = Decimal(str(value))
-            elif field.python_type is bool and type(value) is int and value in (0, 1):
-                values[name] = bool(value)
-            elif field.python_type is datetime and isinstance(value, str):
-                values[name] = datetime.fromisoformat(value)
-            elif field.python_type is date and isinstance(value, str):
-                values[name] = date.fromisoformat(value)
+            if name in values:
+                values[name] = _normalize_field_value(field, values[name])
 
         return cls(**values)
 
@@ -366,8 +432,7 @@ class Model:
     @classmethod
     def read(cls, where=None, *, order_by=None, limit=None, offset=0):
         """Read plain dictionaries in a list-compatible ModelResult."""
-        return cls._execute("read", where, order_by=order_by, limit=limit,
-                            offset=offset)
+        return cls._execute("read", where, order_by=order_by, limit=limit, offset=offset)
 
     @classmethod
     def query(cls, sql, parameters=None):
@@ -378,15 +443,21 @@ class Model:
     def legacy_query(cls, where=None, *, order_by=None, limit=None, offset=0):
         """Temporary Alpha 8 lazy-query compatibility; slated for retirement."""
         # Lazy results cannot own a connection that would close on return.
-        return cls._operations().legacy_query(where, order_by=order_by,
-                                              limit=limit, offset=offset)
+        return cls._operations().legacy_query(where, order_by=order_by, limit=limit, offset=offset)
 
     @classmethod
-    def join(cls, models, *, cols=None, where=None, order_by=None,
-             limit=None, offset=0, on=None):
+    def join(cls, models, *, cols=None, where=None, order_by=None, limit=None, offset=0, on=None):
         """Read related models directly, using declared relationships or explicit on."""
-        return cls._execute("join", models, cols=cols, where=where, order_by=order_by,
-                            limit=limit, offset=offset, on=on)
+        return cls._execute(
+            "join",
+            models,
+            cols=cols,
+            where=where,
+            order_by=order_by,
+            limit=limit,
+            offset=offset,
+            on=on,
+        )
 
     @classmethod
     def create(cls, data, /):
@@ -410,7 +481,17 @@ class Model:
 class Query:
     """Lazy validated-filter query with safe ordering and bounded pagination."""
 
-    def __init__(self, operations, where=None, *, ordering=None, limit=None, offset=0, join=None, selected=None):
+    def __init__(
+        self,
+        operations,
+        where=None,
+        *,
+        ordering=None,
+        limit=None,
+        offset=0,
+        join=None,
+        selected=None,
+    ):
         self._operations = operations
         self.where = dict(where or {})
 
@@ -449,8 +530,15 @@ class Query:
         if type(descending) is not bool:
             raise TypeError("descending must be a boolean")
 
-        return Query(self._operations, self.where,
-                     ordering=((name, descending),), limit=self._limit, offset=self._offset, join=self._join, selected=self._selected)
+        return Query(
+            self._operations,
+            self.where,
+            ordering=((name, descending),),
+            limit=self._limit,
+            offset=self._offset,
+            join=self._join,
+            selected=self._selected,
+        )
 
     def limit(self, count):
         """Return a new query with a nonnegative maximum row count."""
@@ -458,8 +546,15 @@ class Query:
         if type(count) is not int or count < 0:
             raise ValueError("limit must be a nonnegative integer")
 
-        return Query(self._operations, self.where,
-                     ordering=self._ordering, limit=count, offset=self._offset, join=self._join, selected=self._selected)
+        return Query(
+            self._operations,
+            self.where,
+            ordering=self._ordering,
+            limit=count,
+            offset=self._offset,
+            join=self._join,
+            selected=self._selected,
+        )
 
     def offset(self, count):
         """Return a new query that skips rows; requires an explicit limit."""
@@ -467,8 +562,15 @@ class Query:
         if type(count) is not int or count < 0:
             raise ValueError("offset must be a nonnegative integer")
 
-        return Query(self._operations, self.where,
-                     ordering=self._ordering, limit=self._limit, offset=count, join=self._join, selected=self._selected)
+        return Query(
+            self._operations,
+            self.where,
+            ordering=self._ordering,
+            limit=self._limit,
+            offset=count,
+            join=self._join,
+            selected=self._selected,
+        )
 
     def _models(self):
         return (self._operations.model,) + tuple(step[0] for step in (self._join or ()))
@@ -496,14 +598,14 @@ class Query:
         if name in models[0].__columns__:
             return f"{self._operations._quote('left_row')}.{self._operations._quote(name)}"
 
-        if not isinstance(name, str) or name.count('.') != 1:
+        if not isinstance(name, str) or name.count(".") != 1:
             raise ValueError(f"Unknown qualified column: {name!r}")
 
-        table, field = name.split('.')
+        table, field = name.split(".")
 
         for index, model in enumerate(models):
             if model.__table_name__ == table and field in model.__columns__:
-                alias = 'left_row' if index == 0 else f'right_row_{index}'
+                alias = "left_row" if index == 0 else f"right_row_{index}"
                 return f"{self._operations._quote(alias)}.{self._operations._quote(field)}"
 
         raise ValueError(f"Unknown qualified column: {name!r}")
@@ -511,11 +613,17 @@ class Query:
     def join(self, other_model, *, on):
         """Add an explicit inner join. Qualified left columns use table.column."""
 
-        if not isinstance(other_model, type) or not issubclass(other_model, Model) or other_model is Model:
+        if (
+            not isinstance(other_model, type)
+            or not issubclass(other_model, Model)
+            or other_model is Model
+        ):
             raise TypeError("join requires a declared Model subclass")
 
         if other_model.__table_name__ in {model.__table_name__ for model in self._models()}:
-            raise ValueError("Only one join per table is supported; joining a table to itself is not supported")
+            raise ValueError(
+                "Only one join per table is supported; joining a table to itself is not supported"
+            )
 
         if not isinstance(on, tuple) or len(on) != 2:
             raise TypeError("on must be a (left_column, right_column) tuple")
@@ -525,10 +633,15 @@ class Query:
         if left not in self._available_columns() or right not in other_model.__columns__:
             raise ValueError("Join columns must be declared on their respective models")
 
-        return Query(self._operations, self.where, ordering=self._ordering,
-                     limit=self._limit, offset=self._offset,
-                     join=(self._join or ()) + ((other_model, left, right),),
-                     selected=self._selected)
+        return Query(
+            self._operations,
+            self.where,
+            ordering=self._ordering,
+            limit=self._limit,
+            offset=self._offset,
+            join=(self._join or ()) + ((other_model, left, right),),
+            selected=self._selected,
+        )
 
     def where_joined(self, where):
         """Replace filters on a joined query using validated qualified fields."""
@@ -536,9 +649,15 @@ class Query:
         if self._join is None:
             raise ValueError("where_joined requires a join")
 
-        return Query(self._operations, where, ordering=self._ordering,
-                     limit=self._limit, offset=self._offset,
-                     join=self._join, selected=self._selected)
+        return Query(
+            self._operations,
+            where,
+            ordering=self._ordering,
+            limit=self._limit,
+            offset=self._offset,
+            join=self._join,
+            selected=self._selected,
+        )
 
     def select(self, *columns):
         """Select explicit validated columns from a joined query."""
@@ -553,9 +672,15 @@ class Query:
             if name not in self._available_columns():
                 raise ValueError(f"Unknown selected column: {name!r}")
 
-        return Query(self._operations, self.where, ordering=self._ordering,
-                     limit=self._limit, offset=self._offset,
-                     join=self._join, selected=tuple(columns))
+        return Query(
+            self._operations,
+            self.where,
+            ordering=self._ordering,
+            limit=self._limit,
+            offset=self._offset,
+            join=self._join,
+            selected=tuple(columns),
+        )
 
     def _source(self):
         if self._join is None:
@@ -565,9 +690,11 @@ class Query:
         sql = f"{self._operations.table} AS {quote('left_row')}"
 
         for index, (model, left, right) in enumerate(self._join, 1):
-            alias = f'right_row_{index}'
-            sql += (f" INNER JOIN {quote(model.__table_name__)} AS {quote(alias)}"
-                    f" ON {self._qualified(left)} = {quote(alias)}.{quote(right)}")
+            alias = f"right_row_{index}"
+            sql += (
+                f" INNER JOIN {quote(model.__table_name__)} AS {quote(alias)}"
+                f" ON {self._qualified(left)} = {quote(alias)}.{quote(right)}"
+            )
 
         return sql
 
@@ -577,8 +704,28 @@ class Query:
 
         columns = self._available_columns()
         identifiers = {name: self._qualified(name) for name in columns}
-        return _compile_filters(self.where, columns, self._operations._quote,
-                                identifiers=identifiers)
+        return _compile_filters(
+            self.where, columns, self._operations._quote, identifiers=identifiers
+        )
+
+    def _join_projection(self):
+        """Resolve selected columns to their source models and output keys."""
+        models = self._models()
+        names = self._selected
+        if names is None:
+            names = [
+                f"{model.__table_name__}.{name}" for model in models for name in model.__columns__
+            ]
+
+        for name in names:
+            if "." in name:
+                table, field = name.split(".")
+                index = next(i for i, model in enumerate(models) if model.__table_name__ == table)
+            else:
+                index, field = 0, name
+
+            alias = "left" if index == 0 else "right" if len(models) == 2 else f"right{index}"
+            yield name, models[index], field, f"{alias}__{field}"
 
     def _select(self, *, first=False):
         if self._offset and self._limit is None and not first:
@@ -590,29 +737,10 @@ class Query:
         if self._join is None:
             columns = "*"
         else:
-            selected = []
-            models = self._models()
-
-            if self._selected is None:
-                names = [f"{model.__table_name__}.{name}"
-                         for model in models for name in model.__columns__]
-            else:
-                names = self._selected
-
-            for name in names:
-                if '.' in name:
-                    table, field = name.split('.')
-                    index = next(i for i, model in enumerate(models)
-                                 if model.__table_name__ == table)
-                else:
-                    field = name
-                    index = 0
-
-                alias = ('left' if index == 0 else
-                         'right' if len(models) == 2 else f'right{index}')
-                selected.append(f"{self._qualified(name)} AS {quote(alias + '__' + field)}")
-
-            columns = ", ".join(selected)
+            columns = ", ".join(
+                f"{self._qualified(name)} AS {quote(key)}"
+                for name, _, _, key in self._join_projection()
+            )
 
         sql = f"SELECT {columns} FROM {self._source()}{clause}"
 
@@ -641,19 +769,24 @@ class Query:
         """Count matching rows (joined rows when a join is present)."""
         clause, parameters = self._where()
         row = self._operations.connection.fetch_first(
-            f"SELECT COUNT(*) AS row_count FROM {self._source()}{clause}", parameters)
+            f"SELECT COUNT(*) AS row_count FROM {self._source()}{clause}", parameters
+        )
         return int(row["row_count"])
 
     def exists(self):
         """Check for a matching row without materializing models."""
         clause, parameters = self._where()
         row = self._operations.connection.fetch_first(
-            f"SELECT 1 AS present FROM {self._source()}{clause} LIMIT 1", parameters)
+            f"SELECT 1 AS present FROM {self._source()}{clause} LIMIT 1", parameters
+        )
         return row is not None
 
     def _materialize(self, row):
         if self._join is not None:
-            return dict(row)
+            values = dict(row)
+            for _, model, field, key in self._join_projection():
+                values[key] = _normalize_field_value(model.__columns__[field], values[key])
+            return values
 
         return self._operations.model._from_row(row)
 
@@ -708,12 +841,17 @@ class ModelOperations:
 
         return ModelResult(rows, columns=columns)
 
-    def join(self, models, *, cols=None, where=None, order_by=None,
-             limit=None, offset=0, on=None):
+    def join(self, models, *, cols=None, where=None, order_by=None, limit=None, offset=0, on=None):
         """Execute a direct INNER JOIN using declared or explicit relationships."""
         return execute_model_join(
-            self, models, cols=cols, where=where, order_by=order_by,
-            limit=limit, offset=offset, on=on,
+            self,
+            models,
+            cols=cols,
+            where=where,
+            order_by=order_by,
+            limit=limit,
+            offset=offset,
+            on=on,
         )
 
     def all(self, *, where=None):
@@ -723,8 +861,7 @@ class ModelOperations:
 
     def first(self, *, where=None):
         clause, parameters = self._where(where)
-        row = self.connection.fetch_first(
-            f"SELECT * FROM {self.table}{clause} LIMIT 1", parameters)
+        row = self.connection.fetch_first(f"SELECT * FROM {self.table}{clause} LIMIT 1", parameters)
         return None if row is None else self.model._from_row(row)
 
     def create(self, data, /):
@@ -743,11 +880,15 @@ class ModelOperations:
         # Omitted defaults are applied by the database, not by this insert.
         # Keep the returned model useful for constant defaults without sending
         # a value that could mask a database declaration mismatch.
-        defaulted = {name: field.default for name, field in self.model.__columns__.items()
-                     if name not in values and field.default is not None}
+        defaulted = {
+            name: field.default
+            for name, field in self.model.__columns__.items()
+            if name not in values and field.default is not None
+        }
 
-        keys = [(name, field) for name, field in self.model.__columns__.items()
-                if field.primary_key]
+        keys = [
+            (name, field) for name, field in self.model.__columns__.items() if field.primary_key
+        ]
         generated = len(keys) == 1 and keys[0][1].python_type is int and keys[0][0] not in values
 
         if values:
@@ -756,14 +897,18 @@ class ModelOperations:
             parameters = {f"v{index}": value for index, value in enumerate(values.values())}
             statement = f"INSERT INTO {self.table} ({columns}) VALUES ({placeholders})"
         else:
-            statement = (f"INSERT INTO {self.table} () VALUES ()" if self.connection.dialect == "mysql"
-                         else f"INSERT INTO {self.table} DEFAULT VALUES")
+            statement = (
+                f"INSERT INTO {self.table} () VALUES ()"
+                if self.connection.dialect == "mysql"
+                else f"INSERT INTO {self.table} DEFAULT VALUES"
+            )
             parameters = {}
 
         if generated and self.connection.dialect == "postgresql":
             key_name = keys[0][0]
             rows = self.connection.fetch_all(
-                statement + f" RETURNING {self._quote(key_name)}", parameters)
+                statement + f" RETURNING {self._quote(key_name)}", parameters
+            )
 
             if len(rows) != 1:
                 raise RuntimeError("Insert did not return exactly one generated key")
@@ -774,8 +919,11 @@ class ModelOperations:
 
             if generated:
                 key_name = keys[0][0]
-                key_sql = ("SELECT LAST_INSERT_ID() AS generated_key" if self.connection.dialect == "mysql"
-                           else "SELECT last_insert_rowid() AS generated_key")
+                key_sql = (
+                    "SELECT LAST_INSERT_ID() AS generated_key"
+                    if self.connection.dialect == "mysql"
+                    else "SELECT last_insert_rowid() AS generated_key"
+                )
                 row = self.connection.fetch_first(key_sql)
 
                 if row is None or row["generated_key"] is None:
@@ -809,7 +957,8 @@ class ModelOperations:
             parameters[key] = value
 
         return self.connection.execute_write(
-            f"UPDATE {self.table} SET {', '.join(assignments)}{clause}", parameters)
+            f"UPDATE {self.table} SET {', '.join(assignments)}{clause}", parameters
+        )
 
     def delete(self, *, where=None, confirm=False):
         clause, parameters = self._where(where)

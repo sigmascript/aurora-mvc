@@ -5,18 +5,17 @@ creates a missing SQLite file, or changes the model's global legacy binding.
 """
 
 import asyncio
-from threading import get_ident
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
-from urllib.parse import unquote, urlsplit, quote
+from threading import get_ident
+from urllib.parse import quote, unquote, urlsplit
 
-from aurora.database.cli_plan import _load_config, resolve_project_database
-from aurora.database.core import connect
-from aurora.database.model_manifest import read_model_mapping
+from aurora.database.cli_check import _load_config, resolve_project_database
+from aurora.database.connections import connect
+from aurora.database.model_discovery import read_model_mapping
 from aurora.database.models import Model
 from aurora.urls import _current_application
-
 
 _ACTIVE_SCOPE = ContextVar("aurorasql_project_scope", default=None)
 
@@ -83,9 +82,7 @@ def _check_scoped_model(model):
 
 def _check_scope_thread(scope):
     if scope[3] != get_ident():
-        raise RuntimeError(
-            "An AuroraSQL connection scope cannot be used from another thread"
-        )
+        raise RuntimeError("An AuroraSQL connection scope cannot be used from another thread")
 
 
 def _project_connection(config, alias, root):

@@ -5,10 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from aurora.database.initialization import _write_snapshot
+from aurora.database.migration_execution import execute_server_forward_migration
 from aurora.database.models import Model, column
 from aurora.database.snapshots import compare_snapshots, schema_snapshot
-from aurora.database.server_forward_init import _write_snapshot
-from aurora.database.server_forward_migration import execute_server_forward_migration
 
 
 class Parent(Model):
@@ -37,9 +37,12 @@ def test_reviewing_v2_does_not_authorize_cross_version_migration(dialect):
 
 
 @pytest.mark.parametrize("dialect", ("mysql", "postgresql"))
-def test_server_snapshot_writer_refuses_unverified_physical_fk_before_file_creation(tmp_path, monkeypatch, dialect):
-    from aurora.database import server_forward_init
-    monkeypatch.setattr(server_forward_init, "_physical", lambda connection: [])
+def test_server_snapshot_writer_refuses_unverified_physical_fk_before_file_creation(
+    tmp_path, monkeypatch, dialect
+):
+    from aurora.database import initialization
+
+    monkeypatch.setattr(initialization, "_physical", lambda connection: [])
     connection = SimpleNamespace(dialect=dialect)
     with pytest.raises(RuntimeError, match="Observed server tables differ"):
         _write_snapshot(connection, tmp_path, "test_alias", (Parent, Child), "Initial")
@@ -51,9 +54,11 @@ def test_server_forward_execution_refuses_unapproved_review_before_writes(dialec
     class NeverWrite:
         _transaction_active = False
         _migration_lock_active = False
+
         def __init__(self):
             self.dialect = dialect
             self.calls = []
+
         def execute_write(self, *args, **kwargs):
             self.calls.append(args)
             raise AssertionError("DDL must not be attempted")
@@ -66,9 +71,16 @@ def test_server_forward_execution_refuses_unapproved_review_before_writes(dialec
     )
     with pytest.raises(PermissionError, match="approved safe server operation"):
         execute_server_forward_migration(
-            connection, (Parent,), tmp_path, "test_alias",
-            identity="identity", parsed=object(), review=invalid_review,
-            approval="review-value", title="Prohibited", backup_path=None,
+            connection,
+            (Parent,),
+            tmp_path,
+            "test_alias",
+            identity="identity",
+            parsed=object(),
+            review=invalid_review,
+            approval="review-value",
+            title="Prohibited",
+            backup_path=None,
             config_path=tmp_path,
         )
     assert connection.calls == []
@@ -77,10 +89,20 @@ def test_server_forward_execution_refuses_unapproved_review_before_writes(dialec
 def test_fk_action_edit_is_detected_in_v2_review():
     before = schema_snapshot(Parent, Child, dialect="sqlite", allow_v2=True)
     after = deepcopy(before)
-    col = next(c for t in after["tables"] if t["name"] == "forward_child"
-               for c in t["columns"] if c["name"] == "parent_id")
+    col = next(
+        c
+        for t in after["tables"]
+        if t["name"] == "forward_child"
+        for c in t["columns"]
+        if c["name"] == "parent_id"
+    )
     col["on_delete"] = "RESTRICT"
     assert compare_snapshots(before, after) == [
-        {"kind": "changed_column", "table": "forward_child", "column": "parent_id",
-         "risk": "requires_data_strategy", "requires_review": True}
+        {
+            "kind": "changed_column",
+            "table": "forward_child",
+            "column": "parent_id",
+            "risk": "requires_data_strategy",
+            "requires_review": True,
+        }
     ]

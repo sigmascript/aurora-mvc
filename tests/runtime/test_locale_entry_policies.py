@@ -1,4 +1,5 @@
 """F03 optional unprefixed locale-entry policy, without database or sessions."""
+
 import asyncio
 import json
 
@@ -17,17 +18,35 @@ def exchange(app, path, *, method="GET", cookie=None, query=b"", scheme="http"):
         events.append(message)
 
     headers = [(b"cookie", cookie.encode())] if cookie else []
-    asyncio.run(app({"type": "http", "path": path, "method": method,
-                     "scheme": scheme, "headers": headers, "query_string": query},
-                    receive, send))
+    asyncio.run(
+        app(
+            {
+                "type": "http",
+                "path": path,
+                "method": method,
+                "scheme": scheme,
+                "headers": headers,
+                "query_string": query,
+            },
+            receive,
+            send,
+        )
+    )
     start = next(x for x in events if x["type"] == "http.response.start")
-    return (start["status"], dict(start["headers"]),
-            b"".join(x.get("body", b"") for x in events if x["type"] == "http.response.body"))
+    return (
+        start["status"],
+        dict(start["headers"]),
+        b"".join(x.get("body", b"") for x in events if x["type"] == "http.response.body"),
+    )
 
 
 def localized(policy="explicit", cookie_name=None):
-    app = Application(locales=["en", "ku"], default_locale="en",
-                      locale_cookie_name=cookie_name, locale_entry_policy=policy)
+    app = Application(
+        locales=["en", "ku"],
+        default_locale="en",
+        locale_cookie_name=cookie_name,
+        locale_entry_policy=policy,
+    )
     app.add_route("/admin/", lambda request: request.locale, methods=["GET"])
     app.add_route("/posts/{slug}", lambda request, slug: f"{request.locale}:{slug}")
     return app
@@ -43,8 +62,13 @@ def test_explicit_compatibility_has_no_redirect_or_cookie():
 def test_default_policy_redirects_only_real_get_head_routes_and_keeps_query():
     app = localized("default")
     assert exchange(app, "/admin/", query=b"p=2&tag=a%20b")[:2] == (
-        302, {b"content-type": b"text/plain; charset=utf-8", b"content-length": b"0",
-              b"location": b"/en/admin/?p=2&tag=a%20b"})
+        302,
+        {
+            b"content-type": b"text/plain; charset=utf-8",
+            b"content-length": b"0",
+            b"location": b"/en/admin/?p=2&tag=a%20b",
+        },
+    )
     assert exchange(app, "/admin/", method="HEAD")[0] == 302
     assert exchange(app, "/admin/", method="POST")[0] == 404
     assert exchange(app, "/unknown")[0] == 404
@@ -92,9 +116,19 @@ def test_policy_configuration_and_validation(tmp_path):
     with pytest.raises(ValueError):
         Application(locales=["en"], default_locale="en", locale_entry_policy="surprise")
     config = tmp_path / "aurora_config.json"
-    config.write_text(json.dumps({"application": {"name": "Example", "locales": ["en", "ku"],
-                                                 "default_locale": "en", "locale_cookie_name": "lang",
-                                                 "locale_entry_policy": "remembered"}}))
+    config.write_text(
+        json.dumps(
+            {
+                "application": {
+                    "name": "Example",
+                    "locales": ["en", "ku"],
+                    "default_locale": "en",
+                    "locale_cookie_name": "lang",
+                    "locale_entry_policy": "remembered",
+                }
+            }
+        )
+    )
     app = Application.from_config(config)
     assert app.locale_entry_policy == "remembered"
     config.write_text(json.dumps({"application": {"locale_entry_policy": "invalid"}}))

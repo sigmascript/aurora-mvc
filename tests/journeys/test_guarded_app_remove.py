@@ -1,7 +1,6 @@
 """Developer-facing guardrails for explicitly removing an untouched modular app."""
 
 import json
-from pathlib import Path
 
 import pytest
 
@@ -57,7 +56,9 @@ def test_exact_name_and_successful_guarded_removal(tmp_path, monkeypatch):
     assert '"/accounts/"' not in source
 
 
-@pytest.mark.parametrize("kind", ["custom-file", "custom-controller", "external-reference", "custom-route"])
+@pytest.mark.parametrize(
+    "kind", ["custom-file", "custom-controller", "external-reference", "custom-route"]
+)
 def test_customizations_and_references_refuse_before_prompt(tmp_path, monkeypatch, kind):
     root = project(tmp_path)
     set_strict(root, False)
@@ -67,10 +68,17 @@ def test_customizations_and_references_refuse_before_prompt(tmp_path, monkeypatc
     elif kind == "custom-controller":
         (app / "controllers/Accounts.py").write_text("# customized\n", encoding="utf-8")
     elif kind == "external-reference":
-        (root / "models/Remote.py").write_text("from apps.accounts import Accounts\n", encoding="utf-8")
+        (root / "models/Remote.py").write_text(
+            "from apps.accounts import Accounts\n", encoding="utf-8"
+        )
     else:
         file = root / "app.py"
-        file.write_text(file.read_text(encoding="utf-8").replace('app.route("/accounts/", Accounts)', 'app.route("/accounts/", Custom)'), encoding="utf-8")
+        file.write_text(
+            file.read_text(encoding="utf-8").replace(
+                'app.route("/accounts/", Accounts)', 'app.route("/accounts/", Custom)'
+            ),
+            encoding="utf-8",
+        )
     original = (root / "app.py").read_bytes()
     monkeypatch.setattr("builtins.input", lambda _: pytest.fail("Should refuse before prompting"))
     with pytest.raises(ValueError):

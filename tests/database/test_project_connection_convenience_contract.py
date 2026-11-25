@@ -3,14 +3,14 @@
 import asyncio
 import json
 import sqlite3
-from contextlib import closing
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from contextvars import copy_context
 
 import pytest
 
-from aurora.db import connection, transaction
 from aurora.database import Model, column, connect
+from aurora.db import connection, transaction
 
 
 class Notes(Model):
@@ -26,21 +26,34 @@ class Analytics(Model):
 
 
 def _project(tmp_path, monkeypatch, *, production=False):
-    (tmp_path / "aurora_config.json").write_text(json.dumps({
-        "production": production, "default_database": "data",
-    }))
-    (tmp_path / "aurora_databases.json").write_text(json.dumps({
-        "databases": {
-            "data": {"engine": "sqlite", "extension": "sqlite3"},
-            "analytics": {"engine": "sqlite", "extension": "sqlite3"},
-        },
-    }))
-    (tmp_path / "aurora_models.json").write_text(json.dumps({
-        "databases": {
-            "data": [f"{Notes.__module__}:Notes"],
-            "analytics": [f"{Analytics.__module__}:Analytics"],
-        },
-    }))
+    (tmp_path / "aurora_config.json").write_text(
+        json.dumps(
+            {
+                "production": production,
+                "default_database": "data",
+            }
+        )
+    )
+    (tmp_path / "aurora_databases.json").write_text(
+        json.dumps(
+            {
+                "databases": {
+                    "data": {"engine": "sqlite", "extension": "sqlite3"},
+                    "analytics": {"engine": "sqlite", "extension": "sqlite3"},
+                },
+            }
+        )
+    )
+    (tmp_path / "aurora_models.json").write_text(
+        json.dumps(
+            {
+                "databases": {
+                    "data": [f"{Notes.__module__}:Notes"],
+                    "analytics": [f"{Analytics.__module__}:Analytics"],
+                },
+            }
+        )
+    )
     for alias, table, value in (("data", "notes", "title"), ("analytics", "analytics", "event")):
         with closing(sqlite3.connect(tmp_path / f"{alias}.sqlite3")) as raw, raw:
             raw.execute(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY, {value} TEXT NOT NULL)")

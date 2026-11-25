@@ -1,9 +1,8 @@
 """Public guides must agree with the supported developer CLI."""
 
 import json
-from pathlib import Path
 import re
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -11,7 +10,10 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_public_guide_links_resolve():
     documents = [ROOT / "README.md", *(ROOT / "docs").rglob("*.md")]
     for document in documents:
-        if document.name.startswith("RELEASE_CANDIDATE_") or document.name == "aurorasql-alpha8-compatibility.md":
+        if (
+            document.name.startswith("RELEASE_CANDIDATE_")
+            or document.name == "aurorasql-alpha8-compatibility.md"
+        ):
             continue  # Historical files are retired separately.
         body = document.read_text(encoding="utf-8")
         for target in re.findall(r"\]\(([^)]+)\)", body):
@@ -28,7 +30,7 @@ def test_active_database_examples_match_supported_configuration():
             parsed = json.loads(block)
             assert isinstance(parsed, dict)
             # Example formatting should be readable and consistent.
-            assert "\n    \"" in block, document.name
+            assert '\n    "' in block, document.name
 
 
 def test_unreleased_changelog_is_kept_during_development():

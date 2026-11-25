@@ -10,6 +10,7 @@ from functools import wraps
 from aurora.core.http_exception import HTTPException
 from aurora.core.response import redirect
 from aurora.urls import _current_application, url_for
+
 from .return_urls import append_next, safe_next
 
 
@@ -84,6 +85,7 @@ def login_required(signin_route, *, authenticated, api=False, with_next=False):
             return redirect(destination)
 
         if inspect.iscoroutinefunction(action):
+
             @wraps(action)
             async def async_wrapper(self, *args, **kwargs):
                 request = _request(self)
@@ -96,6 +98,7 @@ def login_required(signin_route, *, authenticated, api=False, with_next=False):
                     return denied(request)
 
                 return await action(self, *args, **kwargs)
+
             return async_wrapper
 
         @wraps(action)
@@ -113,6 +116,7 @@ def login_required(signin_route, *, authenticated, api=False, with_next=False):
                 return denied(request)
 
             return action(self, *args, **kwargs)
+
         return sync_wrapper
 
     return decorate
@@ -124,6 +128,7 @@ def login_abort(destination_route, *, authenticated):
 
     def decorate(action):
         if inspect.iscoroutinefunction(action):
+
             @wraps(action)
             async def async_wrapper(self, *args, **kwargs):
                 request = _request(self)
@@ -136,6 +141,7 @@ def login_abort(destination_route, *, authenticated):
                     return redirect(_route_destination(request, destination_route))
 
                 return await action(self, *args, **kwargs)
+
             return async_wrapper
 
         @wraps(action)
@@ -153,6 +159,7 @@ def login_abort(destination_route, *, authenticated):
                 return redirect(_route_destination(request, destination_route))
 
             return action(self, *args, **kwargs)
+
         return sync_wrapper
 
     return decorate

@@ -8,25 +8,33 @@ from copy import deepcopy
 
 import pytest
 
-from aurora.database import Model, column, schema_snapshot, compare_snapshots
+from aurora.database import Model, column, compare_snapshots, schema_snapshot
 from aurora.database.snapshots import _snapshot_tables
 
-
 LEGACY_COLUMN = {
-    "name": "value", "type": "str", "length": 24,
-    "primary_key": False, "nullable": False, "unique": False,
-    "references": None, "python_default": {"kind": "literal", "value": None},
+    "name": "value",
+    "type": "str",
+    "length": 24,
+    "primary_key": False,
+    "nullable": False,
+    "unique": False,
+    "references": None,
+    "python_default": {"kind": "literal", "value": None},
     "server_default": "'existing'",
 }
 
 
 def historical(dialect="sqlite"):
     return {
-        "format": "aurorasql.schema.v1", "dialect": dialect,
-        "tables": [{
-            "name": "record", "columns": [deepcopy(LEGACY_COLUMN)],
-            "create_sql_preview": "OLD DDL PREVIEW MUST NOT BE EXECUTED",
-        }],
+        "format": "aurorasql.schema.v1",
+        "dialect": dialect,
+        "tables": [
+            {
+                "name": "record",
+                "columns": [deepcopy(LEGACY_COLUMN)],
+                "create_sql_preview": "OLD DDL PREVIEW MUST NOT BE EXECUTED",
+            }
+        ],
     }
 
 
@@ -45,8 +53,13 @@ def test_historical_nullability_and_references_still_mean_schema_change(dialect)
     modified = deepcopy(old)
     modified["tables"][0]["columns"][0]["nullable"] = True
     assert compare_snapshots(old, modified) == [
-        {"kind": "changed_column", "table": "record", "column": "value",
-         "risk": "requires_data_strategy", "requires_review": True}
+        {
+            "kind": "changed_column",
+            "table": "record",
+            "column": "value",
+            "risk": "requires_data_strategy",
+            "requires_review": True,
+        }
     ]
     modified = deepcopy(old)
     modified["tables"][0]["columns"][0]["references"] = "parent.id"
@@ -60,8 +73,13 @@ def test_historical_required_column_without_default_requires_data_strategy():
     added.update(name="new_field", server_default=None)
     after["tables"][0]["columns"].append(added)
     assert compare_snapshots(old, after) == [
-        {"kind": "added_column", "table": "record", "column": "new_field",
-         "risk": "requires_data_strategy", "requires_review": True}
+        {
+            "kind": "added_column",
+            "table": "record",
+            "column": "new_field",
+            "risk": "requires_data_strategy",
+            "requires_review": True,
+        }
     ]
 
 
@@ -72,8 +90,11 @@ def test_historical_required_column_with_sql_default_still_requires_review():
     added["name"] = "new_field"
     after["tables"][0]["columns"].append(added)
     assert compare_snapshots(old, after)[0] == {
-        "kind": "added_column", "table": "record", "column": "new_field",
-        "risk": "additive", "requires_review": True,
+        "kind": "added_column",
+        "table": "record",
+        "column": "new_field",
+        "risk": "additive",
+        "requires_review": True,
     }
 
 

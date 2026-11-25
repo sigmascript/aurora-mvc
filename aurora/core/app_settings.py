@@ -7,16 +7,15 @@ preferences belong to an application's data store, not this document.
 import json
 import math
 import os
+import re
+import stat
 from dataclasses import dataclass
 from datetime import timezone
 from pathlib import Path
-import re
-import stat
 from types import MappingProxyType
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aurora.security.sessions import SessionSettings
-
 
 _FORMAT = "aurora.application.v1"
 _MAX_FILE_BYTES = 65536
@@ -65,15 +64,27 @@ def _read_document(source):
             if len(raw) > _MAX_FILE_BYTES:
                 raise ValueError("Application configuration exceeds 64 KiB")
 
-        document = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_pairs,
-                              parse_constant=_reject_non_json)
+        document = json.loads(
+            raw.decode("utf-8"), object_pairs_hook=_unique_pairs, parse_constant=_reject_non_json
+        )
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise ValueError("Cannot read application configuration JSON") from error
 
     if not isinstance(document, dict) or document.get("format", _FORMAT) != _FORMAT:
         raise ValueError("Unsupported application configuration format")
 
-    if set(document) - {"format", "application", "limits", "constants", "statics", "strict", "server", "sessions", "default_database", "production"}:
+    if set(document) - {
+        "format",
+        "application",
+        "limits",
+        "constants",
+        "statics",
+        "strict",
+        "server",
+        "sessions",
+        "default_database",
+        "production",
+    }:
         raise ValueError("Unknown application configuration section")
 
     return document
@@ -92,8 +103,16 @@ def _session_options(document, source):
     if not isinstance(config, dict):
         raise ValueError("sessions must be a JSON object")
 
-    allowed = {"enabled", "backend", "path", "cookie_name", "lifetime",
-               "secure", "samesite", "max_data_bytes"}
+    allowed = {
+        "enabled",
+        "backend",
+        "path",
+        "cookie_name",
+        "lifetime",
+        "secure",
+        "samesite",
+        "max_data_bytes",
+    }
     if set(config) - allowed:
         raise ValueError("Unknown sessions setting")
     if not isinstance(config.get("enabled"), bool):
@@ -104,9 +123,13 @@ def _session_options(document, source):
         return {"sessions": False}
 
     if config.get("backend", "standalone") != "standalone":
-        raise ValueError("Only standalone SQLite sessions are supported; database-alias sessions await F06/F08")
+        raise ValueError(
+            "Only standalone SQLite sessions are supported; database-alias sessions await F06/F08"
+        )
     filename = config.get("path")
-    if not isinstance(filename, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.sqlite3?", filename):
+    if not isinstance(filename, str) or not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.sqlite3?", filename
+    ):
         raise ValueError("sessions.path must be a safe project-local .sqlite or .sqlite3 filename")
     if filename.startswith(".") or ".." in filename:
         raise ValueError("sessions.path must not contain traversal or hidden components")
@@ -154,8 +177,9 @@ def load_application_settings(source):
         raise ValueError("production must be a JSON boolean")
 
     if "default_database" in document:
-        if (not isinstance(default_database, str) or
-                not re.fullmatch(r"[a-z][a-z0-9_]*", default_database)):
+        if not isinstance(default_database, str) or not re.fullmatch(
+            r"[a-z][a-z0-9_]*", default_database
+        ):
             raise ValueError("default_database must be a configured lowercase database name")
 
     if not isinstance(strict, bool):
@@ -181,14 +205,28 @@ def load_application_settings(source):
         raise ValueError("server.reload must be a JSON boolean")
 
     if statics is not None:
-        if (not isinstance(statics, str) or not statics or
-                not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", statics)):
+        if (
+            not isinstance(statics, str)
+            or not statics
+            or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", statics)
+        ):
             raise ValueError("statics must be one safe project directory name")
 
-    if not isinstance(application, dict) or not isinstance(limits, dict) or not isinstance(constants, dict):
+    if (
+        not isinstance(application, dict)
+        or not isinstance(limits, dict)
+        or not isinstance(constants, dict)
+    ):
         raise ValueError("Application, limits and constants must be JSON objects")
 
-    if set(application) - {"name", "timezone", "locales", "default_locale", "locale_cookie_name", "locale_entry_policy"}:
+    if set(application) - {
+        "name",
+        "timezone",
+        "locales",
+        "default_locale",
+        "locale_cookie_name",
+        "locale_entry_policy",
+    }:
         raise ValueError("Unknown application setting")
 
     if set(limits) - {"max_request_body_bytes"}:
@@ -196,8 +234,12 @@ def load_application_settings(source):
 
     name = application.get("name", "Aurora Application")
 
-    if (not isinstance(name, str) or not name.strip() or len(name) > 128 or
-            any(ord(character) < 32 for character in name)):
+    if (
+        not isinstance(name, str)
+        or not name.strip()
+        or len(name) > 128
+        or any(ord(character) < 32 for character in name)
+    ):
         raise ValueError("Application name must be a short, nonempty string")
 
     timezone_name = application.get("timezone", "UTC")
@@ -245,7 +287,9 @@ def load_application_settings(source):
     if "max_request_body_bytes" in limits:
         value = limits["max_request_body_bytes"]
 
-        if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 0):
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+        ):
             raise ValueError("max_request_body_bytes must be non-negative integer or null")
 
         constructor_options["max_request_body_bytes"] = value
@@ -267,7 +311,9 @@ def load_application_settings(source):
             raise ValueError("Application constant string is too large")
 
     return ApplicationSettings(
-        name=name.strip(), timezone_name=timezone_name, tzinfo=tzinfo,
+        name=name.strip(),
+        timezone_name=timezone_name,
+        tzinfo=tzinfo,
         constants=MappingProxyType(dict(constants)),
         constructor_options=MappingProxyType(constructor_options),
         statics=statics,

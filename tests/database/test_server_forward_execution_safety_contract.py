@@ -5,7 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from aurora.database import server_forward_migration as subject
+from aurora.database import connections as _identity_module
+from aurora.database import migration_execution as subject
 
 
 class FakeConnection:
@@ -48,7 +49,15 @@ def stub_dependencies(monkeypatch):
 
     state = {"current_identity": "verified", "fresh_review": None, "read_count": 0}
     monkeypatch.setattr(cli_init, "_mysql_database_identity", lambda *_: state["current_identity"])
-    monkeypatch.setattr(cli_init, "_postgres_database_identity", lambda *_: state["current_identity"])
+    monkeypatch.setattr(
+        _identity_module, "_mysql_database_identity", lambda *_: state["current_identity"]
+    )
+    monkeypatch.setattr(
+        cli_init, "_postgres_database_identity", lambda *_: state["current_identity"]
+    )
+    monkeypatch.setattr(
+        _identity_module, "_postgres_database_identity", lambda *_: state["current_identity"]
+    )
 
     def history(*_):
         state["read_count"] += 1
@@ -70,8 +79,16 @@ def stub_dependencies(monkeypatch):
 
 def execute(connection, tmp_path, review):
     return subject.execute_server_forward_migration(
-        connection, (), tmp_path, "test_alias", identity="verified", parsed=object(),
-        review=review, approval="approved", title="Safe review", backup_path=None,
+        connection,
+        (),
+        tmp_path,
+        "test_alias",
+        identity="verified",
+        parsed=object(),
+        review=review,
+        approval="approved",
+        title="Safe review",
+        backup_path=None,
         config_path=str(tmp_path),
     )
 

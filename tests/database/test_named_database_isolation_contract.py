@@ -12,17 +12,34 @@ def test_explicit_migration_only_changes_selected_database(tmp_path, monkeypatch
     (models / "__init__.py").write_text("")
     first = models / "First.py"
     second = models / "Second.py"
-    first.write_text("from aurora.database import Model, column\n"
-                     "class First(Model):\n    id = column(int, primary_key=True)\n")
-    second.write_text("from aurora.database import Model, column\n"
-                      "class Second(Model):\n    id = column(int, primary_key=True)\n")
-    (tmp_path / "aurora_config.json").write_text(json.dumps({
-        "application": {"name": "isolated"}, "production": False, "default_database": "first"}))
-    (tmp_path / "aurora_databases.json").write_text(json.dumps({"databases": {
-        "first": {"engine": "sqlite", "extension": "sqlite3"},
-        "second": {"engine": "sqlite", "extension": "sqlite3"}}}))
-    (tmp_path / "aurora_models.json").write_text(json.dumps({"databases": {
-        "first": ["models.First:First"], "second": ["models.Second:Second"]}}))
+    first.write_text(
+        "from aurora.database import Model, column\n"
+        "class First(Model):\n    id = column(int, primary_key=True)\n"
+    )
+    second.write_text(
+        "from aurora.database import Model, column\n"
+        "class Second(Model):\n    id = column(int, primary_key=True)\n"
+    )
+    (tmp_path / "aurora_config.json").write_text(
+        json.dumps(
+            {"application": {"name": "isolated"}, "production": False, "default_database": "first"}
+        )
+    )
+    (tmp_path / "aurora_databases.json").write_text(
+        json.dumps(
+            {
+                "databases": {
+                    "first": {"engine": "sqlite", "extension": "sqlite3"},
+                    "second": {"engine": "sqlite", "extension": "sqlite3"},
+                }
+            }
+        )
+    )
+    (tmp_path / "aurora_models.json").write_text(
+        json.dumps(
+            {"databases": {"first": ["models.First:First"], "second": ["models.Second:Second"]}}
+        )
+    )
     monkeypatch.chdir(tmp_path)
 
     assert main(["db", "check"]) == 0
@@ -51,7 +68,9 @@ def test_explicit_migration_only_changes_selected_database(tmp_path, monkeypatch
     with sqlite3.connect(tmp_path / "second.sqlite3") as db:
         assert db.execute("SELECT id,label FROM second").fetchall() == [(7, None)]
         assert db.execute('SELECT count(*) FROM "__migrations__"').fetchone()[0] == 2
-    assert {p.name: p.read_bytes() for p in (tmp_path / "__migrations__" / "first").glob("*.json")} == original_snapshots
+    assert {
+        p.name: p.read_bytes() for p in (tmp_path / "__migrations__" / "first").glob("*.json")
+    } == original_snapshots
     assert len(list((tmp_path / "__migrations__" / "second").glob("*.json"))) == 2
     assert main(["db", "migrate", "--database", "second", "--confirm", "yes"]) == 0
     assert main(["db", "history", "--database", "first"]) == 0
@@ -65,14 +84,23 @@ def test_changing_default_preserves_both_physical_histories(tmp_path, monkeypatc
     for name in ("Alpha", "Beta"):
         (models / f"{name}.py").write_text(
             "from aurora.database import Model, column\n"
-            f"class {name}(Model):\n    id = column(int, primary_key=True)\n")
+            f"class {name}(Model):\n    id = column(int, primary_key=True)\n"
+        )
     settings = tmp_path / "aurora_config.json"
     settings.write_text(json.dumps({"production": False, "default_database": "alpha"}))
-    (tmp_path / "aurora_databases.json").write_text(json.dumps({"databases": {
-        "alpha": {"engine": "sqlite", "extension": "sqlite3"},
-        "beta": {"engine": "sqlite", "extension": "sqlite3"}}}))
-    (tmp_path / "aurora_models.json").write_text(json.dumps({"databases": {
-        "alpha": ["models.Alpha:Alpha"], "beta": ["models.Beta:Beta"]}}))
+    (tmp_path / "aurora_databases.json").write_text(
+        json.dumps(
+            {
+                "databases": {
+                    "alpha": {"engine": "sqlite", "extension": "sqlite3"},
+                    "beta": {"engine": "sqlite", "extension": "sqlite3"},
+                }
+            }
+        )
+    )
+    (tmp_path / "aurora_models.json").write_text(
+        json.dumps({"databases": {"alpha": ["models.Alpha:Alpha"], "beta": ["models.Beta:Beta"]}})
+    )
     monkeypatch.chdir(tmp_path)
     assert main(["db", "init", "--confirm", "yes"]) == 0
     assert main(["db", "init", "--database", "beta", "--confirm", "yes"]) == 0

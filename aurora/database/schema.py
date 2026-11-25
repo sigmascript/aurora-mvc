@@ -4,12 +4,11 @@ No introspection, migration, or implicit schema modifications are performed.
 Validated constant model defaults are emitted as database-side SQL defaults.
 """
 
+import math
 from datetime import date, datetime
 from decimal import Decimal
-import math
 
 from .models import Model, _identifier
-
 
 _SQL_TYPES = {
     "sqlite": {int: "INTEGER", float: "REAL", bool: "INTEGER", str: "TEXT"},
@@ -54,7 +53,13 @@ def _default_literal(field, dialect):
         return format(value, "f")
 
     if isinstance(value, (str, date, datetime)):
-        literal = value if isinstance(value, str) else value.isoformat(sep=" ") if isinstance(value, datetime) else value.isoformat()
+        literal = (
+            value
+            if isinstance(value, str)
+            else value.isoformat(sep=" ")
+            if isinstance(value, datetime)
+            else value.isoformat()
+        )
         return "'" + literal.replace("'", "''") + "'"
 
     raise TypeError("Unsupported database default literal")
@@ -68,7 +73,11 @@ def _resolved_foreign_keys(model, models):
     by_name = {}
     by_table = {}
     for candidate in selected:
-        if not isinstance(candidate, type) or not issubclass(candidate, Model) or candidate is Model:
+        if (
+            not isinstance(candidate, type)
+            or not issubclass(candidate, Model)
+            or candidate is Model
+        ):
             raise TypeError("Expected AuroraSQL Model subclasses")
         if candidate.__name__ in by_name or candidate.__table_name__ in by_table:
             raise ValueError("Ambiguous model identity in selected database")
@@ -96,6 +105,7 @@ def _resolved_foreign_keys(model, models):
                 raise ValueError("Foreign-key target must be a primary or unique column")
             if referenced.python_type is not field.python_type:
                 raise ValueError("Foreign-key target type mismatch")
+
             def declared_type(column):
                 if column.sql_type is not None:
                     return column.sql_type
@@ -128,12 +138,15 @@ def create_table_sql(model, dialect, *, models=None):
     if len(primary_keys) > 1:
         raise ValueError("Composite primary keys are not supported yet")
 
-    extended = any(field.model_reference or field.on_update != "NO ACTION" or
-                   field.on_delete != "NO ACTION" for field in model.__columns__.values())
+    extended = any(
+        field.model_reference or field.on_update != "NO ACTION" or field.on_delete != "NO ACTION"
+        for field in model.__columns__.values()
+    )
     if extended and models is None:
         raise ValueError("Extended foreign keys require an explicit selected model set")
-    if dialect == "mysql" and any("SET DEFAULT" in (field.on_update, field.on_delete)
-                                 for field in model.__columns__.values()):
+    if dialect == "mysql" and any(
+        "SET DEFAULT" in (field.on_update, field.on_delete) for field in model.__columns__.values()
+    ):
         raise ValueError("MySQL does not support SET DEFAULT foreign-key actions")
     resolved = _resolved_foreign_keys(model, models)
     declarations = []
@@ -153,7 +166,13 @@ def create_table_sql(model, dialect, *, models=None):
         else:
             sql_type = _SQL_TYPES[dialect][kind]
 
-        if dialect == "mysql" and field.unique and kind is str and field.length is None and (field.sql_type is None or field.sql_type == "TEXT"):
+        if (
+            dialect == "mysql"
+            and field.unique
+            and kind is str
+            and field.length is None
+            and (field.sql_type is None or field.sql_type == "TEXT")
+        ):
             raise ValueError("Unique MySQL string columns require an explicit length")
 
         parts = [_quote(name, dialect), sql_type]
@@ -213,8 +232,105 @@ def create_tables(connection, *models):
     if not models:
         raise ValueError("At least one model is required")
 
-    from .init_validation import validate_init_models
     ordered = validate_init_models(models, dialect=connection.dialect, allow_extended=True)
     statements = [create_table_sql(model, connection.dialect, models=ordered) for model in ordered]
     for sql in statements:
         connection.execute_write(sql)
+
+
+def validate_init_models(models, dialect="sqlite", *, allow_extended=False):
+    """Validate all models before DDL and return dependency-first table order.
+
+    Extended relationships require explicit create-only opt-in. This validation
+    never authorizes changes to existing tables or historical migrations.
+    """
+
+    if not models:
+        raise ValueError("At least one model is required")
+
+    tables = {}
+
+    for model in models:
+        if not isinstance(model, type) or not issubclass(model, Model) or model is Model:
+            raise TypeError("Expected AuroraSQL Model subclasses")
+
+        table = model.__table_name__
+
+        if table in tables:
+            raise ValueError("Duplicate model table names")
+
+        tables[table] = model
+
+        extended = any(
+            field.model_reference
+            or field.on_update != "NO ACTION"
+            or field.on_delete != "NO ACTION"
+            for field in model.__columns__.values()
+        )
+        if extended and not allow_extended:
+            raise ValueError(
+                "Extended foreign keys require explicit create-only acceptance; migration/init path not supported"
+            )
+        # Validate full DDL with explicit registry only for audited create-only use.
+        create_table_sql(model, dialect, models=models if allow_extended else None)
+
+        if any(field.server_default is not None for field in model.__columns__.values()):
+            raise ValueError("SQL server defaults require manual migration review")
+
+    dependencies = {table: set() for table in tables}
+
+    for table, model in tables.items():
+        for field_name, field in model.__columns__.items():
+            if field.references is None:
+                continue
+
+            target_table, target_column, _, _ = _resolved_foreign_keys(model, models)[field_name]
+
+            if target_table not in tables:
+                raise ValueError("Foreign key references a table outside the selected model set")
+
+            target = tables[target_table].__columns__.get(target_column)
+
+            if target is None or not (target.primary_key or target.unique):
+                raise ValueError(
+                    "Foreign key target must be a declared unique or primary-key column"
+                )
+
+            if target.python_type is not field.python_type:
+                raise ValueError("Foreign key column types do not match")
+
+            # Python type equality alone cannot prove FK SQL compatibility.
+            # Compare validated SQL declarations whenever they carry concrete
+            # string/decimal width or scale; do not infer a backend coercion.
+            def declared_type(column):
+                if column.sql_type is not None:
+                    return column.sql_type
+                if column.python_type is str:
+                    return f"VARCHAR({column.length})" if column.length else "TEXT"
+                return None
+
+            source_sql = declared_type(field)
+            target_sql = declared_type(target)
+            if (source_sql is not None or target_sql is not None) and source_sql != target_sql:
+                raise ValueError("Foreign key SQL column declarations do not match")
+
+            if target_table != table:
+                dependencies[table].add(target_table)
+
+    ordered = []
+    remaining = {table: set(deps) for table, deps in dependencies.items()}
+
+    while remaining:
+        ready = sorted(table for table, deps in remaining.items() if not deps)
+
+        if not ready:
+            raise ValueError("Cyclic foreign-key dependencies require manual migration review")
+
+        for table in ready:
+            ordered.append(tables[table])
+            del remaining[table]
+
+        for deps in remaining.values():
+            deps.difference_update(ready)
+
+    return tuple(ordered)

@@ -21,10 +21,14 @@ def exchange(app, path="/", method="GET"):
     async def send(message):
         messages.append(message)
 
-    asyncio.run(app({"type": "http", "path": path, "method": method,
-                     "headers": [], "query_string": b""}, receive, send))
-    return (messages[0]["status"], dict(messages[0]["headers"]),
-            messages[1]["body"])
+    asyncio.run(
+        app(
+            {"type": "http", "path": path, "method": method, "headers": [], "query_string": b""},
+            receive,
+            send,
+        )
+    )
+    return (messages[0]["status"], dict(messages[0]["headers"]), messages[1]["body"])
 
 
 def test_plain_mapping_and_list_return_json_from_controller_and_route():
@@ -63,7 +67,11 @@ def test_data_status_tuple_and_explicit_response_precedence():
     assert (status, json.loads(body)) == (201, {"id": 4})
     assert headers[b"content-type"] == b"application/json; charset=utf-8"
     assert exchange(app, "/explicit")[0] == 202
-    assert exchange(app, "/text") == (203, {b"content-type": b"text/plain; charset=utf-8", b"content-length": b"5"}, b"hello")
+    assert exchange(app, "/text") == (
+        203,
+        {b"content-type": b"text/plain; charset=utf-8", b"content-length": b"5"},
+        b"hello",
+    )
 
 
 def test_json_serializer_remains_strict_for_unsupported_values():

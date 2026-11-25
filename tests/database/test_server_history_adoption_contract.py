@@ -5,7 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from aurora.database import server_forward_history as history
+from aurora.database import connections as _identity_module
+from aurora.database import migration_history as history
 
 
 class Server:
@@ -45,7 +46,8 @@ class Server:
 
 
 def _patch(monkeypatch):
-    from aurora.database import cli_init, coordination
+    from aurora.database import cli_init
+    from aurora.database import migration_coordination as core
 
     monkeypatch.setattr(history, "history_table", lambda db: db.table)
 
@@ -56,7 +58,13 @@ def _patch(monkeypatch):
 
     monkeypatch.setattr(history, "read_history", read)
     monkeypatch.setattr(cli_init, "_mysql_database_identity", lambda db, parsed: db.identity)
+    monkeypatch.setattr(
+        _identity_module, "_mysql_database_identity", lambda db, parsed: db.identity
+    )
     monkeypatch.setattr(cli_init, "_postgres_database_identity", lambda db, parsed: db.identity)
+    monkeypatch.setattr(
+        _identity_module, "_postgres_database_identity", lambda db, parsed: db.identity
+    )
 
     @contextmanager
     def lock(db):
@@ -66,7 +74,7 @@ def _patch(monkeypatch):
         finally:
             db._migration_lock_active = False
 
-    monkeypatch.setattr(coordination, "migration_lock", lock)
+    monkeypatch.setattr(core, "migration_lock", lock)
 
 
 @pytest.mark.parametrize("dialect", ["mysql", "postgresql"])
@@ -109,10 +117,11 @@ def test_post_ddl_verification_failure_is_not_a_success(monkeypatch, tmp_path, d
 
 @pytest.mark.parametrize("confirmation,expected", [(None, False), ("yes", True)])
 def test_cli_requires_separate_confirmation_for_unchanged_legacy_history(
-        monkeypatch, tmp_path, capsys, confirmation, expected):
-    from aurora.database import cli_server_model_migration as cli
-    from aurora.database import cli_init, server_forward_history as server
-    from aurora.database import snapshots
+    monkeypatch, tmp_path, capsys, confirmation, expected
+):
+    from aurora.database import cli_init, snapshots
+    from aurora.database import cli_migrate as cli
+    from aurora.database import migration_history as server
 
     db = Server("postgresql")
     config = SimpleNamespace(resolve=lambda name: "postgresql+psycopg://localhost/data")
@@ -131,6 +140,7 @@ def test_cli_requires_separate_confirmation_for_unchanged_legacy_history(
     monkeypatch.setattr(server, "history_table", lambda conn: "migrations")
     monkeypatch.setattr(snapshots, "schema_snapshot", lambda *a, **kw: {"tables": ["User"]})
     monkeypatch.setattr(cli_init, "_postgres_database_identity", lambda *a: "same-identity")
+    monkeypatch.setattr(_identity_module, "_postgres_database_identity", lambda *a: "same-identity")
     calls = []
     monkeypatch.setattr(server, "adopt_history", lambda *a, **kw: calls.append(kw) or 1)
     args = SimpleNamespace(database="data", config=None, confirm=confirmation)
@@ -144,8 +154,9 @@ def test_cli_requires_separate_confirmation_for_unchanged_legacy_history(
 
 
 def test_cli_does_not_adopt_legacy_history_when_models_have_changed(monkeypatch, tmp_path):
-    from aurora.database import cli_server_model_migration as cli
-    from aurora.database import server_forward_history as server, snapshots
+    from aurora.database import cli_migrate as cli
+    from aurora.database import migration_history as server
+    from aurora.database import snapshots
 
     db = Server("mysql")
     config = SimpleNamespace(resolve=lambda name: "mysql+pymysql://localhost/data")

@@ -26,9 +26,17 @@ def exchange(app, path, body, content_type, *, method="POST", disconnect=False):
         messages.append(message)
 
     async def run():
-        await app({"type": "http", "method": method, "path": path,
-                   "headers": [(b"content-type", content_type.encode())],
-                   "query_string": b""}, receive, send)
+        await app(
+            {
+                "type": "http",
+                "method": method,
+                "path": path,
+                "headers": [(b"content-type", content_type.encode())],
+                "query_string": b"",
+            },
+            receive,
+            send,
+        )
 
     asyncio.run(run())
     if not messages:
@@ -52,7 +60,10 @@ def test_sync_form_and_json_return_parsed_values_directly():
     app.route("/notes", Notes)
     app.route("/api", Api)
     assert exchange(app, "/notes", b"title=hello+world", "application/x-www-form-urlencoded") == (
-        200, b"hello world", 1)
+        200,
+        b"hello world",
+        1,
+    )
     assert exchange(app, "/api", b'{"quantity": 4}', "application/json") == (200, b"4", 1)
 
 
@@ -85,21 +96,32 @@ def test_named_sync_controller_action_and_default_get_do_not_read_body():
     app.add_route("/show", Notes.action("show"))
     app.add_route("/save", Notes.action("save"), methods=["POST"])
     assert exchange(app, "/show", b"", "application/x-www-form-urlencoded", method="GET") == (
-        200, b"hello", 0)
+        200,
+        b"hello",
+        0,
+    )
     assert exchange(app, "/save", b"title=worked", "application/x-www-form-urlencoded") == (
-        200, b"worked", 1)
+        200,
+        b"worked",
+        1,
+    )
 
 
-@pytest.mark.parametrize("body,media,status", [
-    (b"broken", "application/json", 400),
-    (b"a=1", "text/plain", 415),
-])
+@pytest.mark.parametrize(
+    "body,media,status",
+    [
+        (b"broken", "application/json", 400),
+        (b"a=1", "text/plain", 415),
+    ],
+)
 def test_sync_controller_keeps_parser_error_contract(body, media, status):
     app = Application()
 
     class Notes(Controller):
         def post(self):
-            return str(self.request.form()["a"] if media != "application/json" else self.request.json())
+            return str(
+                self.request.form()["a"] if media != "application/json" else self.request.json()
+            )
 
     app.route("/notes", Notes)
     actual, _, reads = exchange(app, "/notes", body, media)
@@ -121,7 +143,9 @@ def test_sync_body_limit_and_disconnect_are_handled_before_controller():
     assert status == 413
     assert invoked == [True]  # Parsing is on-demand inside the controller.
 
-    status, _, _ = exchange(app, "/notes", b"", "application/x-www-form-urlencoded", disconnect=True)
+    status, _, _ = exchange(
+        app, "/notes", b"", "application/x-www-form-urlencoded", disconnect=True
+    )
     assert status is None  # Client disconnected before a response could be sent.
     assert invoked == [True, True]
 
@@ -158,10 +182,11 @@ def test_multipart_upload_remains_bounded_inside_sync_controller():
             return str(self.request.form()["file"].size)
 
     app.route("/upload", Upload)
-    boundary = b"test"
-    body = (b"--test\r\nContent-Disposition: form-data; name=\"file\"; "
-            b"filename=\"a.bin\"\r\nContent-Type: application/octet-stream\r\n\r\n"
-            b"abc\r\n--test--\r\n")
+    body = (
+        b'--test\r\nContent-Disposition: form-data; name="file"; '
+        b'filename="a.bin"\r\nContent-Type: application/octet-stream\r\n\r\n'
+        b"abc\r\n--test--\r\n"
+    )
     assert exchange(app, "/upload", body, "multipart/form-data; boundary=test") == (200, b"3", 1)
 
 
@@ -194,9 +219,17 @@ def test_sync_action_does_not_block_concurrent_async_controller():
             async def send(message):
                 sent.append(message)
 
-            await app({"type": "http", "method": method, "path": path,
-                       "headers": [(b"content-type", b"application/json")],
-                       "query_string": b""}, receive, send)
+            await app(
+                {
+                    "type": "http",
+                    "method": method,
+                    "path": path,
+                    "headers": [(b"content-type", b"application/json")],
+                    "query_string": b"",
+                },
+                receive,
+                send,
+            )
             messages.append((path, sent[0]["status"], sent[1]["body"]))
 
         await asyncio.gather(

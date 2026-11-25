@@ -32,36 +32,60 @@ def make_request(body, content_type="multipart/form-data; boundary=aurora-bounda
         received = True
         return {"type": "http.request", "body": body, "more_body": False}
 
-    return Request({"method": "POST", "path": "/", "headers": [
-        (b"content-type", content_type.encode())]}, receive, **options)
+    return Request(
+        {"method": "POST", "path": "/", "headers": [(b"content-type", content_type.encode())]},
+        receive,
+        **options,
+    )
 
 
 def test_fields_files_duplicate_names_are_in_memory_only():
-    payload = multipart([
-        (b"title", "first".encode(), None),
-        (b"title", "café".encode(), None),
-        (b"document", b"\x00\xff\x10", b"untrusted.txt"),
-    ])
+    payload = multipart(
+        [
+            (b"title", "first".encode(), None),
+            (b"title", "café".encode(), None),
+            (b"document", b"\x00\xff\x10", b"untrusted.txt"),
+        ]
+    )
     req = make_request(payload)
     values = asyncio.run(req.form())
     assert values["title"] == "café"
     upload = values["document"]
     assert isinstance(upload, UploadedFile)
     assert (upload.filename, upload.content_type, upload.size, upload.content) == (
-        "untrusted.txt", "application/octet-stream", 3, b"\x00\xff\x10")
+        "untrusted.txt",
+        "application/octet-stream",
+        3,
+        b"\x00\xff\x10",
+    )
     assert asyncio.run(req.body()) == payload
     assert asyncio.run(req.form()) == values
 
 
-@pytest.mark.parametrize("data,content_type,status", [
-    (b"garbage", "multipart/form-data; boundary=aurora-boundary", 400),
-    (multipart([(b"x", b"ok", None)])[:-4], "multipart/form-data; boundary=aurora-boundary", 400),
-    (b"", "multipart/form-data", 400),
-    (multipart([(b"x", b"ok", None)]), "application/json", 415),
-    (multipart([(b"x", b"\xff", None)]), "multipart/form-data; boundary=aurora-boundary", 400),
-    (multipart([(b"x", b"a" * (4 * 1024 * 1024 + 1), b"test.bin")]), "multipart/form-data; boundary=aurora-boundary", 413),
-    (multipart([(b"x", b"ok", None)] * 101), "multipart/form-data; boundary=aurora-boundary", 413),
-])
+@pytest.mark.parametrize(
+    "data,content_type,status",
+    [
+        (b"garbage", "multipart/form-data; boundary=aurora-boundary", 400),
+        (
+            multipart([(b"x", b"ok", None)])[:-4],
+            "multipart/form-data; boundary=aurora-boundary",
+            400,
+        ),
+        (b"", "multipart/form-data", 400),
+        (multipart([(b"x", b"ok", None)]), "application/json", 415),
+        (multipart([(b"x", b"\xff", None)]), "multipart/form-data; boundary=aurora-boundary", 400),
+        (
+            multipart([(b"x", b"a" * (4 * 1024 * 1024 + 1), b"test.bin")]),
+            "multipart/form-data; boundary=aurora-boundary",
+            413,
+        ),
+        (
+            multipart([(b"x", b"ok", None)] * 101),
+            "multipart/form-data; boundary=aurora-boundary",
+            413,
+        ),
+    ],
+)
 def test_multipart_invalid_or_bounded(data, content_type, status):
     req = make_request(data, content_type)
     with pytest.raises(HTTPException) as caught:
@@ -105,9 +129,17 @@ def test_multipart_through_real_asgi_route():
         async def send(message):
             messages.append(message)
 
-        await app({"type": "http", "method": "POST", "path": "/upload",
-                   "headers": [(b"content-type", b"multipart/form-data; boundary=aurora-boundary")],
-                   "query_string": b""}, receive, send)
+        await app(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/upload",
+                "headers": [(b"content-type", b"multipart/form-data; boundary=aurora-boundary")],
+                "query_string": b"",
+            },
+            receive,
+            send,
+        )
         return messages
 
     successful = asyncio.run(exchange(multipart([(b"file", b"data", b"a.txt")])))

@@ -19,8 +19,13 @@ def exchange(app, path="/missing", method="GET"):
     async def send(event):
         events.append(event)
 
-    asyncio.run(app({"type": "http", "path": path, "method": method,
-                     "query_string": b"", "headers": []}, receive, send))
+    asyncio.run(
+        app(
+            {"type": "http", "path": path, "method": method, "query_string": b"", "headers": []},
+            receive,
+            send,
+        )
+    )
     start = next(e for e in events if e["type"] == "http.response.start")
     body = b"".join(e.get("body", b"") for e in events if e["type"] == "http.response.body")
     return start["status"], dict(start["headers"]), body
@@ -56,8 +61,11 @@ def test_text_and_json_handlers_preserve_status_and_allow():
     assert status == 405 and headers[b"allow"] == b"GET, HEAD"
     assert headers[b"content-type"].startswith(b"application/json")
     assert b"Method Not Allowed" in body
-    assert exchange(app, "/get", "HEAD") == (200, {
-        b"content-type": b"text/plain; charset=utf-8", b"content-length": b"2"}, b"")
+    assert exchange(app, "/get", "HEAD") == (
+        200,
+        {b"content-type": b"text/plain; charset=utf-8", b"content-length": b"2"},
+        b"",
+    )
 
 
 def test_explicit_http_exception_and_unexpected_500():
@@ -81,7 +89,8 @@ def test_explicit_http_exception_and_unexpected_500():
     app.add_route("/forbidden", forbidden_route)
     app.add_route("/crash", crash)
     assert exchange(app, "/forbidden") == (
-        403, {b"content-type": b"text/plain; charset=utf-8", b"content-length": b"19"},
+        403,
+        {b"content-type": b"text/plain; charset=utf-8", b"content-length": b"19"},
         b"Forbidden by policy",
     )
     status, _, body = exchange(app, "/crash")
@@ -120,9 +129,11 @@ def test_bad_custom_handler_fails_closed_without_recursive_reentry():
         called.append("500")
         return "should not run"
 
-    assert exchange(app) == (500, {
-        b"content-type": b"text/plain; charset=utf-8", b"content-length": b"21"
-    }, b"Internal Server Error")
+    assert exchange(app) == (
+        500,
+        {b"content-type": b"text/plain; charset=utf-8", b"content-length": b"21"},
+        b"Internal Server Error",
+    )
     assert called == ["404"]
 
 

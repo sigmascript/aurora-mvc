@@ -22,10 +22,15 @@ def request(method="POST", body=""):
     async def receive():
         return {"type": "http.request", "body": body.encode(), "more_body": False}
 
-    req = Request({
-        "type": "http", "method": method, "path": "/",
-        "headers": [(b"content-type", b"application/x-www-form-urlencoded")],
-    }, receive)
+    req = Request(
+        {
+            "type": "http",
+            "method": method,
+            "path": "/",
+            "headers": [(b"content-type", b"application/x-www-form-urlencoded")],
+        },
+        receive,
+    )
     req._session = Session()
     return req
 

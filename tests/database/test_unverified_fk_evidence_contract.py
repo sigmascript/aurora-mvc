@@ -3,8 +3,8 @@
 import pytest
 
 from aurora.database import Model, column
-from aurora.database.inspection import ColumnInfo, TableInfo
-from aurora.database import planning
+from aurora.database import schema_planning as planning
+from aurora.database.schema_inspection import ColumnInfo, TableInfo
 
 
 class Child(Model):
@@ -25,9 +25,12 @@ class FakeConnection:
 
 def existing(model, *, constraints_verified=False, actions=None):
     return TableInfo(
-        model.__table_name__, True,
-        tuple(ColumnInfo(name, "BIGINT", False, field.primary_key)
-              for name, field in model.__columns__.items()),
+        model.__table_name__,
+        True,
+        tuple(
+            ColumnInfo(name, "BIGINT", False, field.primary_key)
+            for name, field in model.__columns__.items()
+        ),
         constraints_verified=constraints_verified,
         foreign_keys=(("parent_id", "e2_parents", "id"),) if model is Child else (),
         foreign_key_actions=actions,
@@ -51,14 +54,21 @@ def test_no_foreign_key_no_foreign_key_warning(monkeypatch, dialect):
 
 
 def test_historical_sqlite_inspection_missing_action_evidence_requires_review(monkeypatch):
-    monkeypatch.setattr(planning, "inspect_table", lambda *_: existing(Child, constraints_verified=True))
+    monkeypatch.setattr(
+        planning, "inspect_table", lambda *_: existing(Child, constraints_verified=True)
+    )
     result = planning.plan_schema(FakeConnection("sqlite"), Child)
     assert result.requires_review
     assert any("ON UPDATE/ON DELETE" in warning for warning in result.warnings)
 
 
 def test_sqlite_explicit_no_action_evidence_does_not_add_unknown_action_warning(monkeypatch):
-    monkeypatch.setattr(planning, "inspect_table", lambda *_: existing(
-        Child, constraints_verified=True, actions=(("parent_id", "NO ACTION", "NO ACTION"),)))
+    monkeypatch.setattr(
+        planning,
+        "inspect_table",
+        lambda *_: existing(
+            Child, constraints_verified=True, actions=(("parent_id", "NO ACTION", "NO ACTION"),)
+        ),
+    )
     result = planning.plan_schema(FakeConnection("sqlite"), Child)
     assert not any("ON UPDATE/ON DELETE" in warning for warning in result.warnings)

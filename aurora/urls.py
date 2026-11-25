@@ -1,8 +1,8 @@
 """Named-route URL generation for Aurora applications."""
 
-from contextvars import ContextVar
 import math
 from collections.abc import Mapping
+from contextvars import ContextVar
 from urllib.parse import urlencode
 
 _current_application = ContextVar("aurora_current_application", default=None)
@@ -56,5 +56,11 @@ def with_query(url, fields):
     if not encoded:
         return url
     before_fragment, separator, fragment = url.partition("#")
-    joiner = "&" if "?" in before_fragment and not before_fragment.endswith("?") else "" if before_fragment.endswith("?") else "?"
+    joiner = (
+        "&"
+        if "?" in before_fragment and not before_fragment.endswith("?")
+        else ""
+        if before_fragment.endswith("?")
+        else "?"
+    )
     return before_fragment + joiner + encoded + (separator + fragment if separator else "")

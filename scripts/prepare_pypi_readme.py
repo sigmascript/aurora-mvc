@@ -1,9 +1,9 @@
 """Generate and verify PyPI README metadata from the repository README."""
 
 import argparse
-from pathlib import Path
 import re
 import sys
+from pathlib import Path
 
 try:
     import tomllib
@@ -46,7 +46,10 @@ def main():
         expected = generate()
         if args.check:
             if not TARGET.is_file() or TARGET.read_text(encoding="utf-8") != expected:
-                print("FAIL: README.pypi.md is missing or out of sync. Run the generator.", file=sys.stderr)
+                print(
+                    "FAIL: README.pypi.md is missing or out of sync. Run the generator.",
+                    file=sys.stderr,
+                )
                 return 1
             print("PASS: README.pypi.md matches README.md and pyproject.toml")
             return 0

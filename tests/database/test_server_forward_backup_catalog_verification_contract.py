@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from aurora.database import server_initial_verification as verifier
+from aurora.database import schema_inspection as verifier
 from aurora.database.models import Model, column
 
 
@@ -29,17 +29,20 @@ def test_server_schema_verifier_internal_backup_catalog(monkeypatch, backend, ca
     monkeypatch.setattr(verifier, "validate_init_models", lambda models, **_kw: list(models))
     observed = SimpleNamespace(name=Item.__table_name__, columns=[], indexes=[], unique_columns=[])
     monkeypatch.setattr(verifier, "_verify_declared_table", lambda *_args, **_kw: observed)
-    from aurora.database import server_backup_catalog
+    from aurora.database import backup_catalog
 
     def catalog_format(_connection):
         if catalog == "invalid":
             raise ValueError("Conflicting __backups__ table definition")
         return "current"
 
-    monkeypatch.setattr(server_backup_catalog, "_catalog_format", catalog_format)
+    monkeypatch.setattr(backup_catalog, "_catalog_format", catalog_format)
     if catalog == "invalid":
         with pytest.raises(ValueError, match="Conflicting __backups__"):
-            verifier.verify_server_declared_schema(connection, [Item], history_tables={"__migrations__"})
+            verifier.verify_server_declared_schema(
+                connection, [Item], history_tables={"__migrations__"}
+            )
     else:
         assert verifier.verify_server_declared_schema(
-            connection, [Item], history_tables={"__migrations__"})
+            connection, [Item], history_tables={"__migrations__"}
+        )

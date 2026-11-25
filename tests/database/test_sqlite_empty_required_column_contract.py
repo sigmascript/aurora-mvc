@@ -5,8 +5,7 @@ import sqlite3
 import pytest
 
 from aurora.cli import main
-from aurora.database.sqlite_forward_history import read_history
-
+from aurora.database.migration_history import sqlite_read_history as read_history
 from tests.database.test_sqlite_fk_column_addition_contract import _add, _project
 
 
@@ -25,9 +24,9 @@ def test_empty_table_adds_required_column_and_preserves_parent(tmp_path, monkeyp
     assert main(["db", "check"]) == 0
 
     with sqlite3.connect(tmp_path / "data.sqlite3") as database:
-        columns = {column[1]: column for column in database.execute(
-            'PRAGMA table_info("messages")'
-        )}
+        columns = {
+            column[1]: column for column in database.execute('PRAGMA table_info("messages")')
+        }
 
         assert columns["visits"][3] == 1
         assert columns["visits"][4] is None
@@ -51,9 +50,7 @@ def test_required_column_refuses_populated_table_without_history_change(tmp_path
 
     with sqlite3.connect(tmp_path / "data.sqlite3") as database:
         database.execute("INSERT INTO users(id) VALUES(1)")
-        database.execute(
-            "INSERT INTO messages(id,user_id,title) VALUES(1,1,'preserved')"
-        )
+        database.execute("INSERT INTO messages(id,user_id,title) VALUES(1,1,'preserved')")
 
     _add(model, "column(str, length=40)")
 
@@ -63,18 +60,15 @@ def test_required_column_refuses_populated_table_without_history_change(tmp_path
     assert refusal.value.code == 1
 
     with sqlite3.connect(tmp_path / "data.sqlite3") as database:
-        assert database.execute("SELECT title FROM messages").fetchone() == (
-            "preserved",
-        )
+        assert database.execute("SELECT title FROM messages").fetchone() == ("preserved",)
         assert database.execute("SELECT COUNT(*) FROM __migrations__").fetchone() == (1,)
         assert "visits" not in {
             column[1] for column in database.execute('PRAGMA table_info("messages")')
         }
 
 
-def test_empty_required_column_rebuild_rolls_back_history_failure(
-        tmp_path, monkeypatch):
-    from aurora.database import sqlite_forward_history
+def test_empty_required_column_rebuild_rolls_back_history_failure(tmp_path, monkeypatch):
+    from aurora.database import migration_history
 
     model = _project(tmp_path)
     monkeypatch.chdir(tmp_path)
@@ -85,7 +79,7 @@ def test_empty_required_column_rebuild_rolls_back_history_failure(
     def refuse_history(*args, **kwargs):
         raise RuntimeError("simulated history write failure")
 
-    monkeypatch.setattr(sqlite_forward_history, "_new_record", refuse_history)
+    monkeypatch.setattr(migration_history, "sqlite_new_record", refuse_history)
 
     with pytest.raises(SystemExit) as refusal:
         main(["db", "migrate", "--confirm", "yes"])

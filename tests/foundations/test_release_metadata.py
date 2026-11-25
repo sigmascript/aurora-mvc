@@ -1,10 +1,8 @@
 """Repository release checks; not shipped as runtime dependencies."""
 
-from pathlib import Path
 import subprocess
 import sys
-
-import pytest
+from pathlib import Path
 
 try:
     import tomllib
@@ -14,12 +12,13 @@ except ModuleNotFoundError:
 import aurora
 import aurora.core
 
-
 ROOT = Path(__file__).resolve().parents[2]
 
 
 def _version():
-    return tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+    return tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"][
+        "version"
+    ]
 
 
 def test_package_versions_match():
@@ -36,8 +35,10 @@ def test_release_version_notice_matches_metadata():
         assert "Release candidate in preparation:" not in content
         assert "Latest published alpha:" not in content
     for relative in (
-        "docs/index.md", "docs/getting-started.md",
-        "docs/cli.md", "docs/database.md",
+        "docs/index.md",
+        "docs/getting-started.md",
+        "docs/cli.md",
+        "docs/database.md",
     ):
         content = (ROOT / relative).read_text(encoding="utf-8")
         assert "Latest alpha:" not in content, relative
@@ -47,7 +48,10 @@ def test_release_version_notice_matches_metadata():
 def test_generated_pypi_readme_matches_source():
     result = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "prepare_pypi_readme.py"), "--check"],
-        cwd=ROOT, capture_output=True, text=True, check=False,
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
 
@@ -70,7 +74,10 @@ def test_distribution_contains_only_aurora_python_packages():
         for path in (ROOT / "aurora").rglob("__init__.py")
     }
     assert package_roots == {
-        "aurora", "aurora.core", "aurora.database", "aurora.security",
+        "aurora",
+        "aurora.core",
+        "aurora.database",
+        "aurora.security",
     }
 
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
@@ -80,4 +87,7 @@ def test_distribution_contains_only_aurora_python_packages():
 
 def test_pytest_fixture_scope_is_explicit():
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert metadata["tool"]["pytest"]["ini_options"]["asyncio_default_fixture_loop_scope"] == "function"
+    assert (
+        metadata["tool"]["pytest"]["ini_options"]["asyncio_default_fixture_loop_scope"]
+        == "function"
+    )

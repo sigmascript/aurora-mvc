@@ -1,11 +1,12 @@
 """One configured name owns SQLite physical file and forward evidence."""
+
 import json
 import sqlite3
 
 import pytest
 
 from aurora.cli import main
-from aurora.database.snapshot_paths import sqlite_history_name, sqlite_snapshot_directory
+from aurora.database.snapshots import sqlite_history_name, sqlite_snapshot_directory
 
 
 def _project(root):
@@ -13,12 +14,17 @@ def _project(root):
     (root / "models" / "__init__.py").write_text("")
     (root / "models" / "Account.py").write_text(
         "from aurora.database import Model, column\n"
-        "class Account(Model):\n    id = column(int, primary_key=True)\n")
-    (root / "aurora_config.json").write_text(json.dumps({"production": False, "default_database": "accounts"}))
-    (root / "aurora_databases.json").write_text(json.dumps({"databases": {
-        "accounts": {"engine": "sqlite", "extension": "sqlite3"}}}))
-    (root / "aurora_models.json").write_text(json.dumps({"databases": {
-        "accounts": ["models.Account:Account"]}}))
+        "class Account(Model):\n    id = column(int, primary_key=True)\n"
+    )
+    (root / "aurora_config.json").write_text(
+        json.dumps({"production": False, "default_database": "accounts"})
+    )
+    (root / "aurora_databases.json").write_text(
+        json.dumps({"databases": {"accounts": {"engine": "sqlite", "extension": "sqlite3"}}})
+    )
+    (root / "aurora_models.json").write_text(
+        json.dumps({"databases": {"accounts": ["models.Account:Account"]}})
+    )
 
 
 def test_fresh_snapshots_and_physical_file_share_one_configured_name(tmp_path, monkeypatch):
@@ -32,7 +38,12 @@ def test_fresh_snapshots_and_physical_file_share_one_configured_name(tmp_path, m
     with sqlite3.connect(db_file) as db:
         assert db.execute('SELECT count(*) FROM "__migrations__"').fetchone() == (1,)
         snapshot_name = db.execute('SELECT snapshot FROM "__migrations__"').fetchone()[0]
-    assert json.loads((tmp_path / "__migrations__" / "accounts" / snapshot_name).read_text())["database"] == "accounts"
+    assert (
+        json.loads((tmp_path / "__migrations__" / "accounts" / snapshot_name).read_text())[
+            "database"
+        ]
+        == "accounts"
+    )
     assert main(["db", "init"]) == 0
 
 

@@ -34,9 +34,7 @@ def validate_session_settings(sessions, session_settings):
     return settings
 
 
-def validate_runtime_settings(
-    production, database_work, database_registry, max_request_body_bytes
-):
+def validate_runtime_settings(production, database_work, database_registry, max_request_body_bytes):
     """Validate opt-in database integration and request body limits."""
 
     if not isinstance(production, bool):
@@ -46,8 +44,8 @@ def validate_runtime_settings(
         raise ValueError("database_work and database_registry must be supplied together")
 
     if database_work is not None:
-        from aurora.database.async_routed import RoutedWorkManager
-        from aurora.database.database_registry import DatabaseRegistry
+        from aurora.database.async_work import RoutedWorkManager
+        from aurora.database.configuration import DatabaseRegistry
 
         if not isinstance(database_work, RoutedWorkManager):
             raise TypeError("database_work must be a RoutedWorkManager")
@@ -81,8 +79,7 @@ def validate_locales(locales, default_locale):
             raise ValueError("locales must be a non-empty list or tuple")
 
         if any(
-            not isinstance(code, str)
-            or not re.fullmatch(r"[a-z]{2}(?:-[a-z]{2})?", code)
+            not isinstance(code, str) or not re.fullmatch(r"[a-z]{2}(?:-[a-z]{2})?", code)
             for code in locales
         ):
             raise ValueError("Locale codes must be lowercase language codes, e.g. en or pt-br")

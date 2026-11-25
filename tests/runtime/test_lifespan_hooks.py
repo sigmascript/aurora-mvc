@@ -43,7 +43,10 @@ def test_async_hooks_execute_only_during_lifespan_and_in_resource_order():
 
     assert events == []
     messages = lifespan(app, "lifespan.startup", "lifespan.shutdown")
-    assert [m["type"] for m in messages] == ["lifespan.startup.complete", "lifespan.shutdown.complete"]
+    assert [m["type"] for m in messages] == [
+        "lifespan.startup.complete",
+        "lifespan.shutdown.complete",
+    ]
     assert events == ["load-first", "load-second", "release-second", "release-first"]
 
 
@@ -55,7 +58,9 @@ def test_startup_failure_never_reports_success_or_leaks_exception_detail():
         raise RuntimeError("private-credential")
 
     messages = lifespan(app, "lifespan.startup")
-    assert messages == [{"type": "lifespan.startup.failed", "message": "Application startup hook failed"}]
+    assert messages == [
+        {"type": "lifespan.startup.failed", "message": "Application startup hook failed"}
+    ]
     assert not app._lifespan_started
 
 
@@ -80,7 +85,10 @@ def test_shutdown_failure_reports_failure_before_closing_owned_work():
         raise RuntimeError("private-token")
 
     messages = lifespan(app, "lifespan.startup", "lifespan.shutdown")
-    assert [m["type"] for m in messages] == ["lifespan.startup.complete", "lifespan.shutdown.failed"]
+    assert [m["type"] for m in messages] == [
+        "lifespan.startup.complete",
+        "lifespan.shutdown.failed",
+    ]
     assert messages[-1]["message"] == "Application shutdown failed"
     assert not events
 

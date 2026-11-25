@@ -6,7 +6,7 @@ this batch: they need database-scoped resolution and versioned snapshots.
 
 import pytest
 
-from aurora.database import Model, column, create_table_sql, schema_snapshot, compare_snapshots
+from aurora.database import Model, column, compare_snapshots, create_table_sql, schema_snapshot
 
 
 class Parent(Model):
@@ -34,11 +34,13 @@ def test_singular_physical_reference_matches_historical_sql_and_snapshot(dialect
     assert new["format"] == "aurorasql.schema.v1"
     assert compare_snapshots(old, new) == []
     assert create_table_sql(NewChild, dialect) == create_table_sql(OldChild, dialect)
-    assert 'REFERENCES' in create_table_sql(NewChild, dialect)
+    assert "REFERENCES" in create_table_sql(NewChild, dialect)
     assert NewChild.__columns__["parent_id"].references == "e2_parent.id"
 
 
-@pytest.mark.parametrize("bad", ([], ["first.id", "second.id"], "a", "a.b.c", ".id", "a.", "a;DROP.id", 12, {}))
+@pytest.mark.parametrize(
+    "bad", ([], ["first.id", "second.id"], "a", "a.b.c", ".id", "a.", "a;DROP.id", 12, {})
+)
 def test_invalid_singular_targets_rejected_before_sql(bad):
     with pytest.raises((TypeError, ValueError)):
         column(int, reference=bad)

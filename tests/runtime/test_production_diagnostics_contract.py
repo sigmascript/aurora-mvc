@@ -6,16 +6,18 @@ import logging
 import pytest
 
 from aurora._cli_scaffolding import create_project
-from aurora.core.application import Application
 from aurora.core.app_settings import load_application_settings
+from aurora.core.application import Application
 from tests.runtime.test_http_error_handlers import exchange
 
 
 @pytest.mark.parametrize("layout", ["minimal", "mvc", "modular"])
 def test_all_generated_projects_choose_development_explicitly(tmp_path, layout):
     root = create_project(
-        "example", directory=tmp_path,
-        mvc=layout == "mvc", modular=layout == "modular",
+        "example",
+        directory=tmp_path,
+        mvc=layout == "mvc",
+        modular=layout == "modular",
     )
     document = json.loads((root / "aurora_config.json").read_text())
     assert document["production"] is False

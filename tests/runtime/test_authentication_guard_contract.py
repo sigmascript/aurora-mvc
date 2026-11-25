@@ -13,13 +13,15 @@ from aurora.urls import _current_application
 
 
 def _request(method="GET", authenticated=False, query=b""):
-    return Request({
-        "type": "http",
-        "method": method,
-        "path": "/private",
-        "query_string": query,
-        "authenticated": authenticated,
-    })
+    return Request(
+        {
+            "type": "http",
+            "method": method,
+            "path": "/private",
+            "query_string": query,
+            "authenticated": authenticated,
+        }
+    )
 
 
 @pytest.fixture
@@ -36,7 +38,11 @@ def routes():
 
 def test_browser_redirects_and_authorized_action(routes):
     class Private(Controller):
-        @login_required("auth.signin", authenticated=lambda request: request.scope["authenticated"], with_next=True)
+        @login_required(
+            "auth.signin",
+            authenticated=lambda request: request.scope["authenticated"],
+            with_next=True,
+        )
         def get(self):
             return "private"
 
@@ -48,6 +54,7 @@ def test_browser_redirects_and_authorized_action(routes):
 
 def test_mutating_methods_and_api_fail_closed(routes):
     for method in ("POST", "PUT", "PATCH", "DELETE"):
+
         class Private(Controller):
             @login_required("auth.signin", authenticated=lambda request: False)
             def post(self):
@@ -87,7 +94,12 @@ def test_async_authentication_and_signin_redirect(routes):
 
 
 def test_return_destination_never_accepts_external_or_ambiguous_urls():
-    for candidate in ("/%25252f%25252fevil.test", "/%250aevil", "/private\x00bad", "/private\r\nLocation:evil"):
+    for candidate in (
+        "/%25252f%25252fevil.test",
+        "/%250aevil",
+        "/private\x00bad",
+        "/private\r\nLocation:evil",
+    ):
         assert safe_next(candidate, "/safe") == "/safe"
 
     for query in (b"", b"next=", b"next=%2Fone&next=%2Ftwo", b"next=https%3A%2F%2Fevil.test"):

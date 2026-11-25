@@ -31,14 +31,19 @@ class Router:
                 continue
             if earlier.path == route.path:
                 detail = "duplicate path and overlapping methods"
-            elif not route.parameters and earlier.parameters and earlier.pattern.fullmatch(route.path):
+            elif (
+                not route.parameters
+                and earlier.parameters
+                and earlier.pattern.fullmatch(route.path)
+            ):
                 detail = "earlier parameter route shadows later literal path"
             else:
                 continue
             warnings.warn(
                 f"Route {route.path!r} ({', '.join(sorted(common))}) is unreachable: "
                 f"{detail}; earlier {earlier.path!r} takes precedence in registration order",
-                UserWarning, stacklevel=2,
+                UserWarning,
+                stacklevel=2,
             )
         self.routes.append(route)
 

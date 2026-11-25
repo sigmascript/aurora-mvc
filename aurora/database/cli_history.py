@@ -3,14 +3,14 @@
 The journal is distinct from the legacy migration history. Never initialize,
 repair, or reconcile it implicitly; missing history fails closed.
 """
+
 import json
 import sqlite3
-from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import urlsplit
 
-from .cli_plan import _load_config, _existing_sqlite_path, _select_models
-from .core import Connection
-from .history import list_history, review_history
+from .cli_check import _load_config, _existing_sqlite_path, _select_models
+from .connections import Connection
+from .migration_history import list_history, review_history
 from .migration_timeline import inspect_native_history, verify_current_models
 
 
@@ -18,21 +18,38 @@ def _read_history(connection, alias, *, models=None, parsed=None):
     entries = list_history(connection)
     findings = review_history(connection, entries=entries)
     report = {
-        "backend": "aurorasql", "database_alias": alias,
+        "backend": "aurorasql",
+        "database_alias": alias,
         "read_only": True,
-        "entries": [{"operation_id": e.operation_id, "table": e.table,
-                     "dialect": e.dialect, "fingerprint": e.fingerprint,
-                     "status": e.status} for e in entries],
-        "findings": [{"operation_id": f.operation_id, "table": f.table,
-                      "kind": f.kind, "detail": f.detail} for f in findings],
+        "entries": [
+            {
+                "operation_id": e.operation_id,
+                "table": e.table,
+                "dialect": e.dialect,
+                "fingerprint": e.fingerprint,
+                "status": e.status,
+            }
+            for e in entries
+        ],
+        "findings": [
+            {"operation_id": f.operation_id, "table": f.table, "kind": f.kind, "detail": f.detail}
+            for f in findings
+        ],
     }
 
     if getattr(connection, "dialect", None) == "sqlite":
         timeline, entries, findings = inspect_native_history(connection, alias)
 
         if timeline is not None:
-            report["findings"] = [{"operation_id": f.operation_id, "table": f.table,
-                                   "kind": f.kind, "detail": f.detail} for f in findings]
+            report["findings"] = [
+                {
+                    "operation_id": f.operation_id,
+                    "table": f.table,
+                    "kind": f.kind,
+                    "detail": f.detail,
+                }
+                for f in findings
+            ]
             if models is not None:
                 timeline[-1]["verified_current"] = verify_current_models(
                     connection._raw, models, timeline, entries
@@ -40,76 +57,106 @@ def _read_history(connection, alias, *, models=None, parsed=None):
 
             report["timeline"] = timeline
 
-            if not timeline[-1]["physical_history_consistent"] or (models is not None and not timeline[-1]["verified_current"]):
-                report["findings"].append({
-                    "operation_id": "1", "table": "*",
-                    "kind": "initial_not_verified",
-                    "detail": "Initial is unresolved, schema drifted, or earlier history is inconsistent",
-                })
+            if not timeline[-1]["physical_history_consistent"] or (
+                models is not None and not timeline[-1]["verified_current"]
+            ):
+                report["findings"].append(
+                    {
+                        "operation_id": "1",
+                        "table": "*",
+                        "kind": "initial_not_verified",
+                        "detail": "Initial is unresolved, schema drifted, or earlier history is inconsistent",
+                    }
+                )
         elif models is not None:
-            report["findings"].append({
-                "operation_id": "1", "table": "*",
-                "kind": "initial_not_verified",
-                "detail": "Legacy initialization has not been adopted into verified Initial history",
-            })
+            report["findings"].append(
+                {
+                    "operation_id": "1",
+                    "table": "*",
+                    "kind": "initial_not_verified",
+                    "detail": "Legacy initialization has not been adopted into verified Initial history",
+                }
+            )
     elif getattr(connection, "dialect", None) in ("mysql", "postgresql"):
-        from .server_migration_timeline import (inspect_server_timeline,
-                                                verify_server_initial_current,
-                                                verify_server_successor_current)
+        from .migration_review import verify_server_initial_current, verify_server_successor_current
+        from .migration_timeline import inspect_server_timeline
 
         timeline = inspect_server_timeline(connection, alias)
 
         if timeline is not None:
-            verified = (verify_server_initial_current(connection, models, alias)
-                        if models is not None and len(timeline) == 1 else
-                        verify_server_successor_current(connection, models, alias)
-                        if models is not None and len(timeline) == 2 else False)
+            verified = (
+                verify_server_initial_current(connection, models, alias)
+                if models is not None and len(timeline) == 1
+                else verify_server_successor_current(connection, models, alias)
+                if models is not None and len(timeline) == 2
+                else False
+            )
 
             if models is not None and len(timeline) > 2 and parsed is not None:
-                from .cli_init import _mysql_database_identity, _postgres_database_identity
-                from .server_history_chain import verify_server_applied_chain
+                from .connections import _mysql_database_identity, _postgres_database_identity
+                from .migration_history import verify_server_applied_chain
 
-                identity = (_mysql_database_identity(connection, parsed)
-                            if connection.dialect == "mysql" else
-                            _postgres_database_identity(connection, parsed))
+                identity = (
+                    _mysql_database_identity(connection, parsed)
+                    if connection.dialect == "mysql"
+                    else _postgres_database_identity(connection, parsed)
+                )
                 verified = verify_server_applied_chain(connection, models, alias, identity)
 
             if verified and len(timeline) == 2:
                 # Suppress a repeated-table warning only after the native
                 # successor's complete journal and schema proof succeeded.
                 findings = review_history(
-                    connection, entries=entries,
+                    connection,
+                    entries=entries,
                     verified_successor_table=timeline[-1].operation["table"],
                 )
                 report["findings"] = [
-                    {"operation_id": finding.operation_id, "table": finding.table,
-                     "kind": finding.kind, "detail": finding.detail}
+                    {
+                        "operation_id": finding.operation_id,
+                        "table": finding.table,
+                        "kind": finding.kind,
+                        "detail": finding.detail,
+                    }
                     for finding in findings
                 ]
             elif verified and len(timeline) > 2:
                 # Only the independently proved complete chain can exempt its
                 # repeated-table entries. Keep all unrelated journal findings.
                 report["findings"] = [
-                    {"operation_id": finding.operation_id, "table": finding.table,
-                     "kind": finding.kind, "detail": finding.detail}
-                    for finding in findings if finding.kind != "multiple_operations"
+                    {
+                        "operation_id": finding.operation_id,
+                        "table": finding.table,
+                        "kind": finding.kind,
+                        "detail": finding.detail,
+                    }
+                    for finding in findings
+                    if finding.kind != "multiple_operations"
                 ]
 
             report["timeline"] = [
-                {"number": item.number, "name": item.name, "title": item.title,
-                 "status": item.status, "model_tables": item.model_tables,
-                 "physical_history_consistent": verified if item == timeline[-1] else False,
-                 "verified_current": verified if item == timeline[-1] else False}
+                {
+                    "number": item.number,
+                    "name": item.name,
+                    "title": item.title,
+                    "status": item.status,
+                    "model_tables": item.model_tables,
+                    "physical_history_consistent": verified if item == timeline[-1] else False,
+                    "verified_current": verified if item == timeline[-1] else False,
+                }
                 for item in timeline
             ]
 
             if not verified:
-                report["findings"].append({
-                    "operation_id": str(timeline[-1].number), "table": "*",
-                    "kind": "server_history_not_verified",
-                    "detail": "Native server history is recorded but physical schema/model "
-                              "evidence is not verified",
-                })
+                report["findings"].append(
+                    {
+                        "operation_id": str(timeline[-1].number),
+                        "table": "*",
+                        "kind": "server_history_not_verified",
+                        "detail": "Native server history is recorded but physical schema/model "
+                        "evidence is not verified",
+                    }
+                )
 
     return report
 
@@ -118,27 +165,36 @@ def run_history(args):
     """Inspect migration history without changing database state."""
     config, base_dir = _load_config(args.config)
     if getattr(args, "backups", False):
-        from .backup_artifacts import list_artifacts, destination_fingerprint
+        from .backup_catalog import destination_fingerprint, list_artifacts
+
         url = config.resolve(args.database)
         identity = destination_fingerprint(url, base_dir)
         reports = list_artifacts(base_dir, args.database, identity)
         if urlsplit(url).scheme in ("sqlite", "sqlite+pysqlite"):
-            from .sqlite_backup_catalog import inspect_sqlite_catalog
+            from .cli_backup import inspect_sqlite_catalog
+
             try:
                 db_file = _existing_sqlite_path(url, base_dir)
             except ValueError:
                 db_file = None
             if db_file is not None:
-                reports = inspect_sqlite_catalog(db_file, base_dir, args.database, identity, reports)
+                reports = inspect_sqlite_catalog(
+                    db_file, base_dir, args.database, identity, reports
+                )
         elif urlsplit(url).scheme in ("mysql+pymysql", "postgresql+psycopg"):
-            from .server_backup_catalog import inspect_server_catalog
+            from .backup_catalog import inspect_server_catalog
+
             with config.connect(args.database) as connection:
-                reports = inspect_server_catalog(connection, base_dir, args.database, identity, reports)
+                reports = inspect_server_catalog(
+                    connection, base_dir, args.database, identity, reports
+                )
         print(f"Database: {args.database}")
         print(f"Recorded backups: {len(reports)}")
         for item in reports:
-            print(f"  {item['id']}: {item['status']}" +
-                  (f" — {item['title']}" if item.get("title") else ""))
+            print(
+                f"  {item['id']}: {item['status']}"
+                + (f" — {item['title']}" if item.get("title") else "")
+            )
         return 3 if any(item["status"] != "ARTIFACT_VERIFIED" for item in reports) else 0
     url = config.resolve(args.database)
     parsed = urlsplit(url)
@@ -154,10 +210,13 @@ def run_history(args):
 
     if parsed.scheme in ("sqlite", "sqlite+pysqlite"):
         db_file = _existing_sqlite_path(url, base_dir)
-        raw = sqlite3.connect(db_file.resolve().as_uri() + "?mode=ro", uri=True,
-                              isolation_level=None)
+        raw = sqlite3.connect(
+            db_file.resolve().as_uri() + "?mode=ro", uri=True, isolation_level=None
+        )
 
-        from .sqlite_forward_history import has_forward_history, read_history
+        from .migration_history import sqlite_has_forward_history as has_forward_history
+        from .migration_history import sqlite_read_history as read_history
+
         if has_forward_history(raw):
             try:
                 rows, _ = read_history(raw, base_dir, db_file)
@@ -175,7 +234,8 @@ def run_history(args):
             report = _read_history(connection, args.database, models=models)
     else:
         with config.connect(args.database) as connection:
-            from .server_forward_history import has_history, read_history
+            from .migration_history import has_history, read_history
+
             if hasattr(connection, "fetch_all") and has_history(connection):
                 rows, _ = read_history(connection, base_dir, args.database)
                 print(f"Database: {args.database}")
@@ -215,3 +275,51 @@ def run_history(args):
             print("No history problems found.")
 
     return 3 if report["findings"] else 0
+
+
+def run_intent_history(args):
+    """Inspect the SQLite intent journal read-only, without history fallback."""
+    from .migration_journal import list_intents
+
+    config, root = _load_config(args.config)
+    url = config.resolve(args.database)
+
+    if urlsplit(url).scheme not in ("sqlite", "sqlite+pysqlite"):
+        raise ValueError("SQLite intent history is unavailable for this backend")
+
+    db_file = _existing_sqlite_path(url, root)
+    raw = sqlite3.connect(db_file.as_uri() + "?mode=ro", uri=True, isolation_level=None)
+
+    try:
+        entries = list_intents(raw)
+    finally:
+        raw.close()
+
+    report = {
+        "backend": "aurorasql",
+        "database_alias": args.database,
+        "journal": "sqlite_intents_v2",
+        "read_only": True,
+        "entries": [
+            {
+                "migration_id": e.migration_id,
+                "review_sha256": e.review_sha256,
+                "before_sha256": e.before_sha256,
+                "after_sha256": e.after_sha256,
+                "state": e.state,
+            }
+            for e in entries
+        ],
+    }
+
+    if args.format == "json":
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        print(f"Database: {args.database} (AuroraSQL SQLite intent journal; read-only)")
+
+        for entry in report["entries"]:
+            print(f"  {entry['migration_id']} {entry['state']}")
+
+        print(f"Intent entries: {len(entries)}")
+
+    return 3 if any(e.state != "applied" for e in entries) else 0

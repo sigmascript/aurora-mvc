@@ -31,17 +31,32 @@ def test_new_table_declares_only_requested_uniqueness(dialect):
 def test_sqlite_enforces_uniqueness_and_detects_both_drift_directions():
     with connect("sqlite:///:memory:") as db:
         create_table(db, UniqueEmail)
-        db.execute_write("INSERT INTO unique_email_contract (id, email) VALUES (1, 'a@example.com')")
+        db.execute_write(
+            "INSERT INTO unique_email_contract (id, email) VALUES (1, 'a@example.com')"
+        )
         with pytest.raises(sqlite3.IntegrityError):
-            db.execute_write("INSERT INTO unique_email_contract (id, email) VALUES (2, 'a@example.com')")
+            db.execute_write(
+                "INSERT INTO unique_email_contract (id, email) VALUES (2, 'a@example.com')"
+            )
         changes = plan_schema(db, RepeatedEmail).changes
-        assert any(change.kind == "unique_mismatch" and change.column == "email" for change in changes)
-        assert db.fetch_first("SELECT email FROM unique_email_contract WHERE id = 1")["email"] == "a@example.com"
+        assert any(
+            change.kind == "unique_mismatch" and change.column == "email" for change in changes
+        )
+        assert (
+            db.fetch_first("SELECT email FROM unique_email_contract WHERE id = 1")["email"]
+            == "a@example.com"
+        )
 
     with connect("sqlite:///:memory:") as db:
         create_table(db, RepeatedEmail)
-        db.execute_write("INSERT INTO unique_email_contract (id, email) VALUES (1, 'a@example.com')")
-        db.execute_write("INSERT INTO unique_email_contract (id, email) VALUES (2, 'a@example.com')")
+        db.execute_write(
+            "INSERT INTO unique_email_contract (id, email) VALUES (1, 'a@example.com')"
+        )
+        db.execute_write(
+            "INSERT INTO unique_email_contract (id, email) VALUES (2, 'a@example.com')"
+        )
         changes = plan_schema(db, UniqueEmail).changes
-        assert any(change.kind == "unique_mismatch" and change.column == "email" for change in changes)
+        assert any(
+            change.kind == "unique_mismatch" and change.column == "email" for change in changes
+        )
         assert db.fetch_first("SELECT COUNT(*) AS total FROM unique_email_contract")["total"] == 2

@@ -98,11 +98,14 @@ async def serve_static_file(scope, send, *, root: Path, url_prefix: str):
     method = scope.get("method", "GET")
 
     # ASGI scope["path"] is already percent-decoded by the server.
-    path = scope["path"][len(url_prefix) + 1:]
+    path = scope["path"][len(url_prefix) + 1 :]
     parts = path.split("/")
     valid = bool(parts) and all(
-        part not in {"", ".", ".."} and not part.startswith(".")
-        and "\\" not in part and "\x00" not in part for part in parts
+        part not in {"", ".", ".."}
+        and not part.startswith(".")
+        and "\\" not in part
+        and "\x00" not in part
+        for part in parts
     )
 
     if not valid:
@@ -118,11 +121,14 @@ async def serve_static_file(scope, send, *, root: Path, url_prefix: str):
         else:
             try:
                 size = os.fstat(file.fileno()).st_size
-                content_type = (mimetypes.guess_type(parts[-1])[0]
-                                or "application/octet-stream").encode("ascii")
-                headers = [(b"content-type", content_type),
-                           (b"content-length", str(size).encode("ascii")),
-                           (b"x-content-type-options", b"nosniff")]
+                content_type = (
+                    mimetypes.guess_type(parts[-1])[0] or "application/octet-stream"
+                ).encode("ascii")
+                headers = [
+                    (b"content-type", content_type),
+                    (b"content-length", str(size).encode("ascii")),
+                    (b"x-content-type-options", b"nosniff"),
+                ]
                 await send({"type": "http.response.start", "status": 200, "headers": headers})
 
                 if method == "HEAD" or size == 0:
@@ -132,17 +138,24 @@ async def serve_static_file(scope, send, *, root: Path, url_prefix: str):
 
                     while chunk:
                         next_chunk = await asyncio.to_thread(file.read, 64 * 1024)
-                        await send({"type": "http.response.body", "body": chunk,
-                                    "more_body": bool(next_chunk)})
+                        await send(
+                            {
+                                "type": "http.response.body",
+                                "body": chunk,
+                                "more_body": bool(next_chunk),
+                            }
+                        )
                         chunk = next_chunk
 
                 return
             finally:
                 await asyncio.to_thread(file.close)
 
-    headers = [(b"content-type", b"text/plain; charset=utf-8"),
-               (b"content-length", str(len(content)).encode("ascii")),
-               (b"x-content-type-options", b"nosniff")]
+    headers = [
+        (b"content-type", b"text/plain; charset=utf-8"),
+        (b"content-length", str(len(content)).encode("ascii")),
+        (b"x-content-type-options", b"nosniff"),
+    ]
     if status == 405:
         headers.append((b"allow", b"GET, HEAD"))
     await send({"type": "http.response.start", "status": status, "headers": headers})

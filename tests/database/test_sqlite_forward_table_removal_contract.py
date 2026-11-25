@@ -1,65 +1,70 @@
 """Registered-model removal stays source-only; reviewed table drops are independently safe."""
+
 import json
 import sqlite3
 import sys
 
 import pytest
-
-from aurora.cli import main
-from aurora.database.sqlite_forward_history import read_history
 from test_sqlite_coherent_addition_contract import project, seed
 from test_sqlite_forward_new_table_contract import add_model
 
+from aurora.cli import main
+from aurora.database.migration_history import sqlite_read_history as read_history
+
 
 def unregister(root, name):
-    path = root / 'aurora_models.json'
+    path = root / "aurora_models.json"
     content = json.loads(path.read_text())
-    content['databases']['data'].remove(f'models.{name}:{name}')
+    content["databases"]["data"].remove(f"models.{name}:{name}")
     path.write_text(json.dumps(content))
-    (root / 'models' / f'{name}.py').unlink()
+    (root / "models" / f"{name}.py").unlink()
 
 
 def registered_dummy(root, *, rows=0):
     project(root)
     seed(root)
-    add_model(root, 'Dummy', '    id = column(int, primary_key=True)\n')
-    assert main(['db', 'migrate', '--confirm', 'yes']) == 0
+    add_model(root, "Dummy", "    id = column(int, primary_key=True)\n")
+    assert main(["db", "migrate", "--confirm", "yes"]) == 0
     if rows:
-        with sqlite3.connect(root / 'data.sqlite3') as db:
-            db.executemany('INSERT INTO dummy(id) VALUES (?)', [(i,) for i in range(1, rows + 1)])
-    unregister(root, 'Dummy')
+        with sqlite3.connect(root / "data.sqlite3") as db:
+            db.executemany("INSERT INTO dummy(id) VALUES (?)", [(i,) for i in range(1, rows + 1)])
+    unregister(root, "Dummy")
 
 
 def state(root):
-    with sqlite3.connect(root / 'data.sqlite3') as db:
-        return (db.execute("SELECT name FROM sqlite_master WHERE name='dummy'").fetchone(),
-                db.execute('SELECT COUNT(*) FROM __migrations__').fetchone()[0])
+    with sqlite3.connect(root / "data.sqlite3") as db:
+        return (
+            db.execute("SELECT name FROM sqlite_master WHERE name='dummy'").fetchone(),
+            db.execute("SELECT COUNT(*) FROM __migrations__").fetchone()[0],
+        )
 
 
 def test_empty_table_removed_with_unrelated_fk_and_index(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     registered_dummy(tmp_path)
-    assert state(tmp_path) == (('dummy',), 3)
-    assert main(['db', 'migrate', '--confirm', 'yes', '--title', 'Remove empty Dummy']) == 0
+    assert state(tmp_path) == (("dummy",), 3)
+    assert main(["db", "migrate", "--confirm", "yes", "--title", "Remove empty Dummy"]) == 0
     assert state(tmp_path) == (None, 4)
-    assert main(['db', 'check']) == 0
-    assert main(['db', 'migrate', '--confirm', 'yes']) == 0
-    with sqlite3.connect(tmp_path / 'data.sqlite3') as db:
-        assert db.execute('SELECT visits FROM messages').fetchone() == (5,)
-        assert db.execute('PRAGMA foreign_key_check').fetchall() == []
-        assert any(r[1] == 'message_user_idx' for r in db.execute('PRAGMA index_list(messages)'))
-        read_history(db, tmp_path, tmp_path / 'data.sqlite3')
-    assert not (tmp_path / 'backups').exists()
+    assert main(["db", "check"]) == 0
+    assert main(["db", "migrate", "--confirm", "yes"]) == 0
+    with sqlite3.connect(tmp_path / "data.sqlite3") as db:
+        assert db.execute("SELECT visits FROM messages").fetchone() == (5,)
+        assert db.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert any(r[1] == "message_user_idx" for r in db.execute("PRAGMA index_list(messages)"))
+        read_history(db, tmp_path, tmp_path / "data.sqlite3")
+    assert not (tmp_path / "backups").exists()
 
 
-def test_populated_table_requires_interactive_typed_ack_even_with_confirm_yes(tmp_path, monkeypatch):
+def test_populated_table_requires_interactive_typed_ack_even_with_confirm_yes(
+    tmp_path, monkeypatch
+):
     monkeypatch.chdir(tmp_path)
     registered_dummy(tmp_path, rows=2)
     with pytest.raises(SystemExit) as error:
-        main(['db', 'migrate', '--confirm', 'yes'])
+        main(["db", "migrate", "--confirm", "yes"])
     assert error.value.code == 1
-    assert state(tmp_path) == (('dummy',), 3)
-    assert not (tmp_path / 'backups').exists()
+    assert state(tmp_path) == (("dummy",), 3)
+    assert not (tmp_path / "backups").exists()
 
 
 class FakeTTY:
@@ -70,26 +75,28 @@ class FakeTTY:
 def test_populated_table_without_forced_backup_and_typed_ack(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     registered_dummy(tmp_path, rows=2)
-    monkeypatch.setattr(sys, 'stdin', FakeTTY())
-    replies = iter(['y', 'DELETE data.dummy'])
-    monkeypatch.setattr('builtins.input', lambda prompt='': next(replies))
-    assert main(['db', 'migrate', '--title', 'Remove populated Dummy']) == 0
+    monkeypatch.setattr(sys, "stdin", FakeTTY())
+    replies = iter(["y", "DELETE data.dummy"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(replies))
+    assert main(["db", "migrate", "--title", "Remove populated Dummy"]) == 0
     assert state(tmp_path) == (None, 4)
-    assert not list((tmp_path / '__backups__' / 'data').glob('*.sqlite3'))
-    with sqlite3.connect(tmp_path / 'data.sqlite3') as db:
-        assert db.execute('SELECT warnings FROM __migrations__ ORDER BY id DESC LIMIT 1').fetchone()[0]
-        read_history(db, tmp_path, tmp_path / 'data.sqlite3')
+    assert not list((tmp_path / "__backups__" / "data").glob("*.sqlite3"))
+    with sqlite3.connect(tmp_path / "data.sqlite3") as db:
+        assert db.execute(
+            "SELECT warnings FROM __migrations__ ORDER BY id DESC LIMIT 1"
+        ).fetchone()[0]
+        read_history(db, tmp_path, tmp_path / "data.sqlite3")
 
 
 def test_wrong_typed_ack_keeps_table_history_without_backup(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     registered_dummy(tmp_path, rows=1)
-    monkeypatch.setattr(sys, 'stdin', FakeTTY())
-    replies = iter(['y', 'dummy'])
-    monkeypatch.setattr('builtins.input', lambda prompt='': next(replies))
-    assert main(['db', 'migrate']) == 0
-    assert state(tmp_path) == (('dummy',), 3)
-    assert not list((tmp_path / '__backups__' / 'data').glob('*.sqlite3'))
+    monkeypatch.setattr(sys, "stdin", FakeTTY())
+    replies = iter(["y", "dummy"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(replies))
+    assert main(["db", "migrate"]) == 0
+    assert state(tmp_path) == (("dummy",), 3)
+    assert not list((tmp_path / "__backups__" / "data").glob("*.sqlite3"))
 
 
 def test_referenced_table_refuses_drop(tmp_path, monkeypatch):
@@ -98,134 +105,152 @@ def test_referenced_table_refuses_drop(tmp_path, monkeypatch):
     seed(tmp_path)
     # Keep parent users as physical object but unregister its Python model;
     # messages still physically depends on users.
-    unregister(tmp_path, 'Users')
+    unregister(tmp_path, "Users")
     with pytest.raises(SystemExit) as error:
-        main(['db', 'migrate', '--confirm', 'yes'])
+        main(["db", "migrate", "--confirm", "yes"])
     assert error.value.code == 1
-    with sqlite3.connect(tmp_path / 'data.sqlite3') as db:
+    with sqlite3.connect(tmp_path / "data.sqlite3") as db:
         assert db.execute("SELECT name FROM sqlite_master WHERE name='users'").fetchone()
-        assert db.execute('SELECT COUNT(*) FROM __migrations__').fetchone() == (2,)
+        assert db.execute("SELECT COUNT(*) FROM __migrations__").fetchone() == (2,)
 
 
 def test_empty_table_with_its_own_ordinary_index_is_removed(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     project(tmp_path)
     seed(tmp_path)
-    add_model(tmp_path, 'Dummy', '    id = column(int, primary_key=True)\n'
-              '    label = column(str, length=20, not_null=False)\n')
-    assert main(['db', 'migrate', '--confirm', 'yes']) == 0
-    index_change = tmp_path / 'dummy_index.json'
-    index_change.write_text(json.dumps({
-        'database': 'data', 'create_index': {
-            'table': 'dummy', 'name': 'dummy_label_idx', 'columns': ['label']}}))
-    assert main(['db', 'migrate', '-c', str(index_change), '--confirm', 'yes']) == 0
-    unregister(tmp_path, 'Dummy')
-    assert main(['db', 'migrate', '--confirm', 'yes']) == 0
-    assert main(['db', 'check']) == 0
-    with sqlite3.connect(tmp_path / 'data.sqlite3') as db:
-        assert not db.execute("SELECT name FROM sqlite_master WHERE name='dummy_label_idx'").fetchone()
-        assert db.execute('SELECT COUNT(*) FROM __migrations__').fetchone() == (5,)
-        read_history(db, tmp_path, tmp_path / 'data.sqlite3')
+    add_model(
+        tmp_path,
+        "Dummy",
+        "    id = column(int, primary_key=True)\n"
+        "    label = column(str, length=20, not_null=False)\n",
+    )
+    assert main(["db", "migrate", "--confirm", "yes"]) == 0
+    index_change = tmp_path / "dummy_index.json"
+    index_change.write_text(
+        json.dumps(
+            {
+                "database": "data",
+                "create_index": {"table": "dummy", "name": "dummy_label_idx", "columns": ["label"]},
+            }
+        )
+    )
+    assert main(["db", "migrate", "-c", str(index_change), "--confirm", "yes"]) == 0
+    unregister(tmp_path, "Dummy")
+    assert main(["db", "migrate", "--confirm", "yes"]) == 0
+    assert main(["db", "check"]) == 0
+    with sqlite3.connect(tmp_path / "data.sqlite3") as db:
+        assert not db.execute(
+            "SELECT name FROM sqlite_master WHERE name='dummy_label_idx'"
+        ).fetchone()
+        assert db.execute("SELECT COUNT(*) FROM __migrations__").fetchone() == (5,)
+        read_history(db, tmp_path, tmp_path / "data.sqlite3")
 
 
 def test_populated_child_table_with_outgoing_fk_requires_ack_then_removes(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     project(tmp_path)
     seed(tmp_path)
-    unregister(tmp_path, 'Messages')
+    unregister(tmp_path, "Messages")
 
-    with sqlite3.connect(tmp_path / 'data.sqlite3') as db:
-        previous_count = db.execute('SELECT COUNT(*) FROM __migrations__').fetchone()[0]
-        assert db.execute('PRAGMA foreign_key_list(messages)').fetchall()
+    with sqlite3.connect(tmp_path / "data.sqlite3") as db:
+        previous_count = db.execute("SELECT COUNT(*) FROM __migrations__").fetchone()[0]
+        assert db.execute("PRAGMA foreign_key_list(messages)").fetchall()
 
     with pytest.raises(SystemExit) as refusal:
-        main(['db', 'migrate', '--confirm', 'yes'])
+        main(["db", "migrate", "--confirm", "yes"])
     assert refusal.value.code == 1
 
-    with sqlite3.connect(tmp_path / 'data.sqlite3') as db:
-        assert db.execute('SELECT COUNT(*) FROM messages').fetchone() == (1,)
-        assert db.execute('SELECT COUNT(*) FROM __migrations__').fetchone()[0] == previous_count
+    with sqlite3.connect(tmp_path / "data.sqlite3") as db:
+        assert db.execute("SELECT COUNT(*) FROM messages").fetchone() == (1,)
+        assert db.execute("SELECT COUNT(*) FROM __migrations__").fetchone()[0] == previous_count
 
-    monkeypatch.setattr(sys, 'stdin', FakeTTY())
-    replies = iter(['y', 'DELETE data.messages'])
-    monkeypatch.setattr('builtins.input', lambda prompt='': next(replies))
-    assert main(['db', 'migrate', '--title', 'Remove dependent child']) == 0
-    assert main(['db', 'check']) == 0
+    monkeypatch.setattr(sys, "stdin", FakeTTY())
+    replies = iter(["y", "DELETE data.messages"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(replies))
+    assert main(["db", "migrate", "--title", "Remove dependent child"]) == 0
+    assert main(["db", "check"]) == 0
 
-    with sqlite3.connect(tmp_path / 'data.sqlite3') as db:
+    with sqlite3.connect(tmp_path / "data.sqlite3") as db:
         assert db.execute("SELECT name FROM sqlite_master WHERE name='messages'").fetchone() is None
-        assert db.execute('SELECT COUNT(*) FROM users').fetchone() == (1,)
-        assert db.execute('PRAGMA foreign_key_check').fetchall() == []
-        assert db.execute('SELECT COUNT(*) FROM __migrations__').fetchone()[0] == previous_count + 1
-        read_history(db, tmp_path, tmp_path / 'data.sqlite3')
+        assert db.execute("SELECT COUNT(*) FROM users").fetchone() == (1,)
+        assert db.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert db.execute("SELECT COUNT(*) FROM __migrations__").fetchone()[0] == previous_count + 1
+        read_history(db, tmp_path, tmp_path / "data.sqlite3")
 
 
-def test_mixed_table_transition_creates_new_and_drops_empty_in_one_history_record(tmp_path, monkeypatch):
+def test_mixed_table_transition_creates_new_and_drops_empty_in_one_history_record(
+    tmp_path, monkeypatch
+):
     monkeypatch.chdir(tmp_path)
     registered_dummy(tmp_path)
     add_model(
-        tmp_path, 'Audit',
-        '    id = column(int, primary_key=True)\n'
-        '    user_id = column(int, reference="Users.id")\n',
+        tmp_path,
+        "Audit",
+        '    id = column(int, primary_key=True)\n    user_id = column(int, reference="Users.id")\n',
     )
 
-    assert main(['db', 'migrate', '--confirm', 'yes', '--title', 'Replace empty table']) == 0
-    assert main(['db', 'check']) == 0
+    assert main(["db", "migrate", "--confirm", "yes", "--title", "Replace empty table"]) == 0
+    assert main(["db", "check"]) == 0
 
-    with sqlite3.connect(tmp_path / 'data.sqlite3') as db:
+    with sqlite3.connect(tmp_path / "data.sqlite3") as db:
         assert db.execute("SELECT name FROM sqlite_master WHERE name='dummy'").fetchone() is None
         assert db.execute("SELECT name FROM sqlite_master WHERE name='audit'").fetchone()
-        assert db.execute('PRAGMA foreign_key_list(audit)').fetchall()
-        assert db.execute('SELECT COUNT(*) FROM users').fetchone() == (1,)
-        assert db.execute('SELECT COUNT(*) FROM __migrations__').fetchone() == (4,)
-        assert db.execute('PRAGMA foreign_key_check').fetchall() == []
-        read_history(db, tmp_path, tmp_path / 'data.sqlite3')
+        assert db.execute("PRAGMA foreign_key_list(audit)").fetchall()
+        assert db.execute("SELECT COUNT(*) FROM users").fetchone() == (1,)
+        assert db.execute("SELECT COUNT(*) FROM __migrations__").fetchone() == (4,)
+        assert db.execute("PRAGMA foreign_key_check").fetchall() == []
+        read_history(db, tmp_path, tmp_path / "data.sqlite3")
 
 
-def test_mixed_table_transition_requires_target_specific_ack_for_populated_table(tmp_path, monkeypatch):
+def test_mixed_table_transition_requires_target_specific_ack_for_populated_table(
+    tmp_path, monkeypatch
+):
     monkeypatch.chdir(tmp_path)
     registered_dummy(tmp_path, rows=2)
-    add_model(tmp_path, 'Audit', '    id = column(int, primary_key=True)\n')
+    add_model(tmp_path, "Audit", "    id = column(int, primary_key=True)\n")
 
     with pytest.raises(SystemExit) as refusal:
-        main(['db', 'migrate', '--confirm', 'yes'])
+        main(["db", "migrate", "--confirm", "yes"])
     assert refusal.value.code == 1
 
-    with sqlite3.connect(tmp_path / 'data.sqlite3') as db:
-        assert db.execute('SELECT COUNT(*) FROM dummy').fetchone() == (2,)
+    with sqlite3.connect(tmp_path / "data.sqlite3") as db:
+        assert db.execute("SELECT COUNT(*) FROM dummy").fetchone() == (2,)
         assert db.execute("SELECT name FROM sqlite_master WHERE name='audit'").fetchone() is None
-        assert db.execute('SELECT COUNT(*) FROM __migrations__').fetchone() == (3,)
+        assert db.execute("SELECT COUNT(*) FROM __migrations__").fetchone() == (3,)
 
-    monkeypatch.setattr(sys, 'stdin', FakeTTY())
-    replies = iter(['y', 'DELETE data.dummy'])
-    monkeypatch.setattr('builtins.input', lambda prompt='': next(replies))
-    assert main(['db', 'migrate', '--title', 'Replace populated table']) == 0
-    assert main(['db', 'check']) == 0
+    monkeypatch.setattr(sys, "stdin", FakeTTY())
+    replies = iter(["y", "DELETE data.dummy"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(replies))
+    assert main(["db", "migrate", "--title", "Replace populated table"]) == 0
+    assert main(["db", "check"]) == 0
 
-    with sqlite3.connect(tmp_path / 'data.sqlite3') as db:
+    with sqlite3.connect(tmp_path / "data.sqlite3") as db:
         assert db.execute("SELECT name FROM sqlite_master WHERE name='dummy'").fetchone() is None
         assert db.execute("SELECT name FROM sqlite_master WHERE name='audit'").fetchone()
-        assert db.execute('SELECT COUNT(*) FROM __migrations__').fetchone() == (4,)
-        assert db.execute('SELECT warnings FROM __migrations__ ORDER BY id DESC LIMIT 1').fetchone()[0]
-        read_history(db, tmp_path, tmp_path / 'data.sqlite3')
+        assert db.execute("SELECT COUNT(*) FROM __migrations__").fetchone() == (4,)
+        assert db.execute(
+            "SELECT warnings FROM __migrations__ ORDER BY id DESC LIMIT 1"
+        ).fetchone()[0]
+        read_history(db, tmp_path, tmp_path / "data.sqlite3")
 
 
 def test_mixed_table_transition_rolls_back_if_create_fails(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     registered_dummy(tmp_path)
-    add_model(tmp_path, 'Audit', '    id = column(int, primary_key=True)\n')
+    add_model(tmp_path, "Audit", "    id = column(int, primary_key=True)\n")
 
-    from aurora.database import sqlite_forward_history
+    from aurora.database import table_operations
 
-    monkeypatch.setattr(sqlite_forward_history, 'create_table_sql',
-                        lambda *args, **kwargs: 'CREATE TABLE')
+    monkeypatch.setattr(
+        table_operations, "create_table_sql", lambda *args, **kwargs: "CREATE TABLE"
+    )
 
     with pytest.raises(SystemExit) as failure:
-        main(['db', 'migrate', '--confirm', 'yes'])
+        main(["db", "migrate", "--confirm", "yes"])
     assert failure.value.code == 1
 
-    with sqlite3.connect(tmp_path / 'data.sqlite3') as db:
+    with sqlite3.connect(tmp_path / "data.sqlite3") as db:
         assert db.execute("SELECT name FROM sqlite_master WHERE name='dummy'").fetchone()
         assert db.execute("SELECT name FROM sqlite_master WHERE name='audit'").fetchone() is None
-        assert db.execute('SELECT COUNT(*) FROM __migrations__').fetchone() == (3,)
-        read_history(db, tmp_path, tmp_path / 'data.sqlite3')
+        assert db.execute("SELECT COUNT(*) FROM __migrations__").fetchone() == (3,)
+        read_history(db, tmp_path, tmp_path / "data.sqlite3")

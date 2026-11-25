@@ -1,6 +1,7 @@
 """F03 approved static URL generation: safe, context-free, and optional."""
 
 import pytest
+
 from aurora import Aurora, View
 
 
@@ -24,11 +25,30 @@ def test_static_url_available_to_jinja_without_request_or_session(tmp_path):
     assert "session" not in app.renderer.environment.globals
 
 
-@pytest.mark.parametrize("path", [
-    "", "/secret", "../secret", "images/../secret", "./site.css", "a//b", "a/./b",
-    "a/.git/config", "a\\b", "a%2fb", "a%252fb", "a?x=1", "a#x", "C:drive",
-    "bad\x00name", "bad\nname", "bad\x7fname", None, 13,
-])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "",
+        "/secret",
+        "../secret",
+        "images/../secret",
+        "./site.css",
+        "a//b",
+        "a/./b",
+        "a/.git/config",
+        "a\\b",
+        "a%2fb",
+        "a%252fb",
+        "a?x=1",
+        "a#x",
+        "C:drive",
+        "bad\x00name",
+        "bad\nname",
+        "bad\x7fname",
+        None,
+        13,
+    ],
+)
 def test_static_url_rejects_unsafe_or_ambiguous_paths(path):
     app = Aurora()
     with pytest.raises((ValueError, TypeError)):

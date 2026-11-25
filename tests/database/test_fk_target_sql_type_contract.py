@@ -3,7 +3,7 @@
 import pytest
 
 from aurora.database import Model, column
-from aurora.database.init_validation import validate_init_models
+from aurora.database.schema import validate_init_models
 
 
 @pytest.mark.parametrize("dialect", ["sqlite", "mysql", "postgresql"])

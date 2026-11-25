@@ -1,60 +1,138 @@
-"""Fail-closed, read-only preflight for a future additive migration executor.
-
-This module never executes SQL or grants permission to write. A caller must
-independently inspect the live schema and supply its verified snapshot.
-"""
+"""Read-only migration preflight; a successful inspection never authorizes DDL."""
 
 from dataclasses import dataclass
-import hmac
+from typing import TYPE_CHECKING
 
-from .history import list_history, review_history
-from .migration_format import snapshot_fingerprint
-from .review_artifacts import validate_review, verify_review_acknowledgment
+from .migration_review import (
+    validate_migration_plan,
+    snapshot_fingerprint,
+    migration_plan,
+)
+
+
+if TYPE_CHECKING:
+    from .migration_history import RecoveryAssessment
+
+
+# Legacy migration-plan preflight: read-only evidence, never execution authority.
 
 
 @dataclass(frozen=True)
 class MigrationPreflight:
     migration_id: str
     dialect: str
-    review_sha256: str
-    operation_count: int
-    execution_allowed: bool = False
+    ready_for_execution: bool
+    findings: tuple[str, ...]
 
 
-def inspect_migration_readiness(connection, review, *, reviewed_sha256, observed_snapshot):
-    """Check review identity, additive scope, live evidence and journal.
+def preflight_migration(connection, before, after, plan):
+    """Verify plan provenance and observable table/column presence.
 
-    `observed_snapshot` MUST be produced by a separately verified live-schema
-    inspector, not copied from the review's `before` field. This preflight is
-    deliberately not a write authorization or a substitute for a locked,
-    immediate recheck by a future executor.
+    A successful review is not an authorization to execute: live schema type,
+    constraints, defaults, drift, concurrent DDL and audit state need separate
+    verified execution contracts. No DDL is performed by this function.
     """
-    validate_review(review)
-    verify_review_acknowledgment(review, reviewed_sha256=reviewed_sha256)
-    plan = review["plan"]
+    # Import locally because schema inspection also uses migration fingerprints.
+    from .schema_inspection import inspect_table
+
+    validate_migration_plan(plan)
 
     if connection.dialect != plan["dialect"]:
-        raise ValueError("Migration review dialect does not match connection")
+        raise ValueError("Connection and migration dialect differ")
 
-    if not plan["operations"]:
-        raise ValueError("Empty migration has nothing to execute")
+    if before.get("dialect") != plan["dialect"] or after.get("dialect") != plan["dialect"]:
+        raise ValueError("Snapshot and migration dialect differ")
 
-    if any(operation["kind"] not in ("added_table", "added_column") or
-           operation["risk"] != "additive" for operation in plan["operations"]):
-        raise PermissionError("Only additive migration proposals are eligible")
+    if snapshot_fingerprint(before) != plan["before_fingerprint"]:
+        raise ValueError("Source snapshot fingerprint mismatch")
 
-    if not isinstance(observed_snapshot, dict) or observed_snapshot.get("dialect") != connection.dialect:
-        raise ValueError("Observed schema dialect does not match connection")
+    if snapshot_fingerprint(after) != plan["after_fingerprint"]:
+        raise ValueError("Target snapshot fingerprint mismatch")
 
-    observed_fingerprint = snapshot_fingerprint(observed_snapshot)
+    expected = migration_plan(before, after, migration_id=plan["id"])
 
-    if not hmac.compare_digest(observed_fingerprint, plan["before_fingerprint"]):
-        raise RuntimeError("Observed schema differs from the reviewed baseline")
+    if expected != plan:
+        raise ValueError("Migration operations do not match the snapshots")
 
-    entries = list_history(connection)  # Missing journal must fail closed.
+    old_tables = {item["name"]: item for item in before["tables"]}
+    touched = sorted({op["table"] for op in plan["operations"]})
+    findings = []
 
-    if review_history(connection, entries=entries):
-        raise RuntimeError("Migration journal contains unresolved or inconsistent records")
+    for name in touched:
+        live = inspect_table(connection, name)
+        old = old_tables.get(name)
 
-    return MigrationPreflight(plan["id"], plan["dialect"], review["review_sha256"],
-                              len(plan["operations"]))
+        if old is None:
+            if live.exists:
+                findings.append(f"{name}: expected absent table, but it exists")
+
+            continue
+
+        if not live.exists:
+            findings.append(f"{name}: expected existing table is absent")
+            continue
+
+        live_columns = {column.name for column in live.columns}
+        declared_columns = {column["name"] for column in old["columns"]}
+
+        if live_columns != declared_columns:
+            findings.append(f"{name}: live column names differ from source snapshot")
+
+    for op in plan["operations"]:
+        if op["kind"] not in ("added_table", "added_column") or op["risk"] != "additive":
+            findings.append(
+                f"{op['table']}: operation {op['kind']} requires a separate data strategy"
+            )
+        elif op["kind"] == "added_column":
+            target = next(t for t in after["tables"] if t["name"] == op["table"])
+            field = next(c for c in target["columns"] if c["name"] == op["column"])
+
+            if (
+                not field["nullable"]
+                or field["unique"]
+                or field["primary_key"]
+                or field["references"] is not None
+                or field["server_default"] is not None
+            ):
+                findings.append(
+                    f"{op['table']}.{op['column']}: advanced column semantics require separate review"
+                )
+
+    findings.append("Read-only preflight: no migration execution is authorized")
+    return MigrationPreflight(plan["id"], plan["dialect"], False, tuple(findings))
+
+
+# Read-only manual recovery preflight; history data remains in migration_history.
+
+
+@dataclass(frozen=True)
+class RecoveryPreflight:
+    """Coordinated read-only evidence; never permission to reconcile history."""
+
+    operation_id: str
+    assessment: "RecoveryAssessment"
+    schema_findings: tuple
+    history_findings: tuple
+    reconciliation_allowed: bool = False
+
+
+def preflight_recovery(connection, operation_id, model):
+    """Collect a consistent recovery snapshot under AuroraSQL migration coordination.
+
+    No journal updates, DDL retries or automatic decisions. In particular, a
+    partial column match cannot establish full constraint/default equivalence.
+    Operators must not treat this snapshot as an authorization to reconcile.
+    """
+    from .migration_coordination import migration_lock
+    from .migration_history import assess_recovery, review_history, review_recovery_schema
+
+    with migration_lock(connection):
+        assessment = assess_recovery(connection, operation_id, model)
+        schema_findings = review_recovery_schema(connection, operation_id, model)
+        history_findings = review_history(connection)
+
+        # A migration's unresolved entry is expected, but every other finding
+        # remains visible for manual investigation. Do not filter evidence.
+        return RecoveryPreflight(
+            operation_id, assessment, tuple(schema_findings), tuple(history_findings)
+        )

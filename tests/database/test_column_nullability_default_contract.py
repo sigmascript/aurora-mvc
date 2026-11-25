@@ -4,9 +4,10 @@ All tests are read-only. Existing nullable= is transitional for existing apps.
 """
 
 from decimal import Decimal
+
 import pytest
 
-from aurora.database import Model, column, create_table_sql, schema_snapshot, compare_snapshots
+from aurora.database import Model, column, compare_snapshots, create_table_sql, schema_snapshot
 
 
 class E2New(Model):
@@ -33,7 +34,7 @@ def test_new_and_historical_declarations_have_identical_schema_and_ddl(dialect):
     sql = create_table_sql(E2New, dialect)
     assert "DEFAULT 'O''Reilly'" in sql
     assert '"note" TEXT NOT NULL' not in sql
-    assert '`note` TEXT NOT NULL' not in sql
+    assert "`note` TEXT NOT NULL" not in sql
 
 
 def test_default_not_null_and_nullable_runtime_validation():
@@ -45,11 +46,16 @@ def test_default_not_null_and_nullable_runtime_validation():
         column(str).validate(None)
 
 
-@pytest.mark.parametrize("kwargs", [
-    {"not_null": None}, {"not_null": 1}, {"not_null": "false"},
-    {"not_null": True, "nullable": False},
-    {"not_null": False, "nullable": True},
-])
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"not_null": None},
+        {"not_null": 1},
+        {"not_null": "false"},
+        {"not_null": True, "nullable": False},
+        {"not_null": False, "nullable": True},
+    ],
+)
 def test_invalid_flags_and_conflicting_declarations_rejected(kwargs):
     with pytest.raises((TypeError, ValueError)):
         column(str, **kwargs)

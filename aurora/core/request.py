@@ -1,18 +1,17 @@
 import asyncio
-from contextvars import ContextVar
 import json
 import re
+from collections.abc import Mapping
+from contextvars import ContextVar
 from dataclasses import dataclass
 from email.parser import BytesParser
 from email.policy import default as email_policy
-from collections.abc import Mapping
-from types import MappingProxyType
 from http.cookies import CookieError, SimpleCookie
+from types import MappingProxyType
 from typing import Any
 from urllib.parse import parse_qsl
 
 from aurora.core.http_exception import HTTPException
-
 
 MULTIPART_MAX_BYTES = 8 * 1024 * 1024
 SYNC_MAX_BODY_BYTES = 8 * 1024 * 1024
@@ -73,7 +72,8 @@ class Request:
 
     def __init__(self, scope, receive=None, *, max_body_bytes=None):
         if max_body_bytes is not None and (
-            isinstance(max_body_bytes, bool) or not isinstance(max_body_bytes, int)
+            isinstance(max_body_bytes, bool)
+            or not isinstance(max_body_bytes, int)
             or max_body_bytes < 0
         ):
             raise ValueError("max_body_bytes must be a non-negative integer or None")
@@ -129,8 +129,13 @@ class Request:
                 value = raw.decode("utf-8", errors="strict")
                 if re.search(r"%(?![0-9A-Fa-f]{2})", value):
                     raise ValueError("Invalid percent encoding")
-                pairs = parse_qsl(value, keep_blank_values=True, encoding="utf-8",
-                                  errors="strict", max_num_fields=1000)
+                pairs = parse_qsl(
+                    value,
+                    keep_blank_values=True,
+                    encoding="utf-8",
+                    errors="strict",
+                    max_num_fields=1000,
+                )
             except (ValueError, UnicodeDecodeError):
                 raise HTTPException(400, "Invalid query string") from None
             self._query_params = QueryParams(pairs)
@@ -178,7 +183,9 @@ class Request:
             raise ValueError("max_bytes must be a non-negative integer")
         effective_limit = self.max_body_bytes
         if max_bytes is not None:
-            effective_limit = min(max_bytes, effective_limit) if effective_limit is not None else max_bytes
+            effective_limit = (
+                min(max_bytes, effective_limit) if effective_limit is not None else max_bytes
+            )
 
         if self._body is not None:
             if effective_limit is not None and len(self._body) > effective_limit:
@@ -237,6 +244,7 @@ class Request:
         loop = _sync_controller_body.get()
 
         if loop is not None:
+
             async def parse():
                 await self.body(max_bytes=SYNC_MAX_BODY_BYTES)
                 return await self._json_async()
@@ -262,6 +270,7 @@ class Request:
         loop = _sync_controller_body.get()
 
         if loop is not None:
+
             async def parse():
                 await self.body(max_bytes=SYNC_MAX_BODY_BYTES)
                 return await self._form_async()
@@ -285,8 +294,11 @@ class Request:
             try:
                 text = await self.text()
                 fields = parse_qsl(
-                    text, keep_blank_values=True, encoding="utf-8",
-                    errors="strict", max_num_fields=1000,
+                    text,
+                    keep_blank_values=True,
+                    encoding="utf-8",
+                    errors="strict",
+                    max_num_fields=1000,
                 )
             except (ValueError, UnicodeDecodeError):
                 raise HTTPException(400, "Invalid form data") from None
@@ -321,7 +333,11 @@ class Request:
                 raise HTTPException(413, "Too many form fields")
             result = {}
             for part in parts:
-                if part.defects or part.is_multipart() or part.get_content_disposition() != "form-data":
+                if (
+                    part.defects
+                    or part.is_multipart()
+                    or part.get_content_disposition() != "form-data"
+                ):
                     raise ValueError("Invalid multipart part")
                 name = part.get_param("name", header="content-disposition")
                 if not isinstance(name, str) or not name or "\x00" in name:

@@ -1,13 +1,13 @@
 """E2: selected-model FK resolution, action DDL and immutable v1 history."""
+
 import sqlite3
 
 import pytest
 
+from aurora.database.migration_review import snapshot_fingerprint
 from aurora.database.models import Model, column
-from aurora.database.schema import create_table_sql
-from aurora.database.init_validation import validate_init_models
-from aurora.database.snapshots import schema_snapshot, compare_snapshots, _snapshot_tables
-from aurora.database.migration_format import snapshot_fingerprint
+from aurora.database.schema import create_table_sql, validate_init_models
+from aurora.database.snapshots import _snapshot_tables, compare_snapshots, schema_snapshot
 
 
 class E2Customer(Model):
@@ -39,10 +39,18 @@ def test_scoped_sql_and_snapshot_resolve_physical_table():
         assert snapshot["format"] == "aurorasql.schema.v2"
         assert compare_snapshots(snapshot, snapshot) == []
         assert len(snapshot_fingerprint(snapshot)) == 64
-        col = next(c for t in snapshot["tables"] if t["name"] == "e2_orders"
-                   for c in t["columns"] if c["name"] == "customer_id")
+        col = next(
+            c
+            for t in snapshot["tables"]
+            if t["name"] == "e2_orders"
+            for c in t["columns"]
+            if c["name"] == "customer_id"
+        )
         assert (col["references"], col["on_update"], col["on_delete"]) == (
-            "e2_customers.id", "NO ACTION", "CASCADE")
+            "e2_customers.id",
+            "NO ACTION",
+            "CASCADE",
+        )
 
 
 def test_existing_migration_paths_fail_closed():
@@ -96,9 +104,11 @@ def test_set_null_and_set_default_rejected_when_unsupported():
         column(int, reference="e2_customers.id", on_delete="SET NULL")
     with pytest.raises(ValueError, match="default"):
         column(int, reference="e2_customers.id", on_delete="SET DEFAULT")
+
     class DefaultAction(Model):
         __table__ = "e2_default_action"
         customer_id = column(int, reference="e2_customers.id", on_delete="SET DEFAULT", default=1)
+
     with pytest.raises(ValueError, match="MySQL"):
         create_table_sql(DefaultAction, "mysql", models=(DefaultAction, E2Customer))
 
@@ -108,6 +118,7 @@ def test_historical_v1_remains_valid_and_cross_version_refuses():
         __table__ = "e2_legacy"
         id = column(int, primary_key=True)
         customer_id = column(int, reference="e2_customers.id")
+
     v1 = schema_snapshot(Legacy, dialect="sqlite")
     assert v1["format"] == "aurorasql.schema.v1"
     fingerprint = snapshot_fingerprint(v1)
@@ -137,7 +148,7 @@ def test_public_create_only_aurorasql_flow():
 
 def test_readonly_sqlite_planner_compares_declared_actions():
     from aurora.database import connect
-    from aurora.database.planning import plan_schema
+    from aurora.database.schema_planning import plan_schema
 
     with connect("sqlite:///:memory:") as db:
         db.execute_write("PRAGMA foreign_keys=ON")
@@ -151,8 +162,7 @@ def test_readonly_sqlite_planner_compares_declared_actions():
 
 
 def test_legacy_live_evidence_readers_reject_v2_before_inspection():
-    from aurora.database.live_schema_evidence import inspect_reviewed_baseline
-    from aurora.database.strict_schema_evidence import assess_strict_schema
+    from aurora.database.schema_inspection import assess_strict_schema, inspect_reviewed_baseline
 
     class NoIO:
         dialect = "sqlite"

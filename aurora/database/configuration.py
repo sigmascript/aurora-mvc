@@ -2,15 +2,16 @@
 
 No SQLAlchemy dependency, implicit connections, or schema changes.
 """
-from collections.abc import Mapping
+
 import os
 import re
+from collections.abc import Mapping
 from pathlib import Path
+from threading import RLock
 from types import MappingProxyType
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
-from .core import connect
-
+from .connections import connect
 
 _ALIAS = re.compile(r"^[a-z][a-z0-9_]*$")
 _ENV = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -20,7 +21,9 @@ _DRIVERS = frozenset(("sqlite", "sqlite+pysqlite", "mysql+pymysql", "postgresql+
 def _canonical_url(url):
     parsed = urlsplit(url)
     if parsed.scheme == "postgres+psycopg":
-        return urlunsplit(("postgresql+psycopg", parsed.netloc, parsed.path, parsed.query, parsed.fragment))
+        return urlunsplit(
+            ("postgresql+psycopg", parsed.netloc, parsed.path, parsed.query, parsed.fragment)
+        )
     return url
 
 
@@ -53,19 +56,22 @@ def _destination_identity(parsed):
     return (backend, parsed.hostname.rstrip("."), port, unquote(parsed.path.lstrip("/")))
 
 
-
 def _readable_url(name, entry):
     """Convert explicit key/value settings to the existing AuroraSQL URL contract."""
     engine = entry.get("engine")
     if engine not in ("sqlite", "mysql", "postgresql", "postgres"):
-        raise ValueError(f"Database '{name}' requires engine sqlite, mysql, postgres, or postgresql")
+        raise ValueError(
+            f"Database '{name}' requires engine sqlite, mysql, postgres, or postgresql"
+        )
 
     if engine == "postgres":
         engine = "postgresql"
 
     if engine == "sqlite":
         if "database" in entry:
-            raise ValueError(f"Database '{name}' SQLite accepts only engine and optional extension; remove database")
+            raise ValueError(
+                f"Database '{name}' SQLite accepts only engine and optional extension; remove database"
+            )
         if set(entry) - {"engine", "extension"}:
             raise ValueError(f"Database '{name}' SQLite accepts only engine and optional extension")
         extension = entry.get("extension", "sqlite3")
@@ -92,8 +98,15 @@ def _readable_url(name, entry):
         raise ValueError(f"Database '{name}' has an invalid host")
     if type(port) is not int or not 1 <= port <= 65535:
         raise ValueError(f"Database '{name}' requires a TCP port from 1 to 65535")
-    if (not isinstance(name, str) or not name or "/" in name or "?" in name or "#" in name
-            or not isinstance(user, str) or not user):
+    if (
+        not isinstance(name, str)
+        or not name
+        or "/" in name
+        or "?" in name
+        or "#" in name
+        or not isinstance(user, str)
+        or not user
+    ):
         raise ValueError(f"Database '{name}' has an invalid database name or username")
     password = entry.get("password")
     if "password_env" in entry:
@@ -102,7 +115,9 @@ def _readable_url(name, entry):
             raise ValueError(f"Database '{name}' has an invalid password environment variable name")
         password = os.environ.get(variable)
         if password is None or not password:
-            raise ValueError(f"Database '{name}' requires nonempty environment variable '{variable}'")
+            raise ValueError(
+                f"Database '{name}' requires nonempty environment variable '{variable}'"
+            )
     if password is not None and not isinstance(password, str):
         raise ValueError(f"Database '{name}' has an invalid password")
     address = f"[{host}]" if ":" in host and not host.startswith("[") else host
@@ -139,7 +154,9 @@ class DatabaseConfiguration:
             if set(settings) in ({"url"}, {"url_env"}):
                 url = None
             elif "url" in settings or "url_env" in settings:
-                raise ValueError(f"Database '{name}' cannot mix URL and readable connection settings")
+                raise ValueError(
+                    f"Database '{name}' cannot mix URL and readable connection settings"
+                )
             else:
                 url = _readable_url(name, settings)
 
@@ -152,7 +169,9 @@ class DatabaseConfiguration:
                 url = os.environ.get(variable)
 
                 if not url or not url.strip():
-                    raise ValueError(f"Database '{name}' requires a nonempty environment variable '{variable}'")
+                    raise ValueError(
+                        f"Database '{name}' requires a nonempty environment variable '{variable}'"
+                    )
             elif "url" in settings:
                 url = settings["url"]
 
@@ -185,12 +204,18 @@ class DatabaseConfiguration:
             if parsed.scheme.startswith("sqlite"):
                 raw_path = unquote(parsed.path)
                 if raw_path in ("/:memory:", "") or raw_path.startswith("//"):
-                    raise ValueError(f"Database '{name}' URL must identify a project-relative SQLite file")
+                    raise ValueError(
+                        f"Database '{name}' URL must identify a project-relative SQLite file"
+                    )
                 filename = Path(physical).name
                 extension = Path(filename).suffix.lstrip(".")
-                stem = filename[:-(len(extension) + 1)] if extension else filename
-                if ("/" in physical or "\\" in physical or stem != name or
-                        extension not in ("sqlite3", "sqlite", "db", "")):
+                stem = filename[: -(len(extension) + 1)] if extension else filename
+                if (
+                    "/" in physical
+                    or "\\" in physical
+                    or stem != name
+                    or extension not in ("sqlite3", "sqlite", "db", "")
+                ):
                     raise ValueError(f"Database '{name}' URL does not match its configured name")
             elif physical != name:
                 raise ValueError(f"Database '{name}' URL does not match its configured name")
@@ -229,3 +254,66 @@ class DatabaseConfiguration:
 def configure_databases(databases):
     """Install named database connections without opening them."""
     return DatabaseConfiguration(databases)
+
+
+class DatabaseRegistry:
+    """Resolve configured databases without implicit schema changes."""
+
+    def __init__(self, configuration: DatabaseConfiguration):
+        if not isinstance(configuration, DatabaseConfiguration):
+            raise TypeError("configuration must be a DatabaseConfiguration")
+
+        self._configuration = configuration
+        self._instances = {}
+        self._lock = RLock()
+        self._closed = False
+
+    def names(self):
+        return self._configuration.names()
+
+    def get(self, alias="default"):
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("Database registry is closed")
+
+            self._configuration.resolve(alias)
+
+            if alias not in self._instances:
+                self._instances[alias] = self._configuration.connect(alias)
+
+            return self._instances[alias]
+
+    def initialized_names(self):
+        with self._lock:
+            return tuple(self._instances)
+
+    def close(self):
+        with self._lock:
+            if self._closed:
+                return
+
+            self._closed = True
+            instances = tuple(self._instances.values())
+            self._instances.clear()
+
+        failure = None
+
+        for connection in instances:
+            try:
+                connection.close()
+            except Exception as error:
+                # One failed close must not strand connections for other aliases.
+                if failure is None:
+                    failure = error
+
+        if failure is not None:
+            raise failure
+
+    def __enter__(self):
+        if self._closed:
+            raise RuntimeError("Database registry is closed")
+
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()

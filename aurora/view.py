@@ -12,9 +12,7 @@ class View:
     ``status_code`` and ``headers`` control the eventual HTTP response.
     """
 
-    def __init__(
-        self, template: str, context=None, *, status_code=200, headers=None, **values
-    ):
+    def __init__(self, template: str, context=None, *, status_code=200, headers=None, **values):
         if context is not None and not isinstance(context, dict):
             raise TypeError("View context must be a dictionary")
 

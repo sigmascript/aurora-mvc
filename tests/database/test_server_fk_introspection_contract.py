@@ -3,8 +3,8 @@
 import pytest
 
 from aurora.database import Model, column
-from aurora.database.inspection import inspect_table
-from aurora.database import planning
+from aurora.database import schema_planning as planning
+from aurora.database.schema_inspection import inspect_table
 
 
 class Child(Model):
@@ -27,17 +27,45 @@ class FakeDatabase:
         self.queries.append((sql, params))
         if self.dialect == "mysql":
             if "information_schema.COLUMNS" in sql:
-                return [dict(name="id", sql_type="bigint", nullable="NO", column_key="PRI", default_sql=None),
-                        dict(name="parent_id", sql_type="bigint", nullable="NO", column_key="", default_sql=None)]
+                return [
+                    dict(
+                        name="id",
+                        sql_type="bigint",
+                        nullable="NO",
+                        column_key="PRI",
+                        default_sql=None,
+                    ),
+                    dict(
+                        name="parent_id",
+                        sql_type="bigint",
+                        nullable="NO",
+                        column_key="",
+                        default_sql=None,
+                    ),
+                ]
             if "information_schema.STATISTICS" in sql:
                 return []
             if "REFERENTIAL_CONSTRAINTS" in sql:
                 return self.fk_rows
         else:
-            if sql.startswith("SELECT a.attname AS name") :
-                return [dict(name="id", sql_type="bigint", nullable=False, primary_key=True, default_sql=None),
-                        dict(name="parent_id", sql_type="bigint", nullable=False, primary_key=False, default_sql=None)]
-            if sql.startswith("SELECT ci.relname AS index_name") :
+            if sql.startswith("SELECT a.attname AS name"):
+                return [
+                    dict(
+                        name="id",
+                        sql_type="bigint",
+                        nullable=False,
+                        primary_key=True,
+                        default_sql=None,
+                    ),
+                    dict(
+                        name="parent_id",
+                        sql_type="bigint",
+                        nullable=False,
+                        primary_key=False,
+                        default_sql=None,
+                    ),
+                ]
+            if sql.startswith("SELECT ci.relname AS index_name"):
                 return []
             if "FROM pg_catalog.pg_constraint c" in sql:
                 return self.fk_rows
@@ -45,14 +73,34 @@ class FakeDatabase:
 
 
 def fk_row(dialect, *, update="NO ACTION", delete="NO ACTION", count=1):
-    row = dict(source_column="parent_id", target_table="parents", target_column="id", column_count=count)
+    row = dict(
+        source_column="parent_id", target_table="parents", target_column="id", column_count=count
+    )
     if dialect == "mysql":
-        row.update(constraint_name="fk_child_parent", update_rule=update, delete_rule=delete,
-                   source_schema="aurorasql_test", target_schema="aurorasql_test")
+        row.update(
+            constraint_name="fk_child_parent",
+            update_rule=update,
+            delete_rule=delete,
+            source_schema="aurorasql_test",
+            target_schema="aurorasql_test",
+        )
     else:
-        codes = {"NO ACTION": "a", "RESTRICT": "r", "CASCADE": "c", "SET NULL": "n", "SET DEFAULT": "d"}
-        row.update(constraint_name="fk_child_parent", update_code=codes[update], delete_code=codes[delete],
-                   same_schema=True, validated=True, deferrable=False, match_type="s")
+        codes = {
+            "NO ACTION": "a",
+            "RESTRICT": "r",
+            "CASCADE": "c",
+            "SET NULL": "n",
+            "SET DEFAULT": "d",
+        }
+        row.update(
+            constraint_name="fk_child_parent",
+            update_code=codes[update],
+            delete_code=codes[delete],
+            same_schema=True,
+            validated=True,
+            deferrable=False,
+            match_type="s",
+        )
     return row
 
 
@@ -70,7 +118,10 @@ def test_server_inspection_verifies_single_column_foreign_key(dialect):
 
 
 @pytest.mark.parametrize("dialect", ["mysql", "postgresql"])
-@pytest.mark.parametrize("update,delete", [("CASCADE", "NO ACTION"), ("NO ACTION", "SET NULL"), ("RESTRICT", "SET DEFAULT")])
+@pytest.mark.parametrize(
+    "update,delete",
+    [("CASCADE", "NO ACTION"), ("NO ACTION", "SET NULL"), ("RESTRICT", "SET DEFAULT")],
+)
 def test_server_action_drift_is_detected(dialect, update, delete):
     db = FakeDatabase(dialect, [fk_row(dialect, update=update, delete=delete)])
     result = planning.plan_schema(db, Child)
@@ -108,7 +159,9 @@ def test_cross_schema_fk_not_verified_as_same_database(dialect):
     assert result.foreign_key_actions is None
 
 
-@pytest.mark.parametrize("flag,value", [("validated", False), ("deferrable", True), ("match_type", "f")])
+@pytest.mark.parametrize(
+    "flag,value", [("validated", False), ("deferrable", True), ("match_type", "f")]
+)
 def test_postgresql_unproven_constraint_semantics_require_review(flag, value):
     row = fk_row("postgresql")
     row[flag] = value

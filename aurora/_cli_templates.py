@@ -34,7 +34,7 @@ class Home(Controller):
         return View("home", title="Welcome to {name}")
 '''
 
-_MVC_LAYOUT = '''<!DOCTYPE html>
+_MVC_LAYOUT = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="utf-8">
@@ -52,9 +52,9 @@ _MVC_LAYOUT = '''<!DOCTYPE html>
     </main>
 </body>
 </html>
-'''
+"""
 
-_MVC_VIEW = '''{{% extends "layout.html" %}}
+_MVC_VIEW = """{{% extends "layout.html" %}}
 {{% from "components/actions.html" import action_link %}}
 
 {{% block title %}}{{{{ title }}}}{{% endblock %}}
@@ -68,7 +68,7 @@ _MVC_VIEW = '''{{% extends "layout.html" %}}
         {{{{ action_link("Aurora documentation", "https://auroramvc.com") }}}}
     </section>
 {{% endblock %}}
-'''
+"""
 
 
 _MODULAR_APP = '''"""{name} modular MVC application."""
@@ -100,7 +100,7 @@ class Blog(Controller):
         return View("blog/index", title="Blog")
 '''
 
-_MODULAR_LAYOUT = '''<!DOCTYPE html>
+_MODULAR_LAYOUT = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="utf-8">
@@ -119,9 +119,9 @@ _MODULAR_LAYOUT = '''<!DOCTYPE html>
     </main>
 </body>
 </html>
-'''
+"""
 
-_MODULAR_HOME_VIEW = '''{{% extends "layout.html" %}}
+_MODULAR_HOME_VIEW = """{{% extends "layout.html" %}}
 
 {{% block title %}}{{{{ title }}}}{{% endblock %}}
 
@@ -131,9 +131,9 @@ _MODULAR_HOME_VIEW = '''{{% extends "layout.html" %}}
        <code>apps/home/controllers/Home.py</code> and
        <code>apps/home/views/index.html</code> to get started.</p>
 {{% endblock %}}
-'''
+"""
 
-_MODULAR_BLOG_VIEW = '''{{% extends "layout.html" %}}
+_MODULAR_BLOG_VIEW = """{{% extends "layout.html" %}}
 {{% from "components.html" import action_link %}}
 
 {{% block title %}}{{{{ title }}}}{{% endblock %}}
@@ -143,28 +143,28 @@ _MODULAR_BLOG_VIEW = '''{{% extends "layout.html" %}}
     <p>Your blog app is ready. Each app has its own controllers and views.</p>
     {{{{ action_link("Back to home", "/") }}}}
 {{% endblock %}}
-'''
+"""
 
 
 # Includes and macros are native Jinja2 features: no extra Aurora runtime API.
-_MVC_COMPONENTS = '''{% macro action_link(label, href) -%}
+_MVC_COMPONENTS = """{% macro action_link(label, href) -%}
     <a class="action-link" href="{{ href }}">{{ label }}</a>
 {%- endmacro %}
-'''
+"""
 
-_MODULAR_NAVIGATION = '''<nav aria-label="Main navigation">
+_MODULAR_NAVIGATION = """<nav aria-label="Main navigation">
     <a href="/">Home</a>
     <a href="/blog/">Blog</a>
 </nav>
-'''
+"""
 
-_MODULAR_COMPONENTS = '''{% macro action_link(label, href) -%}
+_MODULAR_COMPONENTS = """{% macro action_link(label, href) -%}
     <a class="action-link" href="{{ href }}">{{ label }}</a>
 {%- endmacro %}
-'''
+"""
 
 
-_MVC_CSS = '''/* Aurora MVC starter: no external CSS dependencies. */
+_MVC_CSS = """/* Aurora MVC starter: no external CSS dependencies. */
 :root { color-scheme: light; font-family: system-ui, sans-serif; }
 * { box-sizing: border-box; }
 body { margin: 0; color: #17212b; background: #f7f9fc; line-height: 1.6; }
@@ -176,9 +176,9 @@ h1 { line-height: 1.2; }
 .action-link { display: inline-block; padding: .6rem 1rem; background: #173e73; color: #fff; border-radius: .4rem; text-decoration: none; }
 a:focus-visible { outline: 3px solid #ffab40; outline-offset: 3px; }
 @media (max-width: 40rem) { main { margin: 1.5rem auto; } .welcome { padding: 1.25rem; } }
-'''
+"""
 
-_MODULAR_CSS = '''/* Aurora modular starter: no external CSS dependencies. */
+_MODULAR_CSS = """/* Aurora modular starter: no external CSS dependencies. */
 :root { color-scheme: light; font-family: system-ui, sans-serif; }
 * { box-sizing: border-box; }
 body { margin: 0; color: #17212b; background: #f7f9fc; line-height: 1.6; }
@@ -191,4 +191,4 @@ h1 { line-height: 1.2; }
 .action-link { display: inline-block; padding: .6rem 1rem; background: #173e73; color: #fff; border-radius: .4rem; text-decoration: none; }
 a:focus-visible { outline: 3px solid #ffab40; outline-offset: 3px; }
 @media (max-width: 40rem) { main { margin: 1.5rem 1rem; padding: 1.25rem; } }
-'''
+"""

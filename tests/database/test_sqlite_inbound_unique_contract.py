@@ -3,10 +3,10 @@
 import sqlite3
 
 import pytest
+from test_sqlite_fk_column_addition_contract import _project
 
 from aurora.cli import main
-from aurora.database.sqlite_forward_history import read_history
-from test_sqlite_fk_column_addition_contract import _project
+from aurora.database.migration_history import sqlite_read_history as read_history
 
 
 def _setup_project(root, monkeypatch):
@@ -31,9 +31,7 @@ def _seed(root, usernames):
                 "INSERT INTO users(id, username) VALUES(?, ?)",
                 (identifier, username),
             )
-        database.execute(
-            "INSERT INTO messages(id, user_id, title) VALUES(1, 1, 'retained')"
-        )
+        database.execute("INSERT INTO messages(id, user_id, title) VALUES(1, 1, 'retained')")
 
 
 def _set_unique(users):
@@ -56,7 +54,8 @@ def test_parent_unique_transition_preserves_child_fk_and_history(tmp_path, monke
     with sqlite3.connect(tmp_path / "data.sqlite3") as database:
         database.execute("PRAGMA foreign_keys=ON")
         assert database.execute("SELECT id, username FROM users ORDER BY id").fetchall() == [
-            (1, "alice"), (2, "bob")
+            (1, "alice"),
+            (2, "bob"),
         ]
         assert database.execute("SELECT user_id FROM messages").fetchone() == (1,)
         assert database.execute("PRAGMA foreign_key_check").fetchall() == []
@@ -69,8 +68,7 @@ def test_parent_unique_transition_preserves_child_fk_and_history(tmp_path, monke
             database.execute("INSERT INTO users(id, username) VALUES(3, 'alice')")
 
         with pytest.raises(sqlite3.IntegrityError):
-            database.execute("INSERT INTO messages(id, user_id, title) "
-                             "VALUES(2, 999, 'orphan')")
+            database.execute("INSERT INTO messages(id, user_id, title) VALUES(2, 999, 'orphan')")
 
 
 def test_duplicate_parent_values_refuse_before_fk_rebuild(tmp_path, monkeypatch):
@@ -85,7 +83,8 @@ def test_duplicate_parent_values_refuse_before_fk_rebuild(tmp_path, monkeypatch)
     with sqlite3.connect(tmp_path / "data.sqlite3") as database:
         assert database.execute("SELECT COUNT(*) FROM __migrations__").fetchone() == (1,)
         assert database.execute("SELECT username FROM users ORDER BY id").fetchall() == [
-            ("same",), ("same",)
+            ("same",),
+            ("same",),
         ]
         assert database.execute("PRAGMA foreign_key_check").fetchall() == []
 
@@ -114,34 +113,41 @@ def test_removing_parent_unique_keeps_child_fk_and_rows(tmp_path, monkeypatch):
         read_history(database, tmp_path, tmp_path / "data.sqlite3")
 
 
-def test_parent_unique_record_failure_rolls_back_and_restores_fk(
-        tmp_path, monkeypatch):
-    from aurora.database import sqlite_forward_history as history
-    from aurora.database.cli_plan import _select_models
+def test_parent_unique_record_failure_rolls_back_and_restores_fk(tmp_path, monkeypatch):
     from types import SimpleNamespace
+
+    from aurora.database import migration_execution, migration_history, migration_review
+    from aurora.database.cli_check import _select_models
 
     users = _setup_project(tmp_path, monkeypatch)
     _seed(tmp_path, ["alice", "bob"])
     _set_unique(users)
 
-    _, models = _select_models(SimpleNamespace(
-        config=None, database="data", model=None,
-        models_config="aurora_models.json"
-    ), tmp_path)
+    _, models = _select_models(
+        SimpleNamespace(
+            config=None, database="data", model=None, models_config="aurora_models.json"
+        ),
+        tmp_path,
+    )
     database_file = tmp_path / "data.sqlite3"
 
     with sqlite3.connect(database_file, isolation_level=None) as database:
-        proposal = history.review_unique_change(database, tmp_path, database_file, models)
+        proposal = migration_review.review_unique_change(database, tmp_path, database_file, models)
         assert proposal is not None
 
         def reject_record(*args, **kwargs):
             raise RuntimeError("simulated history failure")
 
-        monkeypatch.setattr(history, "_new_record", reject_record)
+        monkeypatch.setattr(migration_history, "sqlite_new_record", reject_record)
         with pytest.raises(RuntimeError, match="simulated history failure"):
-            history.migrate_default_change(
-                database, tmp_path, database_file, models,
-                "Rebuild must roll back", proposal, kind="unique_mismatch",
+            migration_execution.sqlite_migrate_default_change(
+                database,
+                tmp_path,
+                database_file,
+                models,
+                "Rebuild must roll back",
+                proposal,
+                kind="unique_mismatch",
             )
 
         assert database.execute("PRAGMA foreign_keys").fetchone() == (1,)

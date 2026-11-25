@@ -3,7 +3,6 @@ from urllib.parse import quote
 
 from aurora.core.request import Request
 
-
 # HTTP method names use the RFC token character set (ASCII only).
 _METHOD_TOKEN = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+\Z")
 _ROUTE_PLACEHOLDER = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
@@ -72,7 +71,7 @@ class Route:
         position = 0
 
         for match in _ROUTE_PLACEHOLDER.finditer(path):
-            parts.append(re.escape(path[position:match.start()]))
+            parts.append(re.escape(path[position : match.start()]))
             parts.append(f"(?P<{match.group(1)}>[^/]+)")
             position = match.end()
 

@@ -5,7 +5,6 @@ session manager (Correction #2.2), not this data object.
 """
 
 import json
-import secrets
 from collections.abc import MutableMapping
 
 

@@ -6,13 +6,16 @@ import pytest
 
 from aurora._cli_scaffolding import create_project
 from aurora.cli import main
-from aurora.database.cli_plan import _load_config, resolve_project_database
+from aurora.database.cli_check import _load_config, resolve_project_database
 
 
 @pytest.mark.parametrize("layout", ["mvc", "modular"])
-def test_generated_project_selects_named_database_and_registers_models(tmp_path, monkeypatch, layout):
-    root = create_project("sample", directory=tmp_path,
-                          mvc=layout == "mvc", modular=layout == "modular")
+def test_generated_project_selects_named_database_and_registers_models(
+    tmp_path, monkeypatch, layout
+):
+    root = create_project(
+        "sample", directory=tmp_path, mvc=layout == "mvc", modular=layout == "modular"
+    )
     settings = json.loads((root / "aurora_config.json").read_text())
     databases = json.loads((root / "aurora_databases.json").read_text())
     assert settings["default_database"] == "data"
@@ -49,11 +52,32 @@ def test_existing_named_legacy_project_is_never_rewritten(tmp_path, monkeypatch)
     assert json.loads((root / "aurora_databases.json").read_text()) == existing
 
 
-@pytest.mark.parametrize("engine, entry", [
-    ("sqlite", {"engine": "sqlite", "extension": "db"}),
-    ("mysql", {"engine": "mysql", "host": "localhost", "username": "example", "password": "", "port": 3306}),
-    ("postgresql", {"engine": "postgresql", "host": "localhost", "username": "example", "password": "", "port": 5432}),
-])
+@pytest.mark.parametrize(
+    "engine, entry",
+    [
+        ("sqlite", {"engine": "sqlite", "extension": "db"}),
+        (
+            "mysql",
+            {
+                "engine": "mysql",
+                "host": "localhost",
+                "username": "example",
+                "password": "",
+                "port": 3306,
+            },
+        ),
+        (
+            "postgresql",
+            {
+                "engine": "postgresql",
+                "host": "localhost",
+                "username": "example",
+                "password": "",
+                "port": 5432,
+            },
+        ),
+    ],
+)
 def test_explicit_model_database_selection(tmp_path, monkeypatch, engine, entry):
     root = create_project("sample", directory=tmp_path, mvc=True)
     databases = json.loads((root / "aurora_databases.json").read_text())
@@ -96,7 +120,10 @@ def test_explicit_database_selection_modular(tmp_path, monkeypatch):
     manifest_path.write_text(json.dumps(manifest))
     monkeypatch.chdir(root)
     assert main(["model", "add", "Invoice", "--app", "home", "--database", "accounting"]) == 0
-    assert "apps.home.models.Invoice:Invoice" in json.loads(manifest_path.read_text())["databases"]["accounting"]
+    assert (
+        "apps.home.models.Invoice:Invoice"
+        in json.loads(manifest_path.read_text())["databases"]["accounting"]
+    )
 
 
 def test_reject_registered_shared_model_reference_before_source_creation(tmp_path, monkeypatch):

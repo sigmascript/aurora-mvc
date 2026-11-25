@@ -61,8 +61,17 @@ def test_binary_route_head_has_get_length_but_no_body():
         async def send(event):
             events.append(event)
 
-        await app({"type": "http", "path": "/binary", "method": method,
-                   "headers": [], "query_string": b""}, receive, send)
+        await app(
+            {
+                "type": "http",
+                "path": "/binary",
+                "method": method,
+                "headers": [],
+                "query_string": b"",
+            },
+            receive,
+            send,
+        )
         return events
 
     get = asyncio.run(exchange("GET"))

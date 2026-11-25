@@ -2,8 +2,6 @@
 
 import asyncio
 
-import pytest
-
 from aurora.core.application import Application
 from aurora.core.controller import Controller
 from aurora.core.response import Response
@@ -18,11 +16,17 @@ def exchange(app, path, method="GET"):
     async def send(event):
         events.append(event)
 
-    asyncio.run(app({"type": "http", "method": method, "path": path,
-                     "headers": [], "query_string": b""}, receive, send))
+    asyncio.run(
+        app(
+            {"type": "http", "method": method, "path": path, "headers": [], "query_string": b""},
+            receive,
+            send,
+        )
+    )
     start = next(event for event in events if event["type"] == "http.response.start")
-    body = b"".join(event.get("body", b"") for event in events
-                    if event["type"] == "http.response.body")
+    body = b"".join(
+        event.get("body", b"") for event in events if event["type"] == "http.response.body"
+    )
     return start["status"], dict(start["headers"]), body
 
 
@@ -57,7 +61,9 @@ def test_controller_get_serves_head_and_missing_method_is_405():
     app.route("/items", Items)
     assert exchange(app, "/items", "GET")[2] == b"items"
     assert exchange(app, "/items", "HEAD") == (
-        200, {b"content-type": b"text/plain; charset=utf-8", b"content-length": b"5"}, b""
+        200,
+        {b"content-type": b"text/plain; charset=utf-8", b"content-length": b"5"},
+        b"",
     )
     status, headers, _ = exchange(app, "/items", "POST")
     assert (status, headers[b"allow"]) == (405, b"GET, HEAD")

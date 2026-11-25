@@ -20,14 +20,13 @@ from aurora.core.response import JSONResponse, Response
 from aurora.core.router import Router
 from aurora.core.static_files import serve_static_file
 from aurora.rendering import ViewRenderer
-from aurora.view import View
 from aurora.security.sessions import (
     SessionConflict,
     SessionManager,
     SessionStorageError,
 )
 from aurora.urls import _current_application, with_query
-
+from aurora.view import View
 
 _logger = logging.getLogger("aurora.runtime")
 
@@ -68,7 +67,9 @@ class Application:
         )
         self.locales, self.default_locale = validate_locales(locales, default_locale)
         validate_locale_cookie(locale_cookie_name, self.locales, settings)
-        if locale_entry_policy not in ("explicit", "default", "remembered") or not isinstance(locale_entry_policy, str):
+        if locale_entry_policy not in ("explicit", "default", "remembered") or not isinstance(
+            locale_entry_policy, str
+        ):
             raise ValueError("locale_entry_policy must be explicit, default, or remembered")
         if locale_entry_policy != "explicit" and self.locales is None:
             raise ValueError("Locale entry redirects require configured locales")
@@ -128,8 +129,10 @@ class Application:
             overlap.update(set(constructor_options) & {"sessions", "session_settings"})
 
         if overlap:
-            raise ValueError("Application options supplied in both JSON and Python: "
-                             + ", ".join(sorted(overlap)))
+            raise ValueError(
+                "Application options supplied in both JSON and Python: "
+                + ", ".join(sorted(overlap))
+            )
 
         options = {**configuration.constructor_options, **constructor_options}
         app = cls(**options)
@@ -137,12 +140,14 @@ class Application:
         if app.renderer is not None:
             app.renderer.environment.globals["constants"] = app.constants
         app.timezone = configuration.tzinfo
-        app.settings = MappingProxyType({
-            "production": app.production,
-            "name": configuration.name,
-            "timezone": configuration.timezone_name,
-            "constants": configuration.constants,
-        })
+        app.settings = MappingProxyType(
+            {
+                "production": app.production,
+                "name": configuration.name,
+                "timezone": configuration.timezone_name,
+                "constants": configuration.constants,
+            }
+        )
         from pathlib import Path
 
         app._project_root = Path(source).resolve().parent
@@ -165,8 +170,12 @@ class Application:
 
         if apps.is_dir() and not apps.is_symlink():
             for app_dir in sorted(apps.iterdir()):
-                if (app_dir.is_dir() and not app_dir.is_symlink()
-                        and app_dir.name.isidentifier() and not app_dir.name.startswith("_")):
+                if (
+                    app_dir.is_dir()
+                    and not app_dir.is_symlink()
+                    and app_dir.name.isidentifier()
+                    and not app_dir.name.startswith("_")
+                ):
                     candidate = app_dir / "views"
 
                     if candidate.is_dir() and not candidate.is_symlink():
@@ -241,8 +250,11 @@ class Application:
 
     def add_error_handler(self, status_code, handler):
         """Register a (request, HTTPException) handler for an HTTP error status."""
-        if (isinstance(status_code, bool) or not isinstance(status_code, int)
-                or not 400 <= status_code <= 599):
+        if (
+            isinstance(status_code, bool)
+            or not isinstance(status_code, int)
+            or not 400 <= status_code <= 599
+        ):
             raise ValueError("HTTP error status must be an integer from 400 to 599")
         if not callable(handler):
             raise TypeError("HTTP error handler must be callable")
@@ -251,8 +263,10 @@ class Application:
 
     def error(self, status_code):
         """Decorate a synchronous or asynchronous HTTP error handler."""
+
         def register(handler):
             return self.add_error_handler(status_code, handler)
+
         return register
 
     def _log_unexpected_error(self, request, context, error):
@@ -280,8 +294,11 @@ class Application:
             if headers:
                 required = {name.lower() for name in headers}
                 response.headers = {
-                    **{key: value for key, value in response.headers.items()
-                       if isinstance(key, str) and key.lower() not in required},
+                    **{
+                        key: value
+                        for key, value in response.headers.items()
+                        if isinstance(key, str) and key.lower() not in required
+                    },
                     **headers,
                 }
             response.prepare()  # Broken custom responses must fail before sending.
@@ -329,7 +346,9 @@ class Application:
             raise TypeError("Static asset path must be a relative string")
         parts = path.split("/")
         if not parts or any(
-            not part or part in {".", ".."} or part.startswith(".")
+            not part
+            or part in {".", ".."}
+            or part.startswith(".")
             or any(char in part for char in ("\\", "%", "?", "#", ":", "\x00"))
             or any(ord(char) < 32 or ord(char) == 127 for char in part)
             for part in parts
@@ -371,8 +390,13 @@ class Application:
             raise ValueError("Unsupported locale")
 
         response.set_cookie(
-            self.locale_cookie_name, language, path="/", max_age=max_age,
-            secure=secure, httponly=True, samesite="Lax",
+            self.locale_cookie_name,
+            language,
+            path="/",
+            max_age=max_age,
+            secure=secure,
+            httponly=True,
+            samesite="Lax",
         )
         return response
 
@@ -388,9 +412,8 @@ class Application:
         if scope["type"] != "http":
             return
 
-        if (
-            self.static_directory is not None
-            and scope.get("path", "").startswith(self.static_url + "/")
+        if self.static_directory is not None and scope.get("path", "").startswith(
+            self.static_url + "/"
         ):
             await serve_static_file(
                 scope, send, root=self.static_directory, url_prefix=self.static_url
@@ -422,13 +445,15 @@ class Application:
                 await self.session_manager.load(request)
 
             response = await self._run_http_middleware(request)
-            if (self.locale_entry_policy == "remembered"
-                    and request.locale is not None
-                    and request.preferred_locale != request.locale
-                    and request.method in {"GET", "HEAD"}
-                    and 200 <= response.status_code < 300
-                    and self.router.resolve(request)[0] is not None
-                    and not request.routing_path.startswith("/api/")):
+            if (
+                self.locale_entry_policy == "remembered"
+                and request.locale is not None
+                and request.preferred_locale != request.locale
+                and request.method in {"GET", "HEAD"}
+                and 200 <= response.status_code < 300
+                and self.router.resolve(request)[0] is not None
+                and not request.routing_path.startswith("/api/")
+            ):
                 self.remember_locale(
                     response, request.locale, secure=scope.get("scheme") == "https"
                 )
@@ -504,19 +529,34 @@ class Application:
 
             if kind == "lifespan.startup":
                 if self._lifespan_started or self._lifespan_stopped:
-                    await send({"type": "lifespan.startup.failed", "message": "Application already started or stopped"})
+                    await send(
+                        {
+                            "type": "lifespan.startup.failed",
+                            "message": "Application already started or stopped",
+                        }
+                    )
                     return
                 try:
                     for callback in self._startup_hooks:
                         await callback()
                 except BaseException:
-                    await send({"type": "lifespan.startup.failed", "message": "Application startup hook failed"})
+                    await send(
+                        {
+                            "type": "lifespan.startup.failed",
+                            "message": "Application startup hook failed",
+                        }
+                    )
                     return
                 self._lifespan_started = True
                 await send({"type": "lifespan.startup.complete"})
             elif kind == "lifespan.shutdown":
                 if self._lifespan_stopped:
-                    await send({"type": "lifespan.shutdown.failed", "message": "Application already stopped"})
+                    await send(
+                        {
+                            "type": "lifespan.shutdown.failed",
+                            "message": "Application already stopped",
+                        }
+                    )
                     return
                 try:
                     for callback in reversed(self._shutdown_hooks):
@@ -526,7 +566,12 @@ class Application:
                         self.database_registry.close()
                     self._lifespan_stopped = True
                 except BaseException:
-                    await send({"type": "lifespan.shutdown.failed", "message": "Application shutdown failed"})
+                    await send(
+                        {
+                            "type": "lifespan.shutdown.failed",
+                            "message": "Application shutdown failed",
+                        }
+                    )
                     return
                 await send({"type": "lifespan.shutdown.complete"})
                 return
@@ -540,20 +585,29 @@ class Application:
         route, params = self.router.resolve(request)
 
         if route is None:
-            if (self.locale_entry_policy != "explicit" and request.locale is None
-                    and request.method in {"GET", "HEAD"}
-                    and request.path != "/api" and not request.path.startswith("/api/")
-                    and any(registered.pattern.fullmatch(request.path)
-                            and ("GET" in registered.methods or "HEAD" in registered.methods)
-                            for registered in self.router.routes)):
+            if (
+                self.locale_entry_policy != "explicit"
+                and request.locale is None
+                and request.method in {"GET", "HEAD"}
+                and request.path != "/api"
+                and not request.path.startswith("/api/")
+                and any(
+                    registered.pattern.fullmatch(request.path)
+                    and ("GET" in registered.methods or "HEAD" in registered.methods)
+                    for registered in self.router.routes
+                )
+            ):
                 # A redirect is only available for a genuine localized route;
                 # explicit prefixes and unrelated paths never enter here.
-                language = (request.preferred_locale
-                            if self.locale_entry_policy == "remembered"
-                            else None) or self.default_locale
+                language = (
+                    request.preferred_locale if self.locale_entry_policy == "remembered" else None
+                ) or self.default_locale
                 raw_query = request.scope.get("query_string", b"")
-                if (not isinstance(raw_query, bytes) or not raw_query.isascii()
-                        or any(byte <= 32 or byte >= 127 or byte == 35 for byte in raw_query)):
+                if (
+                    not isinstance(raw_query, bytes)
+                    or not raw_query.isascii()
+                    or any(byte <= 32 or byte >= 127 or byte == 35 for byte in raw_query)
+                ):
                     return await self._http_error(request, 400, "Invalid query string")
                 if raw_query:
                     _ = request.query_params  # Validate percent escapes and UTF-8.
@@ -575,7 +629,9 @@ class Application:
                 if "GET" in allowed:
                     allowed.add("HEAD")
                 return await self._http_error(
-                    request, 405, "Method Not Allowed",
+                    request,
+                    405,
+                    "Method Not Allowed",
                     headers={"Allow": ", ".join(sorted(allowed))},
                 )
 
@@ -639,12 +695,17 @@ class Application:
                     raise TypeError("view_context must return a dictionary")
 
                 context = {**provided, **result.context}
-                result = View(result.name, context, status_code=result.status_code,
-                              headers={**self.view_headers, **result.headers})
+                result = View(
+                    result.name,
+                    context,
+                    status_code=result.status_code,
+                    headers={**self.view_headers, **result.headers},
+                )
 
             # Request-local template navigation; never mutate shared Jinja globals.
             # Explicit controller context retains precedence.
             if self.locales is not None:
+
                 def localized_url_for(name, *, language=None, **params):
                     target = request.locale if language is None else language
 
@@ -656,13 +717,17 @@ class Application:
                 context = dict(result.context)
                 context.setdefault("locale", request.locale)
                 context.setdefault("localized_url_for", localized_url_for)
-                result = View(result.name, context, status_code=result.status_code,
-                              headers=result.headers)
+                result = View(
+                    result.name, context, status_code=result.status_code, headers=result.headers
+                )
 
             html = self.renderer.render(result)
-            return Response(html, status_code=result.status_code,
-                            content_type="text/html; charset=utf-8",
-                            headers={**self.view_headers, **result.headers})
+            return Response(
+                html,
+                status_code=result.status_code,
+                content_type="text/html; charset=utf-8",
+                headers={**self.view_headers, **result.headers},
+            )
 
         # Explicit responses and rendered views always take precedence.
         # AuroraSQL ModelResult is already eager and list-compatible; JSON
@@ -670,9 +735,12 @@ class Application:
         from aurora.database.models import ModelResult, ModelRow
 
         status = 200
-        if (isinstance(result, tuple) and len(result) == 2
-                and type(result[1]) is int
-                and isinstance(result[0], (dict, list, ModelRow, ModelResult))):
+        if (
+            isinstance(result, tuple)
+            and len(result) == 2
+            and type(result[1]) is int
+            and isinstance(result[0], (dict, list, ModelRow, ModelResult))
+        ):
             result, status = result
             if not 100 <= status <= 599:
                 raise ValueError("JSON response status must be between 100 and 599")

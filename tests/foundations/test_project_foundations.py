@@ -6,8 +6,8 @@ from unittest.mock import patch
 import pytest
 
 from aurora import Aurora
-from aurora.cli import main
 from aurora._cli_scaffolding import create_project, parse_controller_methods
+from aurora.cli import main
 from aurora.core.app_settings import load_application_settings
 from aurora.view import View
 
@@ -17,7 +17,9 @@ def test_server_defaults_validation_and_strict_settings(tmp_path):
     config = root / "aurora_config.json"
     assert load_application_settings(config).strict is True
     assert dict(load_application_settings(config).server) == {
-        "host": "127.0.0.1", "port": 8000, "reload": True,
+        "host": "127.0.0.1",
+        "port": 8000,
+        "reload": True,
     }
     original = json.loads(config.read_text())
     valid = {**original, "strict": False, "server": {"port": 9000, "reload": False}}
@@ -27,9 +29,14 @@ def test_server_defaults_validation_and_strict_settings(tmp_path):
     assert settings.server["port"] == 9000
     assert settings.server["reload"] is False
 
-    invalid = ({"strict": "false"}, {"server": {"port": True}},
-               {"server": {"reload": "false"}}, {"server": {"extra": 1}},
-               {"server": {"port": 65536}}, {"server": {"host": ""}})
+    invalid = (
+        {"strict": "false"},
+        {"server": {"port": True}},
+        {"server": {"reload": "false"}},
+        {"server": {"extra": 1}},
+        {"server": {"port": 65536}},
+        {"server": {"host": ""}},
+    )
     for replacement in invalid:
         config.write_text(json.dumps({**original, **replacement}))
         with pytest.raises(ValueError):
@@ -78,6 +85,7 @@ def test_app_namespaces_without_shared_directory(tmp_path):
     root = create_project("demo", directory=tmp_path, modular=True)
     # Generated app-local views need not depend on a shared root.
     import shutil
+
     shutil.rmtree(root / "views")
     app = Aurora.from_project(root / "app.py")
     assert app.renderer is not None

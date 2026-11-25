@@ -34,7 +34,7 @@ def test_missing_and_invalid_configuration_fail_closed(tmp_path):
     with pytest.raises(PermissionError, match="missing"):
         project_is_production(tmp_path)
     path = tmp_path / "aurora_config.json"
-    for text in ('{"production": "false"}', '{"production": false, "production": true}', '{broken'):
+    for text in ('{"production": "false"}', '{"production": false, "production": true}', "{broken"):
         path.write_text(text, encoding="utf-8")
         with pytest.raises(PermissionError, match="invalid"):
             project_is_production(tmp_path)
@@ -45,7 +45,9 @@ def test_omitted_production_flag_stays_protected(tmp_path):
     assert project_is_production(tmp_path) is True
 
 
-def test_cli_component_changes_refuse_production_even_when_not_strict(tmp_path, monkeypatch, capsys):
+def test_cli_component_changes_refuse_production_even_when_not_strict(
+    tmp_path, monkeypatch, capsys
+):
     root = create_project("sample", directory=tmp_path, modular=True)
     _configure(root, production=True, strict=False)
     monkeypatch.chdir(root)
@@ -89,9 +91,7 @@ def test_production_blocks_database_initialization_without_creating_file(
     assert not (root / "__migrations__").exists()
 
 
-def test_existing_config_without_production_refuses_modification(
-    tmp_path, monkeypatch, capsys
-):
+def test_existing_config_without_production_refuses_modification(tmp_path, monkeypatch, capsys):
     root = create_project("sample", directory=tmp_path, modular=True)
     config = root / "aurora_config.json"
     document = json.loads(config.read_text(encoding="utf-8"))
